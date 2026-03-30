@@ -1,0 +1,19 @@
+[package]
+name = "ream-napi-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared NAPI utilities for the Ream framework — error handling, threading, and callback patterns"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+napi = { version = "2", features = ["async", "napi8", "serde-json"] }
+napi-derive = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+napi-build = "2"
