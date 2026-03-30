@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/ream-napi-core",
+  "crates/ream-http",
+  "crates/ream-http-napi",
+  "crates/ream-security",
+  "crates/ream-napi-test",
+]

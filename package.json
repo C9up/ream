@@ -1,0 +1,33 @@
+{
+  "name": "@c9up/ream",
+  "version": "0.1.0",
+  "description": "Ream — Rust-powered Node.js application framework",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:rust": "cargo build --release",
+    "test": "vitest run",
+    "test:rust": "cargo test --all",
+    "lint": "biome check src/"
+  },
+  "dependencies": {
+    "reflect-metadata": "^0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "vitest": "^3",
+    "@biomejs/biome": "^1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
