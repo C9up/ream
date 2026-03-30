@@ -285,7 +285,9 @@ export class Ignitor {
         },
       })
 
-      this.server = this.config.serverFactory(this.config.port ?? 3000)
+      const desiredPort = this.config.port ?? 3000
+      const availablePort = await findAvailablePort(desiredPort)
+      this.server = this.config.serverFactory(availablePort)
       this.server.onRequest(kernel)
       await this.server.listen()
     }
@@ -352,4 +354,21 @@ export class Ignitor {
       } catch { /* Don't let listeners crash */ }
     }
   }
+}
+
+/**
+ * Find an available port starting from the desired port.
+ * If the port is taken, tries the next one (up to 20 attempts).
+ */
+async function findAvailablePort(desired: number): Promise<number> {
+  const net = await import('node:net')
+  for (let port = desired; port < desired + 20; port++) {
+    const available = await new Promise<boolean>((resolve) => {
+      const server = net.createServer()
+      server.listen(port, () => server.close(() => resolve(true)))
+      server.on('error', () => resolve(false))
+    })
+    if (available) return port
+  }
+  return desired // fallback — let the server error naturally
 }
