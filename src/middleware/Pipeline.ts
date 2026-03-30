@@ -50,6 +50,7 @@ export class MiddlewareRegistry {
   buildChain(
     namedMiddleware: string[],
     handler: MiddlewareFunction,
+    options?: { guards?: string[] },
   ): MiddlewareFunction {
     const stack: MiddlewareFunction[] = [
       // 1. Global middleware
@@ -58,11 +59,12 @@ export class MiddlewareRegistry {
       ...namedMiddleware
         .map((name) => this.named.get(name))
         .filter((mw): mw is MiddlewareFunction => mw !== undefined),
-      // 3. Handler (end of chain)
+      // 3. Guard enforcement (if guards are declared on the route)
+      ...((options?.guards?.length ?? 0) > 0 ? [createGuardMiddleware(options!.guards!)] : []),
+      // 4. Handler (end of chain)
       handler,
     ]
 
-    // Compose into a single function using the onion pattern
     return compose(stack)
   }
 }
@@ -87,6 +89,28 @@ function compose(middleware: MiddlewareFunction[]): MiddlewareFunction {
     }
 
     await dispatch(0)
+  }
+}
+
+/**
+ * Create a guard enforcement middleware.
+ * Rejects unauthenticated requests when guards are declared on a route.
+ */
+function createGuardMiddleware(guards: string[]): MiddlewareFunction {
+  return async (ctx, next) => {
+    if (!ctx.auth.authenticated) {
+      ctx.response!.status = 401
+      ctx.response!.headers['content-type'] = 'application/json'
+      ctx.response!.body = JSON.stringify({
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Authentication required',
+          guards,
+        },
+      })
+      return // short-circuit — handler never runs
+    }
+    await next()
   }
 }
 

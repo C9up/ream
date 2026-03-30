@@ -73,13 +73,13 @@ export function createHttpKernel(config: HttpKernelConfig): (requestJson: string
       // 5. Extract params into context
       ctx.params = match.params
 
-      // 6. Build and execute middleware pipeline
+      // 6. Build and execute middleware pipeline (with guard enforcement)
       const chain = config.middleware.buildChain(
         match.route.middleware,
         async (innerCtx) => {
-          // Execute the route handler
           await match.route.handler(innerCtx)
         },
+        { guards: match.route.guards },
       )
 
       await chain(ctx, async () => {})
