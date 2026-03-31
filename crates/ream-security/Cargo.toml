@@ -14,3 +14,9 @@ ream-http = { path = "../ream-http" }
 getrandom = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+argon2 = { version = "0.5", features = ["std"] }
+password-hash = { version = "0.5", features = ["rand_core"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+subtle = "2.5"

@@ -13,6 +13,7 @@ export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './cont
 export { Context } from './Context.js'
 export type { AuthState } from './Context.js'
 export { Inject, Service, clearServiceRegistry, getServiceMetadata, getServiceRegistry } from './decorators/Service.js'
+export { Lazy, createLazyProxy, getLazyParams } from './decorators/Lazy.js'
 export { ErrorBoundary } from './ErrorBoundary.js'
 export type { ErrorEmitter, ErrorEvent, ErrorSeverity } from './ErrorBoundary.js'
 export { ReamError } from './errors/ReamError.js'

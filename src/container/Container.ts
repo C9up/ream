@@ -10,6 +10,7 @@ import {
   getServiceMetadata,
   getServiceRegistry,
 } from '../decorators/Service.js'
+import { createLazyProxy, getLazyParams } from '../decorators/Lazy.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
 import type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './types.js'
@@ -151,18 +152,19 @@ export class Container {
       Reflect.getMetadata('design:paramtypes', target) ?? []
     const injectTokens = getInjectTokens(target)
 
-    // Resolve each dependency
+    // Resolve each dependency (supports @Lazy() for deferred resolution)
+    const lazyIndices = getLazyParams(target)
     const deps = paramTypes.map((type, index) => {
-      // Named injection via @Inject('name')
       const namedToken = injectTokens.get(index)
-      if (namedToken) {
-        return this.resolve(namedToken)
+      const token: ServiceToken | undefined = namedToken ?? (typeof type === 'function' && type !== Object ? type as ServiceToken : undefined)
+      if (!token) return undefined
+
+      // @Lazy() — defer resolution via proxy to break circular dependencies
+      if (lazyIndices.includes(index)) {
+        return createLazyProxy(() => this.resolve(token) as object)
       }
-      // Auto-resolve by type
-      if (typeof type === 'function' && type !== Object) {
-        return this.resolve(type as ServiceToken)
-      }
-      return undefined
+
+      return this.resolve(token)
     })
 
     const instance = new target(...deps)
