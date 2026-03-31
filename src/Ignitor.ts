@@ -56,8 +56,6 @@ export interface HyperServerLike {
 export interface IgnitorConfig {
   /** HTTP port (default: 3000, 0 for random) */
   port?: number
-  /** Enable dev mode (enables hot-reload) */
-  devMode?: boolean
   /** Custom server factory */
   serverFactory?: (port: number) => HyperServerLike
   /** Directories to watch for hot-reload in dev mode (default: ['app', 'start']) */
@@ -102,7 +100,7 @@ export class Ignitor {
     this.middleware = new MiddlewareRegistry()
     this.errorBoundary = new ErrorBoundary(
       (event) => this.handleError(event),
-      config.devMode ?? false,
+      this.isDevMode(),
     )
 
     // Register framework services in container
@@ -307,7 +305,7 @@ export class Ignitor {
     }
 
     // Start hot-reload in dev mode — watch TS files and re-register routes/middleware
-    if (this.config.devMode) {
+    if (this.isDevMode()) {
       const watchDirs = this.config.watchDirs ?? ['app', 'start']
       this.hotReloadCleanup = startHotReload({
         watchDirs,
@@ -365,6 +363,15 @@ export class Ignitor {
       router: this.router,
       middleware: this.middleware,
     })
+  }
+
+  /**
+   * Check if running in dev mode.
+   * Dev = not production and not test. Hot-reload only in dev.
+   */
+  isDevMode(): boolean {
+    const env = process.env.NODE_ENV
+    return env !== 'production' && env !== 'test'
   }
 
   /** Get current lifecycle phase. */
