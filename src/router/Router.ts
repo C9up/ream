@@ -146,6 +146,11 @@ export class Router {
     return [...this.routes]
   }
 
+  /** Clear all registered routes (used by hot-reload). */
+  clear(): void {
+    this.routes = []
+  }
+
   get routeCount(): number {
     return this.routes.length
   }

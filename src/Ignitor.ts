@@ -24,6 +24,7 @@ import { Application } from './Application.js'
 import { createHttpKernel } from './HttpKernel.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
+import { startHotReload } from './HotReload.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import type { Provider, AppContext } from './Provider.js'
@@ -55,10 +56,12 @@ export interface HyperServerLike {
 export interface IgnitorConfig {
   /** HTTP port (default: 3000, 0 for random) */
   port?: number
-  /** Enable dev mode */
+  /** Enable dev mode (enables hot-reload) */
   devMode?: boolean
   /** Custom server factory */
   serverFactory?: (port: number) => HyperServerLike
+  /** Directories to watch for hot-reload in dev mode (default: ['app', 'start']) */
+  watchDirs?: string[]
 }
 
 /**
@@ -84,6 +87,7 @@ export class Ignitor {
   private providers: Provider[] = []
   private errorListeners: Array<(event: ErrorEvent) => void> = []
   private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
+  private hotReloadCleanup?: () => void
 
   // Inline configuration (for simple use or testing)
   private inlineRoutes?: (router: Router) => void
@@ -302,6 +306,26 @@ export class Ignitor {
       }
     }
 
+    // Start hot-reload in dev mode — watch TS files and re-register routes/middleware
+    if (this.config.devMode) {
+      const watchDirs = this.config.watchDirs ?? ['app', 'start']
+      this.hotReloadCleanup = startHotReload({
+        watchDirs,
+        onReload: async () => {
+          // Clear and re-register routes + middleware
+          this.router.clear()
+          if (this.inlineRoutes) this.inlineRoutes(this.router)
+          // Re-import preload files with cache bust
+          if (this.reamrc?.preloads) {
+            for (const preloadImport of this.reamrc.preloads) {
+              await preloadImport()
+            }
+          }
+        },
+        logger: { info: (msg) => this.handleError({ type: 'system.info', source: 'HotReload', message: msg, severity: 'info', timestamp: new Date().toISOString() } as ErrorEvent) },
+      })
+    }
+
     this.phase = 'ready'
   }
 
@@ -309,6 +333,7 @@ export class Ignitor {
    * Graceful shutdown.
    */
   async stop(): Promise<void> {
+    if (this.hotReloadCleanup) this.hotReloadCleanup()
     if (this.server) {
       await this.server.close()
     }

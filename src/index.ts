@@ -20,6 +20,8 @@ export { HealthCheck } from './HealthCheck.js'
 export type { HealthChecker, HealthCheckResult, HealthStatus } from './HealthCheck.js'
 export { installGracefulShutdown } from './GracefulShutdown.js'
 export type { ShutdownHandle, ShutdownOptions } from './GracefulShutdown.js'
+export { startHotReload } from './HotReload.js'
+export type { HotReloadOptions } from './HotReload.js'
 export {
   AtlasError,
   ContainerError,
