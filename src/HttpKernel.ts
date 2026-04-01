@@ -78,7 +78,7 @@ export function createHttpKernel(config: HttpKernelConfig): (requestJson: string
         async (innerCtx) => {
           await match.route.handler(innerCtx)
         },
-        { guards: match.route.guards },
+        { guards: match.route.guards, roles: match.route.roles, permissions: match.route.permissions },
       )
 
       await chain(ctx, async () => {})

@@ -22,6 +22,8 @@ export interface RouteDefinition {
   handler: RouteHandler
   middleware: string[]
   guards: string[]
+  roles: string[]
+  permissions: string[]
   validators: string[]
   version?: string
   deprecates?: { version: string; sunset?: string }
@@ -42,6 +44,16 @@ export class RouteBuilder {
 
   guard(...guards: string[]): this {
     this.route.guards.push(...guards)
+    return this
+  }
+
+  role(...roles: string[]): this {
+    this.route.roles.push(...roles)
+    return this
+  }
+
+  permission(...permissions: string[]): this {
+    this.route.permissions.push(...permissions)
     return this
   }
 
@@ -73,6 +85,8 @@ export class Router {
       handler,
       middleware: [],
       guards: [],
+      roles: [],
+      permissions: [],
       validators: [],
     }
     this.routes.push(def)
@@ -112,19 +126,20 @@ export class Router {
    * Fully synchronous.
    */
   group(
-    config: { prefix?: string; middleware?: string[]; guards?: string[] },
+    config: { prefix?: string; middleware?: string[]; guards?: string[]; roles?: string[]; permissions?: string[] },
     callback: (router: Router) => void,
   ): void {
     const childRouter = new Router()
     callback(childRouter)
 
-    // Apply group config to all child routes and merge into parent
     for (const route of childRouter.routes) {
       this.routes.push({
         ...route,
         path: (config.prefix ?? '') + route.path,
         middleware: [...(config.middleware ?? []), ...route.middleware],
         guards: [...(config.guards ?? []), ...route.guards],
+        roles: [...(config.roles ?? []), ...route.roles],
+        permissions: [...(config.permissions ?? []), ...route.permissions],
         validators: [...route.validators],
       })
     }
