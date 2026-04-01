@@ -50,7 +50,7 @@ export class MiddlewareRegistry {
   buildChain(
     namedMiddleware: string[],
     handler: MiddlewareFunction,
-    options?: { guards?: string[] },
+    options?: { guards?: string[]; roles?: string[]; permissions?: string[] },
   ): MiddlewareFunction {
     const stack: MiddlewareFunction[] = [
       // 1. Global middleware
@@ -59,8 +59,10 @@ export class MiddlewareRegistry {
       ...namedMiddleware
         .map((name) => this.named.get(name))
         .filter((mw): mw is MiddlewareFunction => mw !== undefined),
-      // 3. Guard enforcement (if guards are declared on the route)
-      ...((options?.guards?.length ?? 0) > 0 ? [createGuardMiddleware(options!.guards!)] : []),
+      // 3. Guard enforcement (auth + roles + permissions)
+      ...((options?.guards?.length ?? 0) > 0 || (options?.roles?.length ?? 0) > 0 || (options?.permissions?.length ?? 0) > 0
+        ? [createGuardMiddleware(options?.guards ?? [], options?.roles, options?.permissions)]
+        : []),
       // 4. Handler (end of chain)
       handler,
     ]
@@ -94,22 +96,40 @@ function compose(middleware: MiddlewareFunction[]): MiddlewareFunction {
 
 /**
  * Create a guard enforcement middleware.
- * Rejects unauthenticated requests when guards are declared on a route.
+ * Enforces authentication, roles, and permissions.
  */
-function createGuardMiddleware(guards: string[]): MiddlewareFunction {
+function createGuardMiddleware(guards: string[], roles?: string[], permissions?: string[]): MiddlewareFunction {
   return async (ctx, next) => {
-    if (!ctx.auth.authenticated) {
+    // Check authentication
+    if (guards.length > 0 && !ctx.auth.authenticated) {
       ctx.response!.status = 401
       ctx.response!.headers['content-type'] = 'application/json'
-      ctx.response!.body = JSON.stringify({
-        error: {
-          code: 'UNAUTHORIZED',
-          message: 'Authentication required',
-          guards,
-        },
-      })
-      return // short-circuit — handler never runs
+      ctx.response!.body = JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } })
+      return
     }
+
+    // Check roles
+    if (roles && roles.length > 0) {
+      const userRoles = ctx.auth.roles ?? []
+      if (!roles.every((r) => userRoles.includes(r))) {
+        ctx.response!.status = 403
+        ctx.response!.headers['content-type'] = 'application/json'
+        ctx.response!.body = JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Insufficient role', required: roles } })
+        return
+      }
+    }
+
+    // Check permissions
+    if (permissions && permissions.length > 0) {
+      const userPerms = ctx.auth.permissions ?? []
+      if (!permissions.every((p) => userPerms.includes(p))) {
+        ctx.response!.status = 403
+        ctx.response!.headers['content-type'] = 'application/json'
+        ctx.response!.body = JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Insufficient permissions', required: permissions } })
+        return
+      }
+    }
+
     await next()
   }
 }

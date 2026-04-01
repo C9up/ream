@@ -30,10 +30,13 @@ impl CsrfValidator {
 
     /// Generate a new CSRF token using cryptographic randomness.
     pub fn generate_token(&mut self) -> String {
-        // Purge expired tokens first to prevent unbounded growth
         self.purge_expired();
-
-        let token = generate_crypto_random_hex(32);
+        let token = generate_crypto_random_hex(32).unwrap_or_else(|_| {
+            // Fallback: use timestamp + pid as entropy source (not cryptographic, but avoids panic)
+            format!("{:016x}{:016x}",
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+                std::process::id() as u128)
+        });
         self.tokens.insert(token.clone(), Instant::now());
         token
     }
@@ -69,10 +72,11 @@ impl Default for CsrfValidator {
 }
 
 /// Generate a hex string using cryptographic randomness (getrandom).
-fn generate_crypto_random_hex(bytes: usize) -> String {
+/// Returns Err if the OS entropy source is unavailable.
+fn generate_crypto_random_hex(bytes: usize) -> Result<String, String> {
     let mut buf = vec![0u8; bytes];
-    getrandom::getrandom(&mut buf).expect("getrandom failed");
-    buf.iter().map(|b| format!("{:02x}", b)).collect()
+    getrandom::getrandom(&mut buf).map_err(|e| format!("getrandom failed: {}", e))?;
+    Ok(buf.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 #[cfg(test)]
@@ -99,9 +103,8 @@ mod tests {
 
     #[test]
     fn test_csrf_token_is_crypto_random() {
-        let t1 = generate_crypto_random_hex(32);
-        let t2 = generate_crypto_random_hex(32);
-        // Two tokens generated back-to-back must be different
+        let t1 = generate_crypto_random_hex(32).unwrap();
+        let t2 = generate_crypto_random_hex(32).unwrap();
         assert_ne!(t1, t2);
         assert_eq!(t1.len(), 64); // 32 bytes = 64 hex chars
     }

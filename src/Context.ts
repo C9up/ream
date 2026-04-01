@@ -10,6 +10,7 @@ export interface AuthState {
   authenticated: boolean
   userId?: string
   roles?: string[]
+  permissions?: string[]
 }
 
 export class Context {
