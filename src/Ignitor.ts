@@ -23,6 +23,7 @@
 import { Application } from './Application.js'
 import { createHttpKernel } from './HttpKernel.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
+import { ReamError } from './errors/ReamError.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { startHotReload } from './HotReload.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
@@ -293,7 +294,9 @@ export class Ignitor {
       this.server.onRequest(kernel)
       await this.server.listen()
     } else if (this.environment === 'web' && !this.config.serverFactory) {
-      throw new Error('[IGNITOR_NO_SERVER_FACTORY] httpServer() requires a serverFactory in config. Example: { serverFactory: (port) => new HyperServer(port) }')
+      throw new ReamError('IGNITOR_NO_SERVER_FACTORY', 'httpServer() requires a serverFactory in config', {
+        hint: 'Example: new Ignitor({ serverFactory: (port) => new HyperServer(port) })',
+      })
     }
 
     // Auto-register /health route if not already defined
