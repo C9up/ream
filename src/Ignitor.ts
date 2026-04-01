@@ -292,6 +292,16 @@ export class Ignitor {
       this.server = this.config.serverFactory(availablePort)
       this.server.onRequest(kernel)
       await this.server.listen()
+    } else if (this.environment === 'web' && !this.config.serverFactory) {
+      throw new Error('[IGNITOR_NO_SERVER_FACTORY] httpServer() requires a serverFactory in config. Example: { serverFactory: (port) => new HyperServer(port) }')
+    }
+
+    // Auto-register /health route if not already defined
+    if (!this.router.match('GET', '/health')) {
+      const { HealthCheck } = await import('./HealthCheck.js')
+      const health = new HealthCheck()
+      this.router.get('/health', health.handler())
+      this.app.container.singleton('health', () => health)
     }
 
     // Install error boundary
@@ -310,7 +320,9 @@ export class Ignitor {
       this.hotReloadCleanup = startHotReload({
         watchDirs,
         onReload: async () => {
-          // Clear and re-register routes + middleware
+          // Clear service registry to prevent memory leak from stale class refs
+          const { clearServiceRegistry } = await import('./decorators/Service.js')
+          clearServiceRegistry()
           this.router.clear()
           if (this.inlineRoutes) this.inlineRoutes(this.router)
           // Re-import preload files with cache bust

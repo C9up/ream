@@ -43,11 +43,10 @@ export function createHttpKernel(config: HttpKernelConfig): (requestJson: string
       return JSON.stringify({ status: 400, body: 'Invalid request' })
     }
 
-    // 2. Extract or generate correlation ID
-    const correlationId =
-      reqData.headers['x-request-id'] ??
-      reqData.headers['x-correlation-id'] ??
-      crypto.randomUUID()
+    // 2. Extract or generate correlation ID (validated format)
+    const CORR_ID_RE = /^[A-Za-z0-9\-_]{8,128}$/
+    const rawCorrId = reqData.headers['x-request-id'] ?? reqData.headers['x-correlation-id'] ?? ''
+    const correlationId = CORR_ID_RE.test(rawCorrId) ? rawCorrId : crypto.randomUUID()
 
     // 3. Create unified Context
     const ctx = Context.http(correlationId, {

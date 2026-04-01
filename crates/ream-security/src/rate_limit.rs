@@ -38,10 +38,8 @@ impl RateLimiter {
         let mut counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
-        // Evict expired entries periodically to prevent unbounded growth
-        // Run eviction every 100 checks (amortized cost)
-        let total: usize = counters.values().map(|(c, _)| *c as usize).sum();
-        if total % 100 == 0 {
+        // Evict expired entries when map grows beyond a threshold
+        if counters.len() > 1000 {
             let window = self.window;
             counters.retain(|_, (_, start)| now.duration_since(*start) <= window);
         }
