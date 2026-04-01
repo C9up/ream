@@ -1,17 +1,7 @@
 /**
- * @Service() decorator — registers a class in the IoC container.
+ * @Service() and @Inject() decorators for IoC container integration.
  *
- * @implements FR11
- *
- * Usage:
- *   @Service()
- *   class OrderService { }
- *
- *   @Service({ scope: 'transient' })
- *   class OrderDTO { }
- *
- *   @Service({ as: 'PaymentGateway' })
- *   class StripeGateway implements PaymentGateway { }
+ * @implements FR11, FR12, FR14
  */
 
 import 'reflect-metadata'
@@ -20,23 +10,22 @@ import type { ServiceMetadata, ServiceScope } from '../container/types.js'
 const SERVICE_METADATA_KEY = Symbol('ream:service')
 const INJECT_METADATA_KEY = Symbol('ream:inject')
 
-/** Registry of all decorated services. */
-// biome-ignore lint/suspicious/noExplicitAny: Registry stores any constructor
-const serviceRegistry: Map<new (...args: any[]) => any, ServiceMetadata> = new Map()
+/** Constructor type — accepts unknown args, returns unknown instance. */
+type AnyConstructor = new (...args: unknown[]) => unknown
 
-export function getServiceRegistry() {
-  return serviceRegistry as ReadonlyMap<new (...args: any[]) => any, ServiceMetadata>
+/** Registry of all decorated services. */
+const serviceRegistry: Map<AnyConstructor, ServiceMetadata> = new Map()
+
+export function getServiceRegistry(): ReadonlyMap<AnyConstructor, ServiceMetadata> {
+  return serviceRegistry
 }
 
-/** Clear the service registry (for test isolation). */
+/** Clear the service registry (for test isolation and hot-reload). */
 export function clearServiceRegistry(): void {
   serviceRegistry.clear()
 }
 
-export function getServiceMetadata(
-  // biome-ignore lint/suspicious/noExplicitAny: Accepts any class
-  target: new (...args: any[]) => any,
-): ServiceMetadata | undefined {
+export function getServiceMetadata(target: AnyConstructor): ServiceMetadata | undefined {
   return serviceRegistry.get(target)
 }
 
@@ -47,13 +36,12 @@ export function getServiceMetadata(
 export function Service(
   options: { scope?: ServiceScope; as?: string } = {},
 ): ClassDecorator {
-  // biome-ignore lint/suspicious/noExplicitAny: Decorator target is any class
-  return (target: any) => {
+  return (target) => {
     const metadata: ServiceMetadata = {
       scope: options.scope ?? 'singleton',
       as: options.as,
     }
-    serviceRegistry.set(target, metadata)
+    serviceRegistry.set(target as unknown as AnyConstructor, metadata)
     Reflect.defineMetadata(SERVICE_METADATA_KEY, metadata, target)
   }
 }
@@ -62,9 +50,6 @@ export function Service(
  * @Inject() decorator — marks a constructor parameter for named injection.
  *
  * @implements FR16
- *
- * Usage:
- *   constructor(@Inject('PaymentGateway') private payment: PaymentGateway) {}
  */
 export function Inject(token: string): ParameterDecorator {
   return (target, _propertyKey, parameterIndex) => {
@@ -78,8 +63,7 @@ export function Inject(token: string): ParameterDecorator {
 /**
  * Get named injection tokens for a class constructor.
  */
-// biome-ignore lint/suspicious/noExplicitAny: Accepts any class
-export function getInjectTokens(target: new (...args: any[]) => any): Map<number, string> {
+export function getInjectTokens(target: AnyConstructor): Map<number, string> {
   return Reflect.getOwnMetadata(INJECT_METADATA_KEY, target) ?? new Map()
 }
 

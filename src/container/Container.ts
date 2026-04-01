@@ -131,8 +131,7 @@ export class Container {
   /**
    * Auto-resolve a @Service() decorated class by reading its constructor metadata.
    */
-  // biome-ignore lint/suspicious/noExplicitAny: Resolves any decorated class
-  private autoResolve(target: new (...args: any[]) => any): unknown {
+  private autoResolve(target: new (...args: unknown[]) => unknown): unknown {
     const metadata = getServiceMetadata(target)
     if (!metadata) {
       throw new ReamError('CONTAINER_NOT_DECORATED', `Class '${target.name}' is not decorated with @Service().`, {

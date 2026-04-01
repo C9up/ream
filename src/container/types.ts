@@ -14,12 +14,10 @@ export interface ServiceMetadata {
 }
 
 /** Token used to resolve a service — either a class constructor or a string name. */
-// biome-ignore lint/suspicious/noExplicitAny: Container needs to accept any constructor
-export type ServiceToken = (new (...args: any[]) => any) | string
+export type ServiceToken = (new (...args: unknown[]) => unknown) | string
 
 /** Factory function for creating service instances. */
-// biome-ignore lint/suspicious/noExplicitAny: Factory returns any service type
-export type ServiceFactory = (...args: any[]) => any
+export type ServiceFactory = () => unknown
 
 /** Binding entry in the container. */
 export interface Binding {
