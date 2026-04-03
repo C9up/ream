@@ -62,7 +62,7 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
     const { factory, get } = mockFactory()
     await new Ignitor({ port: 0, serverFactory: factory })
       .httpServer()
-      .routes(r => r.get('/hello', async ctx => { ctx.response!.body = 'Hello Ream!' }))
+      .routes(r => r.get('/hello', async ctx => { ctx.response.send('Hello Ream!') }))
       .start()
     const res = await get().request('GET', '/hello')
     expect(res.status).toBe(200)
@@ -105,7 +105,7 @@ describe('ignitor > HTTP serving', () => {
     const { factory, get } = mockFactory()
     await new Ignitor({ serverFactory: factory })
       .httpServer()
-      .routes(r => r.get('/o/:id', async ctx => { ctx.response!.body = ctx.params?.id ?? '' }))
+      .routes(r => r.get('/o/:id', async ctx => { ctx.response.send(ctx.params.id ?? '') }))
       .start()
     expect((await get().request('GET', '/o/42')).body).toBe('42')
   })
@@ -114,16 +114,38 @@ describe('ignitor > HTTP serving', () => {
     const { factory, get } = mockFactory()
     await new Ignitor({ serverFactory: factory })
       .httpServer()
-      .routes(r => r.group({ prefix: '/api' }, a => a.get('/users', async ctx => { ctx.response!.body = 'users' })))
+      .routes(r => r.group({ prefix: '/api' }, a => a.get('/users', async ctx => { ctx.response.send('users') })))
       .start()
     expect((await get().request('GET', '/api/users')).body).toBe('users')
+  })
+
+  it('response.json() sets content-type', async () => {
+    const { factory, get } = mockFactory()
+    await new Ignitor({ serverFactory: factory })
+      .httpServer()
+      .routes(r => r.get('/json', async ctx => { ctx.response.json({ hello: 'world' }) }))
+      .start()
+    const res = await get().request('GET', '/json')
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ hello: 'world' })
+    expect(res.headers['content-type']).toBe('application/json')
+  })
+
+  it('response.status().json() sets custom status', async () => {
+    const { factory, get } = mockFactory()
+    await new Ignitor({ serverFactory: factory })
+      .httpServer()
+      .routes(r => r.post('/create', async ctx => { ctx.response.status(201).json({ created: true }) }))
+      .start()
+    const res = await get().request('POST', '/create')
+    expect(res.status).toBe(201)
   })
 })
 
 describe('ignitor > toolkit mode', () => {
   it('kernel without server', async () => {
     const app = await new Ignitor()
-      .routes(r => r.get('/data', async ctx => { ctx.response!.body = 'toolkit' }))
+      .routes(r => r.get('/data', async ctx => { ctx.response.send('toolkit') }))
       .start()
     const res = JSON.parse(await app.getKernel()(JSON.stringify({ method: 'GET', path: '/data', query: '', headers: {}, body: '' })))
     expect(res.body).toBe('toolkit')
@@ -135,4 +157,22 @@ describe('ignitor > environment', () => {
   it('httpServer sets web', () => { expect(new Ignitor().httpServer().getEnvironment()).toBe('web') })
   it('testMode sets test', () => { expect(new Ignitor().testMode().getEnvironment()).toBe('test') })
   it('console sets console', () => { expect(new Ignitor().console().getEnvironment()).toBe('console') })
+})
+
+describe('ignitor > controller resolution', () => {
+  it('resolves controller tuple [Class, method]', async () => {
+    class GreetController {
+      async hello(ctx: import('../../src/http/HttpContext.js').HttpContext) {
+        ctx.response.json({ greeting: 'Hello from controller!' })
+      }
+    }
+    const { factory, get } = mockFactory()
+    await new Ignitor({ serverFactory: factory })
+      .httpServer()
+      .routes(r => r.get('/greet', [GreetController, 'hello']))
+      .start()
+    const res = await get().request('GET', '/greet')
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ greeting: 'Hello from controller!' })
+  })
 })

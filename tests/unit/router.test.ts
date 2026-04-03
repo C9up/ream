@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { Context, MiddlewareRegistry, Router } from '../../src/index.js'
+import { HttpContext, MiddlewareRegistry, Router } from '../../src/index.js'
+
+function makeCtx(): HttpContext {
+  return new HttpContext('test', { method: 'GET', path: '/', query: '', headers: {}, body: '' }, {}, { pattern: '/', middleware: [] })
+}
 
 describe('router > basic routes', () => {
   it('registers and matches GET route', () => {
@@ -40,6 +44,14 @@ describe('router > basic routes', () => {
     expect(router.match('POST', '/orders')).toBeUndefined()
     expect(router.match('GET', '/users')).toBeUndefined()
   })
+
+  it('supports any() for all methods', () => {
+    const router = new Router()
+    router.any('/catch-all', async () => {})
+    expect(router.match('GET', '/catch-all')).toBeDefined()
+    expect(router.match('POST', '/catch-all')).toBeDefined()
+    expect(router.match('DELETE', '/catch-all')).toBeDefined()
+  })
 })
 
 describe('router > fluent chaining', () => {
@@ -59,10 +71,42 @@ describe('router > fluent chaining', () => {
     expect(result?.route.version).toBe('1')
     expect(result?.route.deprecates?.sunset).toBe('2027-01-01')
   })
+
+  it('chains .as() for named routes', () => {
+    const router = new Router()
+    router.get('/users', async () => {}).as('users.index')
+    expect(router.match('GET', '/users')?.route.name).toBe('users.index')
+  })
+
+  it('chains .where() for param matchers', () => {
+    const router = new Router()
+    router.get('/users/:id', async () => {}).where('id', router.matchers.number())
+    expect(router.match('GET', '/users/42')).toBeDefined()
+    expect(router.match('GET', '/users/abc')).toBeUndefined()
+  })
+
+  it('chains .where() with uuid matcher', () => {
+    const router = new Router()
+    router.get('/tasks/:id', async () => {}).where('id', router.matchers.uuid())
+    expect(router.match('GET', '/tasks/550e8400-e29b-41d4-a716-446655440000')).toBeDefined()
+    expect(router.match('GET', '/tasks/not-a-uuid')).toBeUndefined()
+  })
+})
+
+describe('router > controller tuples', () => {
+  it('registers controller action [Class, method]', () => {
+    class UsersController { async index() {} }
+    const router = new Router()
+    router.get('/users', [UsersController, 'index'])
+    const match = router.match('GET', '/users')
+    expect(match?.route.controller?.target).toBe(UsersController)
+    expect(match?.route.controller?.method).toBe('index')
+    expect(match?.route.handler).toBeNull()
+  })
 })
 
 describe('router > groups', () => {
-  it('applies prefix to group routes', () => {
+  it('legacy: applies prefix to group routes', () => {
     const router = new Router()
     router.group({ prefix: '/api/v1' }, (r) => {
       r.get('/orders', async () => {})
@@ -74,7 +118,7 @@ describe('router > groups', () => {
     expect(router.match('GET', '/orders')).toBeUndefined()
   })
 
-  it('applies group middleware and guards', () => {
+  it('legacy: applies group middleware and guards', () => {
     const router = new Router()
     router.group({ middleware: ['auth'], guards: ['jwt'] }, (r) => {
       r.get('/protected', async () => {})
@@ -84,13 +128,68 @@ describe('router > groups', () => {
     expect(result?.route.guards).toContain('jwt')
   })
 
-  it('group middleware prepended to route middleware', () => {
+  it('legacy: group middleware prepended to route middleware', () => {
     const router = new Router()
     router.group({ middleware: ['group-mw'] }, (r) => {
       r.get('/test', async () => {}).middleware('route-mw')
     })
     const result = router.match('GET', '/test')
     expect(result?.route.middleware).toEqual(['group-mw', 'route-mw'])
+  })
+
+  it('AdonisJS-style: group(() => {}).prefix().middleware()', () => {
+    const router = new Router()
+    router.group(() => {
+      router.get('/users', async () => {}).as('users.index')
+      router.post('/users', async () => {}).as('users.store')
+    })!.prefix('/api').middleware('auth').as('api')
+
+    expect(router.match('GET', '/api/users')).toBeDefined()
+    expect(router.match('POST', '/api/users')).toBeDefined()
+    expect(router.match('GET', '/api/users')?.route.middleware).toContain('auth')
+    expect(router.match('GET', '/api/users')?.route.name).toBe('api.users.index')
+  })
+})
+
+describe('router > resource', () => {
+  it('generates CRUD routes', () => {
+    class PostsController {
+      async index() {}
+      async store() {}
+      async show() {}
+      async update() {}
+      async destroy() {}
+    }
+    const router = new Router()
+    router.resource('posts', PostsController)
+
+    expect(router.match('GET', '/posts')?.route.controller?.method).toBe('index')
+    expect(router.match('POST', '/posts')?.route.controller?.method).toBe('store')
+    expect(router.match('GET', '/posts/1')?.route.controller?.method).toBe('show')
+    expect(router.match('PUT', '/posts/1')?.route.controller?.method).toBe('update')
+    expect(router.match('PATCH', '/posts/1')?.route.controller?.method).toBe('update')
+    expect(router.match('DELETE', '/posts/1')?.route.controller?.method).toBe('destroy')
+  })
+
+  it('generates named routes', () => {
+    class PostsController {}
+    const router = new Router()
+    router.resource('posts', PostsController)
+    expect(router.match('GET', '/posts')?.route.name).toBe('posts.index')
+    expect(router.match('POST', '/posts')?.route.name).toBe('posts.store')
+  })
+})
+
+describe('router > makeUrl', () => {
+  it('generates URL from named route', () => {
+    const router = new Router()
+    router.get('/users/:id', async () => {}).as('users.show')
+    expect(router.makeUrl('users.show', { id: '42' })).toBe('/users/42')
+  })
+
+  it('throws on unknown route name', () => {
+    const router = new Router()
+    expect(() => router.makeUrl('nope')).toThrow("Route 'nope' not found")
   })
 })
 
@@ -101,30 +200,30 @@ describe('middleware > pipeline', () => {
     registry.use(async (_ctx, next) => { log.push('1:in'); await next(); log.push('1:out') })
     registry.use(async (_ctx, next) => { log.push('2:in'); await next(); log.push('2:out') })
 
-    const chain = registry.buildChain([], async () => { log.push('handler') })
-    const ctx = Context.http('t', { method: 'GET', path: '/', query: '', headers: {}, body: '' })
+    const chain = registry.buildChain([], [], async () => { log.push('handler') })
+    const ctx = makeCtx()
     await chain(ctx, async () => {})
     expect(log).toEqual(['1:in', '2:in', 'handler', '2:out', '1:out'])
   })
 
   it('can short-circuit', async () => {
     const registry = new MiddlewareRegistry()
-    registry.use(async (ctx) => { ctx.response!.status = 403 })
+    registry.use(async (ctx) => { ctx.response.status(403) })
     let called = false
-    const chain = registry.buildChain([], async () => { called = true })
-    const ctx = Context.http('t', { method: 'GET', path: '/', query: '', headers: {}, body: '' })
+    const chain = registry.buildChain([], [], async () => { called = true })
+    const ctx = makeCtx()
     await chain(ctx, async () => {})
     expect(called).toBe(false)
-    expect(ctx.response?.status).toBe(403)
+    expect(ctx.response.getStatus()).toBe(403)
   })
 
-  it('works with HTTP and event contexts', async () => {
+  it('inline middleware executes between named and handler', async () => {
     const registry = new MiddlewareRegistry()
-    const types: string[] = []
-    registry.use(async (ctx, next) => { types.push(ctx.type); await next() })
-    const chain = registry.buildChain([], async () => {})
-    await chain(Context.http('1', { method: 'GET', path: '/', query: '', headers: {}, body: '' }), async () => {})
-    await chain(Context.event('2', { name: 'test', data: '{}', correlationId: 'c' }), async () => {})
-    expect(types).toEqual(['http', 'event'])
+    const log: string[] = []
+    registry.register('named', async (_ctx, next) => { log.push('named'); await next() })
+    const inlineMw = async (_ctx: HttpContext, next: () => Promise<void>) => { log.push('inline'); await next() }
+    const chain = registry.buildChain(['named'], [inlineMw], async () => { log.push('handler') })
+    await chain(makeCtx(), async () => {})
+    expect(log).toEqual(['named', 'inline', 'handler'])
   })
 })

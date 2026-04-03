@@ -67,4 +67,20 @@ export function getInjectTokens(target: AnyConstructor): Map<number, string> {
   return Reflect.getOwnMetadata(INJECT_METADATA_KEY, target) ?? new Map()
 }
 
+/**
+ * @inject() class decorator — marks a controller (or service) for transient IoC resolution.
+ *
+ * Equivalent to @Service({ scope: 'transient' }). Use on controllers so the container
+ * auto-resolves constructor dependencies per-request.
+ *
+ * Usage:
+ *   @inject()
+ *   export default class UsersController {
+ *     constructor(private userService: UserService) {}
+ *   }
+ */
+export function inject(): ClassDecorator {
+  return Service({ scope: 'transient' })
+}
+
 export { SERVICE_METADATA_KEY, INJECT_METADATA_KEY }

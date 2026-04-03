@@ -1,120 +1,128 @@
 /**
- * HttpKernel — bridges HyperServer NAPI with Router + Middleware Pipeline.
+ * HttpKernel — bridges HyperServer NAPI with Router + Middleware Pipeline + ExceptionHandler.
  *
- * This is the critical glue code that connects:
- * HyperServer (Rust/NAPI) → Context.http() → Router.match() → Pipeline → Response
+ * Request flow (like AdonisJS):
+ * 1. Parse JSON from Rust NAPI
+ * 2. Create HttpContext
+ * 3. Onion pipeline: Server MW → Router MW → Route MW → Guards → Handler
+ * 4. ExceptionHandler for any errors
  *
  * @implements FR21, FR22, FR23, FR24
  */
 
-import { Context } from './Context.js'
-import { ReamError } from './errors/ReamError.js'
-import { createPipelineError } from './errors/PipelineStageError.js'
-import type { MiddlewareRegistry } from './middleware/Pipeline.js'
+import type { Container } from './container/Container.js'
+import { HttpContext } from './http/HttpContext.js'
+import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
+import type { MiddlewareFunction, MiddlewareRegistry } from './middleware/Pipeline.js'
+import { compose } from './middleware/Pipeline.js'
 import type { Router } from './router/Router.js'
 
 export interface HttpKernelConfig {
   router: Router
   middleware: MiddlewareRegistry
-  onError?: (error: unknown, ctx: Context) => void
+  container?: Container
+  exceptionHandler?: ExceptionHandler
+  serverMiddleware?: MiddlewareFunction[]
+  routerMiddleware?: MiddlewareFunction[]
+  onError?: (error: unknown, ctx: HttpContext) => void
 }
 
-/**
- * Creates the onRequest callback for HyperServer.
- *
- * Usage:
- *   const kernel = createHttpKernel({ router, middleware })
- *   hyperServer.onRequest(kernel)
- */
 export function createHttpKernel(config: HttpKernelConfig): (requestJson: string) => Promise<string> {
-  return async (requestJson: string): Promise<string> => {
-    // 1. Parse the ReamRequest JSON from Rust
-    let reqData: {
-      method: string
-      path: string
-      query: string
-      headers: Record<string, string>
-      body: string
-    }
+  const handler = config.exceptionHandler ?? new ExceptionHandler(process.env.NODE_ENV !== 'production')
+  const serverMw = config.serverMiddleware ?? []
+  const routerMw = config.routerMiddleware ?? []
 
+  return async (requestJson: string): Promise<string> => {
+    // 1. Parse request
+    let reqData: { method: string; path: string; query: string; headers: Record<string, string>; body: string }
     try {
       reqData = JSON.parse(requestJson)
     } catch {
-      return JSON.stringify({ status: 400, body: 'Invalid request' })
+      return JSON.stringify({ status: 400, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { code: 'E_BAD_REQUEST', message: 'Invalid request' } }) })
     }
 
-    // 2. Extract or generate correlation ID (validated format)
+    // 2. Correlation ID
     const CORR_ID_RE = /^[A-Za-z0-9\-_]{8,128}$/
     const rawCorrId = reqData.headers['x-request-id'] ?? reqData.headers['x-correlation-id'] ?? ''
     const correlationId = CORR_ID_RE.test(rawCorrId) ? rawCorrId : crypto.randomUUID()
 
-    // 3. Create unified Context
-    const ctx = Context.http(correlationId, {
-      method: reqData.method,
-      path: reqData.path,
-      query: reqData.query,
-      headers: reqData.headers,
-      body: reqData.body,
-    })
+    // 3. Match route
+    const match = config.router.match(reqData.method, reqData.path)
+    const routeInfo = match
+      ? { pattern: match.route.path, name: match.route.name, middleware: match.route.middleware }
+      : { pattern: '', middleware: [] }
+
+    // 4. Create HttpContext
+    const ctx = new HttpContext(correlationId, reqData, match?.params ?? {}, routeInfo)
+    ctx._setRouteUrlResolver((name, params) => config.router.makeUrl(name, params))
 
     try {
-      // 4. Match route
-      const match = config.router.match(reqData.method, reqData.path)
+      // 5. Build the FULL onion pipeline:
+      //    Server MW → [route match check] → Router MW → Route named MW → Route inline MW → Guards → Handler
+      const coreHandler: MiddlewareFunction = async (innerCtx) => {
+        if (!match) {
+          throw new E_ROUTE_NOT_FOUND(reqData.method, reqData.path)
+        }
 
-      if (!match) {
-        return JSON.stringify({
-          status: 404,
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ error: { code: 'NOT_FOUND', message: `Route not found: ${reqData.method} ${reqData.path}` } }),
-        })
+        // Resolve handler
+        const routeHandler = match.route.controller
+          ? createControllerHandler(match.route.controller, config.container)
+          : match.route.handler!
+
+        // Build inner pipeline: router MW + route MW + guards + handler
+        const innerChain = config.middleware.buildChain(
+          match.route.middleware,
+          [...routerMw, ...match.route.inlineMiddleware],
+          async (c) => { await routeHandler(c) },
+          { guards: match.route.guards, roles: match.route.roles, permissions: match.route.permissions },
+        )
+
+        await innerChain(innerCtx, async () => {})
       }
 
-      // 5. Extract params into context
-      ctx.params = match.params
+      // Compose: server middleware wraps everything (onion)
+      const fullPipeline = compose([...serverMw, coreHandler])
+      await fullPipeline(ctx, async () => {})
 
-      // 6. Build and execute middleware pipeline (with guard enforcement)
-      const chain = config.middleware.buildChain(
-        match.route.middleware,
-        async (innerCtx) => {
-          await match.route.handler(innerCtx)
-        },
-        { guards: match.route.guards, roles: match.route.roles, permissions: match.route.permissions },
-      )
-
-      await chain(ctx, async () => {})
-
-      // 7. Serialize response back to Rust
-      return JSON.stringify({
-        status: ctx.response?.status ?? 200,
-        headers: ctx.response?.headers ?? {},
-        body: ctx.response?.body ?? '',
-      })
+      return serializeResponse(ctx)
     } catch (error) {
-      // Error boundary — catch handler/middleware errors
+      try {
+        await handler.handle(error, ctx)
+        await handler.report(error, ctx)
+      } catch (handlerError) {
+        console.error('ExceptionHandler failed:', handlerError)
+        ctx.response.status(500).json({ error: { code: 'E_HANDLER_FAILURE', message: 'An internal error occurred' } })
+      }
+
       if (config.onError) {
         config.onError(error, ctx)
       }
 
-      // Wrap in pipeline error with stage context
-      const reamError = error instanceof ReamError
-        ? error
-        : createPipelineError(7, error instanceof Error ? error : new Error(String(error)))
-
-      // Redact error details in production
-      const message = process.env.NODE_ENV === 'production'
-        ? 'An internal error occurred'
-        : reamError.message
-
-      return JSON.stringify({
-        status: 500,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          error: {
-            code: reamError.code,
-            message,
-          },
-        }),
-      })
+      return serializeResponse(ctx)
     }
   }
+}
+
+function createControllerHandler(
+  controller: { target: new (...args: unknown[]) => unknown; method: string },
+  container?: Container,
+): (ctx: HttpContext) => Promise<void> {
+  return async (ctx: HttpContext) => {
+    const instance = container
+      ? container.make(controller.target)
+      : new controller.target()
+    const method = (instance as Record<string, (ctx: HttpContext) => Promise<void> | void>)[controller.method]
+    if (typeof method !== 'function') {
+      throw new Error(`Controller method '${controller.method}' not found on ${controller.target.name}`)
+    }
+    await method.call(instance, ctx)
+  }
+}
+
+function serializeResponse(ctx: HttpContext): string {
+  return JSON.stringify({
+    status: ctx.response.getStatus(),
+    headers: ctx.response.getHeaders(),
+    body: ctx.response.getBody(),
+  })
 }

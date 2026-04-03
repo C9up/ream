@@ -1,19 +1,12 @@
 /**
- * Ignitor — Application bootstrap following AdonisJS conventions.
+ * Ignitor — AdonisJS-compatible application bootstrap.
  *
- * Lifecycle: init → register → boot → start → ready → (running) → shutdown
- *
- * Convention:
- *   bin/server.ts           — entry point
- *   reamrc.ts               — manifest (providers, preloads)
- *   start/routes.ts         — route definitions
- *   start/kernel.ts         — middleware registration
- *   config/*.ts             — per-module configuration
- *
- * Usage:
- *   // bin/server.ts
- *   import { Ignitor } from '@c9up/ream'
- *   new Ignitor(new URL('../', import.meta.url))
+ * Usage (like AdonisJS):
+ *   new Ignitor(APP_ROOT, { importer: IMPORTER })
+ *     .tap((app) => {
+ *       app.booting(async () => { await import('#start/env') })
+ *       app.listen('SIGTERM', () => app.terminate())
+ *     })
  *     .httpServer()
  *     .start()
  *
@@ -23,6 +16,7 @@
 import { Application } from './Application.js'
 import { createHttpKernel } from './HttpKernel.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
+import { ExceptionHandler } from './http/Exception.js'
 import { ReamError } from './errors/ReamError.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { startHotReload } from './HotReload.js'
@@ -30,20 +24,36 @@ import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import type { Provider, AppContext } from './Provider.js'
 import { Router } from './router/Router.js'
+import { Server } from './server/Server.js'
+import { _setApp } from './services/app.js'
+import { _setRouter } from './services/router.js'
+import { _setServer } from './services/server.js'
 
 /** Application environment. */
 export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
 
-/** Reamrc manifest structure (mirrors AdonisJS adonisrc.ts). */
+/**
+ * Reamrc config — like AdonisJS adonisrc.ts with defineConfig().
+ */
 export interface ReamrcConfig {
-  /** Service providers — lazy-loaded via dynamic import. */
-  providers?: Array<() => Promise<{ default: new (app: AppContext) => Provider }>>
-
-  /** Preload files — imported during the start phase (routes, kernel, etc.). */
-  preloads?: Array<() => Promise<unknown>>
-
-  /** CLI commands (future). */
+  providers?: Array<(() => Promise<{ default: new (app: AppContext) => Provider }>) | {
+    file: () => Promise<{ default: new (app: AppContext) => Provider }>
+    environment?: string[]
+  }>
+  preloads?: Array<(() => Promise<unknown>) | {
+    file: () => Promise<unknown>
+    environment?: string[]
+  }>
   commands?: Array<() => Promise<unknown>>
+  tests?: {
+    suites?: Array<{ name: string; files: string[]; timeout?: number }>
+    forceExit?: boolean
+  }
+}
+
+/** defineConfig helper — like AdonisJS defineConfig(). */
+export function defineConfig(config: ReamrcConfig): ReamrcConfig {
+  return config
 }
 
 /** Minimal interface for the HTTP server (NAPI or mock). */
@@ -55,32 +65,26 @@ export interface HyperServerLike {
 }
 
 export interface IgnitorConfig {
-  /** HTTP port (default: 3000, 0 for random) */
   port?: number
-  /** Custom server factory */
   serverFactory?: (port: number) => HyperServerLike
-  /** Directories to watch for hot-reload in dev mode (default: ['app', 'start']) */
+  importer?: (filePath: string) => Promise<unknown>
   watchDirs?: string[]
 }
 
 /**
  * Ignitor — boots and wires the Ream framework.
  *
- * Follows AdonisJS lifecycle:
- * 1. init — create Application, Router, Pipeline
- * 2. register — load providers, call register()
- * 3. boot — call boot() on all providers
- * 4. start — import preload files (routes, kernel), call start() on providers
- * 5. ready — start HTTP server, call ready() on providers
- * 6. shutdown — reverse order cleanup
+ * Lifecycle: register → boot → start → ready → shutdown
  */
 export class Ignitor {
   private app: Application
   private router: Router
+  private server: Server
   private middleware: MiddlewareRegistry
   private errorBoundary: ErrorBoundary
-  private server?: HyperServerLike
+  private _httpServer?: HyperServerLike
   private config: IgnitorConfig
+  private appRoot?: URL
   private environment: AppEnvironment = 'unknown'
   private reamrc?: ReamrcConfig
   private providers: Provider[] = []
@@ -94,10 +98,26 @@ export class Ignitor {
   private inlineNamedMiddleware: Array<[string, MiddlewareFunction]> = []
   private inlineProviderFactories: Array<(app: Application) => Provider> = []
 
-  constructor(config: IgnitorConfig = {}) {
-    this.config = config
+  /**
+   * Create the Ignitor.
+   *
+   * AdonisJS-style:
+   *   new Ignitor(APP_ROOT, { importer: IMPORTER })
+   *
+   * Simple-style:
+   *   new Ignitor({ port: 3000, serverFactory: ... })
+   */
+  constructor(appRootOrConfig?: URL | IgnitorConfig, config?: IgnitorConfig) {
+    if (appRootOrConfig instanceof URL) {
+      this.appRoot = appRootOrConfig
+      this.config = config ?? {}
+    } else {
+      this.config = appRootOrConfig ?? {}
+    }
+
     this.app = new Application()
     this.router = new Router()
+    this.server = new Server(this.router)
     this.middleware = new MiddlewareRegistry()
     this.errorBoundary = new ErrorBoundary(
       (event) => this.handleError(event),
@@ -106,26 +126,39 @@ export class Ignitor {
 
     // Register framework services in container
     this.app.container.singleton('router', () => this.router)
+    this.app.container.singleton('server', () => this.server)
     this.app.container.singleton('middleware', () => this.middleware)
+    this.app.container.singleton('app', () => this.app)
+
+    // Set service singletons so route/kernel files can import them
+    _setApp(this.app)
+    _setRouter(this.router)
+    _setServer(this.server)
   }
 
+  // ─── Configuration ────────────────────────────────────────
+
   /**
-   * Set the application environment.
+   * Access the Application instance before start.
+   * Like AdonisJS: .tap((app) => { app.booting(...) })
    */
+  tap(callback: (app: Application) => void): this {
+    callback(this.app)
+    return this
+  }
+
+  /** Set the application environment. */
   setEnvironment(env: AppEnvironment): this {
     this.environment = env
     return this
   }
 
-  /**
-   * Get the application environment.
-   */
   getEnvironment(): AppEnvironment {
     return this.environment
   }
 
   /**
-   * Load the reamrc manifest (equivalent to AdonisJS adonisrc.ts).
+   * Load the reamrc config (equivalent to adonisrc.ts).
    */
   useRcFile(reamrc: ReamrcConfig): this {
     this.reamrc = reamrc
@@ -170,61 +203,46 @@ export class Ignitor {
     return this
   }
 
-  // === Lifecycle methods ===
+  // ─── Mode selection ───────────────────────────────────────
 
-  /**
-   * Configure for HTTP server mode and start.
-   * Equivalent to AdonisJS: new Ignitor(url).httpServer().start()
-   */
+  /** Configure for HTTP server mode. */
   httpServer(): this {
     this.environment = 'web'
     return this
   }
 
-  /**
-   * Configure for CLI/console mode (future).
-   */
+  /** Configure for CLI/console mode (future). */
   console(): this {
     this.environment = 'console'
     return this
   }
 
-  /**
-   * Configure for test mode.
-   */
+  /** Configure for test mode. */
   testMode(): this {
     this.environment = 'test'
     return this
   }
 
-  /**
-   * Start the application through the full lifecycle.
-   *
-   * Phase 1 — REGISTER: Load and register all providers
-   * Phase 2 — BOOT: Boot all providers
-   * Phase 3 — START: Import preloads, apply inline config, providers start()
-   * Phase 4 — READY: Start HTTP server (if web), providers ready()
-   */
+  // ─── Lifecycle ────────────────────────────────────────────
+
   async start(): Promise<Ignitor> {
-    // === Phase 1: REGISTER ===
     await this.phaseRegister()
-
-    // === Phase 2: BOOT ===
     await this.phaseBoot()
-
-    // === Phase 3: START ===
     await this.phaseStart()
-
-    // === Phase 4: READY ===
     await this.phaseReady()
-
     return this
   }
 
   private async phaseRegister(): Promise<void> {
     // Load providers from reamrc
     if (this.reamrc?.providers) {
-      for (const providerImport of this.reamrc.providers) {
+      for (const providerEntry of this.reamrc.providers) {
+        const providerImport = typeof providerEntry === 'function' ? providerEntry : providerEntry.file
+        const env = typeof providerEntry === 'function' ? undefined : providerEntry.environment
+
+        // Skip providers not matching current environment
+        if (env && !env.includes(this.environment)) continue
+
         const mod = await providerImport()
         const ProviderClass = mod.default
         const instance = new ProviderClass(this.app)
@@ -251,7 +269,11 @@ export class Ignitor {
   private async phaseStart(): Promise<void> {
     // Import preload files (routes.ts, kernel.ts, etc.)
     if (this.reamrc?.preloads) {
-      for (const preloadImport of this.reamrc.preloads) {
+      for (const preloadEntry of this.reamrc.preloads) {
+        const preloadImport = typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
+        const env = typeof preloadEntry === 'function' ? undefined : (preloadEntry as { environment?: string[] }).environment
+
+        if (env && !env.includes(this.environment)) continue
         await preloadImport()
       }
     }
@@ -267,7 +289,7 @@ export class Ignitor {
       this.inlineRoutes(this.router)
     }
 
-    // Call start() on providers that have it
+    // Call start() on providers
     for (const provider of this.providers) {
       if ('start' in provider && typeof (provider as { start: () => Promise<void> }).start === 'function') {
         await (provider as { start: () => Promise<void> }).start()
@@ -278,7 +300,10 @@ export class Ignitor {
   }
 
   private async phaseReady(): Promise<void> {
-    // Auto-register /health route BEFORE server starts (must be available for orchestrator probes)
+    // Boot the Server (resolves lazy error handler etc.)
+    await this.server.boot()
+
+    // Auto-register /health route
     if (!this.router.match('GET', '/health')) {
       const { HealthCheck } = await import('./HealthCheck.js')
       const health = new HealthCheck()
@@ -288,9 +313,14 @@ export class Ignitor {
 
     // Start HTTP server if in web mode
     if (this.environment === 'web' && this.config.serverFactory) {
+      // Build the HttpKernel with server middleware + router middleware
       const kernel = createHttpKernel({
         router: this.router,
         middleware: this.middleware,
+        container: this.app.container,
+        exceptionHandler: this.server.getErrorHandler() ?? new ExceptionHandler(!this.app.inProduction),
+        serverMiddleware: this.server.getServerMiddleware(),
+        routerMiddleware: this.router.getRouterMiddleware(),
         onError: (error, ctx) => {
           this.errorBoundary.serviceError('HttpKernel', error, ctx.id)
         },
@@ -298,9 +328,9 @@ export class Ignitor {
 
       const desiredPort = this.config.port ?? 3000
       const availablePort = await findAvailablePort(desiredPort)
-      this.server = this.config.serverFactory(availablePort)
-      this.server.onRequest(kernel)
-      await this.server.listen()
+      this._httpServer = this.config.serverFactory(availablePort)
+      this._httpServer.onRequest(kernel)
+      await this._httpServer.listen()
     } else if (this.environment === 'web' && !this.config.serverFactory) {
       throw new ReamError('IGNITOR_NO_SERVER_FACTORY', 'httpServer() requires a serverFactory in config', {
         hint: 'Example: new Ignitor({ serverFactory: (port) => new HyperServer(port) })',
@@ -310,27 +340,26 @@ export class Ignitor {
     // Install error boundary
     this.errorBoundary.install()
 
-    // Call ready() on providers that have it
+    // Call ready() on providers
     for (const provider of this.providers) {
       if ('ready' in provider && typeof (provider as { ready: () => Promise<void> }).ready === 'function') {
         await (provider as { ready: () => Promise<void> }).ready()
       }
     }
 
-    // Start hot-reload in dev mode — watch TS files and re-register routes/middleware
+    // Hot-reload in dev mode
     if (this.isDevMode()) {
       const watchDirs = this.config.watchDirs ?? ['app', 'start']
       this.hotReloadCleanup = startHotReload({
         watchDirs,
         onReload: async () => {
-          // Clear service registry to prevent memory leak from stale class refs
           const { clearServiceRegistry } = await import('./decorators/Service.js')
           clearServiceRegistry()
           this.router.clear()
           if (this.inlineRoutes) this.inlineRoutes(this.router)
-          // Re-import preload files with cache bust
           if (this.reamrc?.preloads) {
-            for (const preloadImport of this.reamrc.preloads) {
+            for (const preloadEntry of this.reamrc.preloads) {
+              const preloadImport = typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
               await preloadImport()
             }
           }
@@ -342,34 +371,31 @@ export class Ignitor {
     this.phase = 'ready'
   }
 
-  /**
-   * Graceful shutdown.
-   */
+  /** Graceful shutdown. */
   async stop(): Promise<void> {
     if (this.hotReloadCleanup) this.hotReloadCleanup()
-    if (this.server) {
-      await this.server.close()
-    }
+    if (this._httpServer) await this._httpServer.close()
     this.errorBoundary.uninstall()
     await this.app.shutdown()
     this.phase = 'shutdown'
   }
 
-  // === Accessors ===
+  // ─── Accessors ────────────────────────────────────────────
 
-  /** Get the actual bound port (after start). */
   async port(): Promise<number> {
-    return this.server ? this.server.port() : 0
+    return this._httpServer ? this._httpServer.port() : 0
   }
 
-  /** Get the Application instance. */
   getApp(): Application {
     return this.app
   }
 
-  /** Get the Router. */
   getRouter(): Router {
     return this.router
+  }
+
+  getServer(): Server {
+    return this.server
   }
 
   /** Get the kernel callback (for serverless / testing). */
@@ -377,36 +403,42 @@ export class Ignitor {
     return createHttpKernel({
       router: this.router,
       middleware: this.middleware,
+      container: this.app.container,
+      exceptionHandler: this.server.getErrorHandler() ?? new ExceptionHandler(!this.app.inProduction),
+      serverMiddleware: this.server.getServerMiddleware(),
+      routerMiddleware: this.router.getRouterMiddleware(),
     })
   }
 
-  /**
-   * Check if running in dev mode.
-   * Dev = not production and not test. Hot-reload only in dev.
-   */
   isDevMode(): boolean {
-    const env = process.env.NODE_ENV
-    return env !== 'production' && env !== 'test'
+    return this.app.inDev
   }
 
-  /** Get current lifecycle phase. */
   getPhase(): string {
     return this.phase
   }
 
   private handleError(event: ErrorEvent): void {
     for (const listener of this.errorListeners) {
-      try {
-        listener(event)
-      } catch { /* Don't let listeners crash */ }
+      try { listener(event) } catch { /* Don't let listeners crash */ }
     }
   }
 }
 
 /**
- * Find an available port starting from the desired port.
- * If the port is taken, tries the next one (up to 20 attempts).
+ * Pretty-print an error (like AdonisJS prettyPrintError).
  */
+export function prettyPrintError(error: unknown): void {
+  if (error instanceof ReamError) {
+    console.error(error.toDevString())
+  } else if (error instanceof Error) {
+    console.error(`\n  ${error.message}\n`)
+    if (error.stack) console.error(error.stack)
+  } else {
+    console.error(error)
+  }
+}
+
 async function findAvailablePort(desired: number): Promise<number> {
   const net = await import('node:net')
   for (let port = desired; port < desired + 20; port++) {
@@ -417,5 +449,5 @@ async function findAvailablePort(desired: number): Promise<number> {
     })
     if (available) return port
   }
-  return desired // fallback — let the server error naturally
+  return desired
 }

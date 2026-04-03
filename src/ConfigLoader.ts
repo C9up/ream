@@ -45,6 +45,6 @@ export function env(key: string, defaultValue?: string): string | undefined {
  * Define typed configuration for a module.
  * Returns the config object as-is (type-checked by the module's defineConfig).
  */
-export function defineConfig<T>(config: T): T {
+export function defineModuleConfig<T>(config: T): T {
   return config
 }

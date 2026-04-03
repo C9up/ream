@@ -10,6 +10,18 @@
     ".": {
       "import": "./src/index.ts",
       "types": "./src/index.ts"
+    },
+    "./services/app": {
+      "import": "./src/services/app.ts",
+      "types": "./src/services/app.ts"
+    },
+    "./services/router": {
+      "import": "./src/services/router.ts",
+      "types": "./src/services/router.ts"
+    },
+    "./services/server": {
+      "import": "./src/services/server.ts",
+      "types": "./src/services/server.ts"
     }
   },
   "scripts": {

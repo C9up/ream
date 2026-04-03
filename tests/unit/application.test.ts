@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
-import { Application, Context, Provider, SimpleConfigStore, defineConfig, env } from '../../src/index.js'
+import { Application, Context, Provider, SimpleConfigStore, defineModuleConfig, env } from '../../src/index.js'
 
 describe('application > provider lifecycle', () => {
   it('registers and boots providers in order', async () => {
@@ -94,9 +94,9 @@ describe('config > env helper', () => {
   })
 })
 
-describe('config > defineConfig', () => {
+describe('config > defineModuleConfig', () => {
   it('returns config as-is (type pass-through)', () => {
-    const config = defineConfig({
+    const config = defineModuleConfig({
       host: 'localhost',
       port: 3000,
     })

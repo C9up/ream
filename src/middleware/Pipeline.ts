@@ -1,23 +1,22 @@
 /**
- * Unified Middleware Pipeline — works on HTTP and bus events.
+ * Unified Middleware Pipeline — typed for HttpContext.
  *
  * @implements FR22, FR27
  *
  * Pipeline order (fixed):
  * 1. Global middleware
  * 2. Route/handler named middleware
- * 3. Guard (auth)
- * 4. Validate
- * 5. Transaction (if declared)
- * 6. Handler
- * 7. After middleware
+ * 3. Route inline middleware
+ * 4. Guard (auth + roles + permissions)
+ * 5. Handler
  */
 
-import type { Context } from '../Context.js'
+import type { HttpContext } from '../http/HttpContext.js'
+import { E_UNAUTHORIZED, E_FORBIDDEN } from '../http/Exception.js'
 import { ReamError } from '../errors/ReamError.js'
 
 export type MiddlewareFunction = (
-  ctx: Context,
+  ctx: HttpContext,
   next: () => Promise<void>,
 ) => Promise<void> | void
 
@@ -26,7 +25,7 @@ export class MiddlewareRegistry {
   private global: MiddlewareFunction[] = []
   private named: Map<string, MiddlewareFunction> = new Map()
 
-  /** Register a global middleware (runs on every request/event). */
+  /** Register a global middleware (runs on every request). */
   use(middleware: MiddlewareFunction): void {
     this.global.push(middleware)
   }
@@ -49,6 +48,7 @@ export class MiddlewareRegistry {
   /** Build the execution chain for a request. */
   buildChain(
     namedMiddleware: string[],
+    inlineMiddleware: MiddlewareFunction[],
     handler: MiddlewareFunction,
     options?: { guards?: string[]; roles?: string[]; permissions?: string[] },
   ): MiddlewareFunction {
@@ -59,11 +59,13 @@ export class MiddlewareRegistry {
       ...namedMiddleware
         .map((name) => this.named.get(name))
         .filter((mw): mw is MiddlewareFunction => mw !== undefined),
-      // 3. Guard enforcement (auth + roles + permissions)
+      // 3. Inline middleware
+      ...inlineMiddleware,
+      // 4. Guard enforcement (throws exceptions instead of setting response)
       ...((options?.guards?.length ?? 0) > 0 || (options?.roles?.length ?? 0) > 0 || (options?.permissions?.length ?? 0) > 0
         ? [createGuardMiddleware(options?.guards ?? [], options?.roles, options?.permissions)]
         : []),
-      // 4. Handler (end of chain)
+      // 5. Handler
       handler,
     ]
 
@@ -73,7 +75,7 @@ export class MiddlewareRegistry {
 
 /** Compose middleware into a single handler (onion pattern). */
 function compose(middleware: MiddlewareFunction[]): MiddlewareFunction {
-  return async (ctx: Context, finalNext: () => Promise<void>) => {
+  return async (ctx: HttpContext, finalNext: () => Promise<void>) => {
     let index = -1
 
     async function dispatch(i: number): Promise<void> {
@@ -95,39 +97,28 @@ function compose(middleware: MiddlewareFunction[]): MiddlewareFunction {
 }
 
 /**
- * Create a guard enforcement middleware.
- * Enforces authentication, roles, and permissions.
+ * Guard enforcement middleware.
+ * Throws E_UNAUTHORIZED / E_FORBIDDEN exceptions (caught by ExceptionHandler).
  */
 function createGuardMiddleware(guards: string[], roles?: string[], permissions?: string[]): MiddlewareFunction {
   return async (ctx, next) => {
-    // Check authentication — required if guards, roles, OR permissions are declared
     const needsAuth = guards.length > 0 || (roles && roles.length > 0) || (permissions && permissions.length > 0)
     if (needsAuth && !ctx.auth.authenticated) {
-      ctx.response!.status = 401
-      ctx.response!.headers['content-type'] = 'application/json'
-      ctx.response!.body = JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } })
-      return
+      throw new E_UNAUTHORIZED()
     }
 
-    // Check roles
     if (roles && roles.length > 0) {
       const userRoles = ctx.auth.roles ?? []
-      if (!roles.every((r) => userRoles.includes(r))) {
-        ctx.response!.status = 403
-        ctx.response!.headers['content-type'] = 'application/json'
-        ctx.response!.body = JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Insufficient role', required: roles } })
-        return
+      const hasAnyRole = roles.some((r) => userRoles.includes(r))
+      if (!hasAnyRole) {
+        throw new E_FORBIDDEN('Insufficient role', roles)
       }
     }
 
-    // Check permissions
     if (permissions && permissions.length > 0) {
       const userPerms = ctx.auth.permissions ?? []
       if (!permissions.every((p) => userPerms.includes(p))) {
-        ctx.response!.status = 403
-        ctx.response!.headers['content-type'] = 'application/json'
-        ctx.response!.body = JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Insufficient permissions', required: permissions } })
-        return
+        throw new E_FORBIDDEN('Insufficient permissions', permissions)
       }
     }
 

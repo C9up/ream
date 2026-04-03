@@ -1,7 +1,6 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import {
-  Context,
   MiddlewareRegistry,
   ReamError,
   Router,
@@ -78,9 +77,7 @@ describe('HttpKernel > integration', () => {
     const middleware = new MiddlewareRegistry()
 
     router.get('/orders/:id', async (ctx) => {
-      ctx.response!.status = 200
-      ctx.response!.headers['content-type'] = 'application/json'
-      ctx.response!.body = JSON.stringify({ orderId: ctx.params?.id })
+      ctx.response.json({ orderId: ctx.params.id })
     })
 
     const kernel = createHttpKernel({ router, middleware })
