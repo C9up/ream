@@ -104,7 +104,8 @@ export function createHttpKernel(config: HttpKernelConfig): (requestJson: string
 }
 
 function createControllerHandler(
-  controller: { target: new (...args: unknown[]) => unknown; method: string },
+  // biome-ignore lint/suspicious/noExplicitAny: see ControllerAction type — IoC resolves constructor params
+  controller: { target: new (...args: any[]) => any; method: string },
   container?: Container,
 ): (ctx: HttpContext) => Promise<void> {
   return async (ctx: HttpContext) => {

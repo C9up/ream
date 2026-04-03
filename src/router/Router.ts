@@ -11,8 +11,13 @@ import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 
 export type RouteHandlerFunction = (ctx: HttpContext) => Promise<void> | void
 
-/** Controller tuple: [ControllerClass, 'methodName'] */
-export type ControllerAction = [target: new (...args: unknown[]) => unknown, method: string]
+/**
+ * Controller tuple: [ControllerClass, 'methodName'].
+ * Constructor params are resolved by the IoC container, not by TypeScript —
+ * same pattern as AdonisJS (@poppinss/utils Constructor type).
+ */
+// biome-ignore lint/suspicious/noExplicitAny: required — TypeScript contravariance makes it impossible to type "any constructor" without `any`
+export type ControllerAction = [target: new (...args: any[]) => any, method: string]
 
 /** A route handler is either a closure or a controller tuple. */
 export type RouteHandler = RouteHandlerFunction | ControllerAction
@@ -24,7 +29,8 @@ export interface RouteDefinition {
   method: string
   path: string
   handler: RouteHandlerFunction | null
-  controller?: { target: new (...args: unknown[]) => unknown; method: string }
+  // biome-ignore lint/suspicious/noExplicitAny: see ControllerAction
+  controller?: { target: new (...args: any[]) => any; method: string }
   middleware: string[]
   inlineMiddleware: MiddlewareFunction[]
   guards: string[]
@@ -383,7 +389,8 @@ export class Router {
    *   // PUT    /posts/:id      → PostsController.update
    *   // DELETE /posts/:id      → PostsController.destroy
    */
-  resource(path: string, controller: new (...args: unknown[]) => unknown): GroupBuilder {
+  // biome-ignore lint/suspicious/noExplicitAny: see ControllerAction
+  resource(path: string, controller: new (...args: any[]) => any): GroupBuilder {
     const baseName = path.replace(/\//g, '.')
     const routes: RouteDefinition[] = []
 
