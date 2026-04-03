@@ -240,6 +240,9 @@ export class Ignitor {
   }
 
   private async phaseRegister(): Promise<void> {
+    // Auto-load config/*.ts files into app.config
+    await this.autoloadConfig()
+
     // Load providers from reamrc
     if (this.reamrc?.providers) {
       for (const providerEntry of this.reamrc.providers) {
@@ -370,6 +373,33 @@ export class Ignitor {
     }
 
     this.phase = 'ready'
+  }
+
+  /**
+   * Auto-load config/*.ts files into app.config store.
+   * Each file's default export is stored under its filename (without extension).
+   * e.g. config/database.ts → app.config.get('database')
+   */
+  private async autoloadConfig(): Promise<void> {
+    const { readdirSync, existsSync } = await import('node:fs')
+    const { join, basename } = await import('node:path')
+    const { fileURLToPath, pathToFileURL } = await import('node:url')
+
+    const configDir = this.appRoot
+      ? join(fileURLToPath(this.appRoot), 'config')
+      : join(process.cwd(), 'config')
+
+    if (!existsSync(configDir)) return
+
+    const files = readdirSync(configDir)
+      .filter((f: string) => (f.endsWith('.ts') || f.endsWith('.js')) && !f.startsWith('.'))
+      .sort()
+
+    for (const file of files) {
+      const key = basename(file).replace(/\.(ts|js)$/, '')
+      const mod = await import(pathToFileURL(join(configDir, file)).href)
+      this.app.config.set(key, mod.default ?? mod)
+    }
   }
 
   /**
