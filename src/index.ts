@@ -58,8 +58,8 @@ export type { HttpKernelConfig } from './HttpKernel.js'
 
 // ─── Server ─────────────────────────────────────────────────
 
-export { Server } from './server/Server.js'
-export type { LazyImport, ErrorHandlerClass } from './server/Server.js'
+export { Server, resolveMiddlewareEntry } from './server/Server.js'
+export type { LazyImport, ErrorHandlerClass, MiddlewareClass, MiddlewareEntry } from './server/Server.js'
 
 // ─── Ignitor ────────────────────────────────────────────────
 

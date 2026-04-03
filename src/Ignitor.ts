@@ -45,6 +45,12 @@ export interface ReamrcConfig {
     environment?: string[]
   }>
   commands?: Array<() => Promise<unknown>>
+  modules?: {
+    /** Path to the modules directory (relative to app root). Default: './app/modules' */
+    path?: string
+    /** Auto-loaded files in each module directory. Default: ['routes'] */
+    autoload?: string[]
+  }
   tests?: {
     suites?: Array<{ name: string; files: string[]; timeout?: number }>
     forceExit?: boolean
@@ -278,6 +284,9 @@ export class Ignitor {
       }
     }
 
+    // Auto-load module files (routes.ts, etc.) from modules directory
+    await this.autoloadModules()
+
     // Apply inline configuration
     for (const mw of this.inlineMiddleware) {
       this.middleware.use(mw)
@@ -302,14 +311,6 @@ export class Ignitor {
   private async phaseReady(): Promise<void> {
     // Boot the Server (resolves lazy error handler etc.)
     await this.server.boot()
-
-    // Auto-register /health route
-    if (!this.router.match('GET', '/health')) {
-      const { HealthCheck } = await import('./HealthCheck.js')
-      const health = new HealthCheck()
-      this.router.get('/health', health.handler())
-      this.app.container.singleton('health', () => health)
-    }
 
     // Start HTTP server if in web mode
     if (this.environment === 'web' && this.config.serverFactory) {
@@ -369,6 +370,44 @@ export class Ignitor {
     }
 
     this.phase = 'ready'
+  }
+
+  /**
+   * Auto-load module files (routes.ts, etc.) from the modules directory.
+   * Scans modules.path for subdirectories and imports matching files.
+   */
+  private async autoloadModules(): Promise<void> {
+    const modulesConfig = this.reamrc?.modules
+    if (!modulesConfig?.path) return
+
+    const { readdirSync, existsSync } = await import('node:fs')
+    const { join, resolve } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const { pathToFileURL } = await import('node:url')
+
+    // Resolve modules path relative to app root or cwd
+    const basePath = this.appRoot
+      ? join(fileURLToPath(this.appRoot), modulesConfig.path)
+      : resolve(modulesConfig.path)
+
+    if (!existsSync(basePath)) return
+
+    const autoloadFiles = modulesConfig.autoload ?? ['routes']
+    const moduleDirs = readdirSync(basePath, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+
+    for (const moduleDir of moduleDirs) {
+      for (const fileName of autoloadFiles) {
+        const tsPath = join(basePath, moduleDir, `${fileName}.ts`)
+        const jsPath = join(basePath, moduleDir, `${fileName}.js`)
+        const filePath = existsSync(tsPath) ? tsPath : existsSync(jsPath) ? jsPath : null
+        if (filePath) {
+          await import(pathToFileURL(filePath).href)
+        }
+      }
+    }
   }
 
   /** Graceful shutdown. */

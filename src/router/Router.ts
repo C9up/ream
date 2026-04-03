@@ -6,6 +6,8 @@
 
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
+import type { MiddlewareEntry } from '../server/Server.js'
+import { resolveMiddlewareEntry } from '../server/Server.js'
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -268,7 +270,7 @@ export class Router {
   private routes: RouteDefinition[] = []
   private globalMatchers: Record<string, ParamMatcher> = {}
   private _routerMiddleware: MiddlewareFunction[] = []
-  private _namedMiddleware: Record<string, MiddlewareFunction | (() => Promise<{ default: new () => { handle: MiddlewareFunction } }>)> = {}
+  private _namedMiddleware: Map<string, MiddlewareFunction> = new Map()
 
   /** Predefined param matchers. */
   readonly matchers = matchers
@@ -277,46 +279,27 @@ export class Router {
 
   /**
    * Register router-level middleware (runs on requests with a matched route).
-   * Like AdonisJS: router.use([() => import('@adonisjs/core/bodyparser_middleware')])
+   *   router.use([() => import('#middleware/auth_middleware')])
    */
-  use(middleware: Array<MiddlewareFunction | (() => Promise<unknown>)>): this {
+  use(middleware: MiddlewareEntry[]): this {
     for (const mw of middleware) {
-      if (typeof mw === 'function' && mw.length <= 2) {
-        this._routerMiddleware.push(mw as MiddlewareFunction)
-      } else {
-        // Lazy import
-        const lazyMw = mw as () => Promise<{ default: new () => { handle: (ctx: HttpContext, next: () => Promise<void>) => Promise<void> | void } }>
-        this._routerMiddleware.push(async (ctx: HttpContext, next: () => Promise<void>) => {
-          const mod = await lazyMw()
-          const instance = new mod.default()
-          await instance.handle(ctx, next)
-        })
-      }
+      this._routerMiddleware.push(resolveMiddlewareEntry(mw))
     }
     return this
   }
 
   /**
    * Register named middleware collection.
-   * Like AdonisJS: export const middleware = router.named({ auth: () => import(...) })
+   *   export const middleware = router.named({
+   *     auth: () => import('#middleware/auth_middleware'),
+   *   })
    */
-  named(collection: Record<string, MiddlewareFunction | (() => Promise<unknown>)>): Record<string, MiddlewareFunction> {
+  named(collection: Record<string, MiddlewareEntry>): Record<string, MiddlewareFunction> {
     const resolved: Record<string, MiddlewareFunction> = {}
     for (const [name, mw] of Object.entries(collection)) {
-      if (typeof mw === 'function' && mw.length <= 2) {
-        this._namedMiddleware[name] = mw as MiddlewareFunction
-        resolved[name] = mw as MiddlewareFunction
-      } else {
-        // Lazy import
-        const lazyMw = mw as () => Promise<{ default: new () => { handle: (ctx: HttpContext, next: () => Promise<void>) => Promise<void> | void } }>
-        const resolvedMw: MiddlewareFunction = async (ctx: HttpContext, next: () => Promise<void>) => {
-          const mod = await lazyMw()
-          const instance = new mod.default()
-          await instance.handle(ctx, next)
-        }
-        this._namedMiddleware[name] = resolvedMw
-        resolved[name] = resolvedMw
-      }
+      const fn = resolveMiddlewareEntry(mw)
+      this._namedMiddleware.set(name, fn)
+      resolved[name] = fn
     }
     return resolved
   }
@@ -328,9 +311,7 @@ export class Router {
 
   /** Get a named middleware by name. */
   getNamedMiddleware(name: string): MiddlewareFunction | undefined {
-    const mw = this._namedMiddleware[name]
-    if (typeof mw === 'function') return mw as MiddlewareFunction
-    return undefined
+    return this._namedMiddleware.get(name)
   }
 
   // ─── Route registration ───────────────────────────────────
