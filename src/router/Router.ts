@@ -204,7 +204,7 @@ export class GroupBuilder {
     return this
   }
 
-  /** Set domain for all routes in the group (future). */
+  /** Set domain for all routes in the group. */
   domain(d: string): this {
     for (const route of this.routes) {
       route.domain = d
@@ -458,9 +458,13 @@ export class Router {
   // ─── Route matching ───────────────────────────────────────
 
   /** Find a matching route, extracting :param values and validating matchers. */
-  match(method: string, path: string): MatchResult | undefined {
+  match(method: string, path: string, host?: string): MatchResult | undefined {
     for (const route of this.routes) {
       if (route.method !== '*' && route.method !== method) continue
+
+      // Domain check — if route has a domain constraint, host must match
+      if (route.domain && host && !matchDomain(route.domain, host)) continue
+
       const params = matchPath(route.path, path)
       if (params === null) continue
 
@@ -563,4 +567,15 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
   }
 
   return params
+}
+
+/** Match domain pattern against actual host. Supports wildcards like *.example.com */
+function matchDomain(pattern: string, host: string): boolean {
+  const actualHost = host.split(':')[0] // strip port
+  if (pattern === actualHost) return true
+  if (pattern.startsWith('*.')) {
+    const suffix = pattern.slice(1) // ".example.com"
+    return actualHost.endsWith(suffix) && actualHost.length > suffix.length
+  }
+  return false
 }

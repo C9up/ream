@@ -1,8 +1,8 @@
 //! # ream-http-napi
 //!
-//! NAPI bindings for the Ream Hyper HTTP server.
+//! NAPI bindings for the Ream Hyper HTTP server and security primitives.
 //!
-//! @implements FR23
+//! @implements FR23, FR52
 
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction};
@@ -146,4 +146,62 @@ impl HyperServer {
         }
         Ok(())
     }
+}
+
+// ─── Security bindings ──────────────────────────────────────
+
+/// Sign a JWT payload with HMAC-SHA256 (Rust-native).
+/// Returns the complete JWT token string.
+#[napi]
+pub fn jwt_sign(payload: String, secret: String) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::jwt::sign(&payload, secret.as_bytes())
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Verify a JWT token and return the decoded payload JSON string.
+/// Validates signature (constant-time), exp, and nbf claims.
+#[napi]
+pub fn jwt_verify(token: String, secret: String) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::jwt::verify(&token, secret.as_bytes())
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Hash a password with Argon2id (Rust-native).
+/// Returns the PHC-formatted hash string.
+#[napi]
+pub fn argon2_hash(password: String) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::argon2_hash::hash_password(&password)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Verify a password against an Argon2id hash.
+#[napi]
+pub fn argon2_verify(password: String, hash: String) -> napi::Result<bool> {
+    catch_unwind_napi(|| {
+        ream_security::argon2_hash::verify_password(&password, &hash)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Generate a CSRF token.
+#[napi]
+pub fn csrf_generate() -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        let mut csrf = ream_security::csrf::CsrfValidator::new();
+        Ok(csrf.generate_token())
+    })
+}
+
+/// Constant-time string comparison.
+#[napi]
+pub fn constant_time_eq(a: String, b: String) -> napi::Result<bool> {
+    catch_unwind_napi(|| {
+        Ok(ream_security::constant_time::constant_time_eq(a.as_bytes(), b.as_bytes()))
+    })
 }

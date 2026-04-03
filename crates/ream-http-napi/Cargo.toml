@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ream-http = { path = "../ream-http" }
+ream-security = { path = "../ream-security" }
 ream-napi-core = { path = "../ream-napi-core" }
 napi = { version = "2", default-features = false, features = ["napi8", "serde-json", "async"] }
 napi-derive = "2"

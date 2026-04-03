@@ -156,7 +156,11 @@ describe('ignitor > toolkit mode', () => {
 describe('ignitor > environment', () => {
   it('httpServer sets web', () => { expect(new Ignitor().httpServer().getEnvironment()).toBe('web') })
   it('testMode sets test', () => { expect(new Ignitor().testMode().getEnvironment()).toBe('test') })
-  it('console sets console', () => { expect(new Ignitor().console().getEnvironment()).toBe('console') })
+  it('console sets console', () => {
+    const app = new Ignitor()
+    app.console() // returns ConsoleKernel, sets environment
+    expect(app.getEnvironment()).toBe('console')
+  })
 })
 
 describe('ignitor > controller resolution', () => {

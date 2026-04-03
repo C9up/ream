@@ -46,8 +46,9 @@ export function createHttpKernel(config: HttpKernelConfig): (requestJson: string
     const rawCorrId = reqData.headers['x-request-id'] ?? reqData.headers['x-correlation-id'] ?? ''
     const correlationId = CORR_ID_RE.test(rawCorrId) ? rawCorrId : crypto.randomUUID()
 
-    // 3. Match route
-    const match = config.router.match(reqData.method, reqData.path)
+    // 3. Match route (pass host for domain-based routing)
+    const host = reqData.headers['host'] ?? reqData.headers['Host']
+    const match = config.router.match(reqData.method, reqData.path, host)
     const routeInfo = match
       ? { pattern: match.route.path, name: match.route.name, middleware: match.route.middleware }
       : { pattern: '', middleware: [] }

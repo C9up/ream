@@ -63,7 +63,9 @@ export type { LazyImport, ErrorHandlerClass, MiddlewareClass, MiddlewareEntry } 
 
 // ─── Ignitor ────────────────────────────────────────────────
 
-export { Ignitor, defineConfig, prettyPrintError } from './Ignitor.js'
+export { Ignitor, ConsoleKernel, defineConfig, prettyPrintError } from './Ignitor.js'
+export { CommandRunner } from './console/CommandRunner.js'
+export type { Command } from './console/CommandRunner.js'
 export type { AppEnvironment, HyperServerLike, IgnitorConfig, ReamrcConfig } from './Ignitor.js'
 
 // ─── Providers ──────────────────────────────────────────────

@@ -217,10 +217,10 @@ export class Ignitor {
     return this
   }
 
-  /** Configure for CLI/console mode (future). */
-  console(): this {
+  /** Configure for CLI/console mode. Returns a ConsoleKernel for dispatching commands. */
+  console(): ConsoleKernel {
     this.environment = 'console'
-    return this
+    return new ConsoleKernel(this)
   }
 
   /** Configure for test mode. */
@@ -505,6 +505,40 @@ export function prettyPrintError(error: unknown): void {
     if (error.stack) console.error(error.stack)
   } else {
     console.error(error)
+  }
+}
+
+/**
+ * ConsoleKernel — handles CLI command dispatching.
+ * Like AdonisJS: new Ignitor(...).console().handle(process.argv.splice(2))
+ */
+export class ConsoleKernel {
+  private ignitor: Ignitor
+
+  constructor(ignitor: Ignitor) {
+    this.ignitor = ignitor
+  }
+
+  async handle(argv: string[]): Promise<void> {
+    await this.ignitor.start()
+    const { CommandRunner } = await import('./console/CommandRunner.js')
+    const runner = new CommandRunner()
+
+    // Auto-register commands from reamrc
+    const reamrc = (this.ignitor as unknown as { reamrc?: ReamrcConfig }).reamrc
+    if (reamrc?.commands) {
+      for (const commandImport of reamrc.commands) {
+        const mod = await commandImport()
+        const cmd = (mod as { default: { name: string; description: string; run: (args: string[], flags: Record<string, string | boolean>) => Promise<void> } }).default
+        if (cmd?.name && cmd?.run) {
+          runner.register(cmd)
+        }
+      }
+    }
+
+    this.ignitor.getApp().container.singleton('console', () => runner)
+    await runner.handle(argv)
+    await this.ignitor.stop()
   }
 }
 
