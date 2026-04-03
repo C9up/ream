@@ -61,6 +61,20 @@ export type { FileValidationOptions } from './bodyparser/MultipartFile.js'
 export { Mail, MessageBuilder, SmtpTransport, LogTransport } from './mail/Mail.js'
 export type { MailConfig, MailMessage, MailTransport, MailAttachment } from './mail/Mail.js'
 
+// ─── Security ───────────────────────────────────────────────
+
+export { default as CorsMiddleware } from './security/CorsMiddleware.js'
+export type { CorsConfig } from './security/CorsMiddleware.js'
+export { default as SecurityHeadersMiddleware } from './security/SecurityHeadersMiddleware.js'
+export type { SecurityHeadersConfig } from './security/SecurityHeadersMiddleware.js'
+export { default as RateLimitMiddleware } from './security/RateLimitMiddleware.js'
+export type { RateLimitConfig } from './security/RateLimitMiddleware.js'
+export { default as ShieldMiddleware } from './security/ShieldMiddleware.js'
+export type { ShieldConfig } from './security/ShieldMiddleware.js'
+export { SignedUrl } from './security/SignedUrl.js'
+export type { SignedUrlConfig } from './security/SignedUrl.js'
+export { CookieSigner } from './security/CookieSigner.js'
+
 // ─── Decorators ─────────────────────────────────────────────
 
 export { Inject, Service, inject, clearServiceRegistry, getServiceMetadata, getServiceRegistry } from './decorators/Service.js'
