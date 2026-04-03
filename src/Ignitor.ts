@@ -278,6 +278,14 @@ export class Ignitor {
   }
 
   private async phaseReady(): Promise<void> {
+    // Auto-register /health route BEFORE server starts (must be available for orchestrator probes)
+    if (!this.router.match('GET', '/health')) {
+      const { HealthCheck } = await import('./HealthCheck.js')
+      const health = new HealthCheck()
+      this.router.get('/health', health.handler())
+      this.app.container.singleton('health', () => health)
+    }
+
     // Start HTTP server if in web mode
     if (this.environment === 'web' && this.config.serverFactory) {
       const kernel = createHttpKernel({
@@ -297,14 +305,6 @@ export class Ignitor {
       throw new ReamError('IGNITOR_NO_SERVER_FACTORY', 'httpServer() requires a serverFactory in config', {
         hint: 'Example: new Ignitor({ serverFactory: (port) => new HyperServer(port) })',
       })
-    }
-
-    // Auto-register /health route if not already defined
-    if (!this.router.match('GET', '/health')) {
-      const { HealthCheck } = await import('./HealthCheck.js')
-      const health = new HealthCheck()
-      this.router.get('/health', health.handler())
-      this.app.container.singleton('health', () => health)
     }
 
     // Install error boundary

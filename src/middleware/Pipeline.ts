@@ -100,8 +100,9 @@ function compose(middleware: MiddlewareFunction[]): MiddlewareFunction {
  */
 function createGuardMiddleware(guards: string[], roles?: string[], permissions?: string[]): MiddlewareFunction {
   return async (ctx, next) => {
-    // Check authentication
-    if (guards.length > 0 && !ctx.auth.authenticated) {
+    // Check authentication — required if guards, roles, OR permissions are declared
+    const needsAuth = guards.length > 0 || (roles && roles.length > 0) || (permissions && permissions.length > 0)
+    if (needsAuth && !ctx.auth.authenticated) {
       ctx.response!.status = 401
       ctx.response!.headers['content-type'] = 'application/json'
       ctx.response!.body = JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } })
