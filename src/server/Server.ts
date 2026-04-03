@@ -15,7 +15,8 @@ import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { Router } from '../router/Router.js'
 
 export type LazyImport<T> = () => Promise<{ default: T }>
-export type ErrorHandlerClass = new (...args: unknown[]) => ExceptionHandler
+// biome-ignore lint/suspicious/noExplicitAny: contravariance — same as ControllerAction / AdonisJS Constructor
+export type ErrorHandlerClass = new (...args: any[]) => ExceptionHandler
 
 export class Server {
   private router: Router
