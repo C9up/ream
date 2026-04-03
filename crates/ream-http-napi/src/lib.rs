@@ -223,3 +223,39 @@ pub fn constant_time_eq(a: String, b: String) -> napi::Result<bool> {
         Ok(ream_security::constant_time::constant_time_eq(a.as_bytes(), b.as_bytes()))
     })
 }
+
+/// HMAC-SHA256 sign. Returns base64url signature.
+#[napi]
+pub fn hmac_sign(data: String, secret: String) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::crypto::hmac_sign(&data, secret.as_bytes())
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// HMAC-SHA256 verify (constant-time).
+#[napi]
+pub fn hmac_verify(data: String, signature: String, secret: String) -> napi::Result<bool> {
+    catch_unwind_napi(|| {
+        ream_security::crypto::hmac_verify(&data, &signature, secret.as_bytes())
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Generate cryptographically secure random bytes as base64url.
+#[napi]
+pub fn random_bytes_base64(len: u32) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::crypto::random_bytes(len as usize)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Generate cryptographically secure random bytes as hex.
+#[napi]
+pub fn random_hex(len: u32) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::crypto::random_hex(len as usize)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}

@@ -13,6 +13,7 @@ pub mod argon2_hash;
 pub mod bcrypt_hash;
 pub mod blackhole;
 pub mod constant_time;
+pub mod crypto;
 pub mod csrf;
 pub mod jwt;
 pub mod rate_limit;

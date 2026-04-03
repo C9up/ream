@@ -1,11 +1,6 @@
 /**
- * Signed URLs — generate and verify tamper-proof URLs with expiration.
- *
- * Usage:
- *   const url = signedUrl.make('/download/report.pdf', { expiresIn: '1h' })
- *   // → /download/report.pdf?signature=abc&expires=1234567890
- *
- *   signedUrl.verify(url) // true or false
+ * Signed URLs — HMAC-SHA256 with expiration.
+ * Uses Rust NAPI when available, Node.js crypto fallback.
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
@@ -21,49 +16,32 @@ export class SignedUrl {
     this.secret = config.secret
   }
 
-  /** Generate a signed URL with optional expiration. */
   make(path: string, options?: { expiresIn?: string | number; purpose?: string }): string {
     const url = new URL(path, 'http://localhost')
-
     if (options?.expiresIn) {
-      const expiresAt = Math.floor(Date.now() / 1000) + parseExpiry(options.expiresIn)
-      url.searchParams.set('expires', String(expiresAt))
+      url.searchParams.set('expires', String(Math.floor(Date.now() / 1000) + parseExpiry(options.expiresIn)))
     }
-
     if (options?.purpose) {
       url.searchParams.set('purpose', options.purpose)
     }
-
-    const signature = this.sign(url.pathname + url.search)
-    url.searchParams.set('signature', signature)
-
+    url.searchParams.set('signature', this.sign(url.pathname + url.search))
     return url.pathname + url.search
   }
 
-  /** Verify a signed URL. */
   verify(urlString: string, purpose?: string): boolean {
     const url = new URL(urlString, 'http://localhost')
     const providedSig = url.searchParams.get('signature')
     if (!providedSig) return false
-
-    // Check expiration
     const expires = url.searchParams.get('expires')
-    if (expires) {
-      const expiresAt = parseInt(expires, 10)
-      if (Math.floor(Date.now() / 1000) > expiresAt) return false
-    }
+    if (expires && Math.floor(Date.now() / 1000) > parseInt(expires, 10)) return false
+    if (purpose && url.searchParams.get('purpose') !== purpose) return false
 
-    // Check purpose
-    if (purpose) {
-      const urlPurpose = url.searchParams.get('purpose')
-      if (urlPurpose !== purpose) return false
-    }
-
-    // Rebuild URL without signature for verification
     url.searchParams.delete('signature')
     const expectedSig = this.sign(url.pathname + url.search)
 
-    // Constant-time comparison
+    const napi = globalThis.__reamSecurityNapi
+    if (napi) return napi.constantTimeEq(providedSig, expectedSig)
+
     const a = Buffer.from(providedSig)
     const b = Buffer.from(expectedSig)
     if (a.length !== b.length) return false
@@ -71,6 +49,8 @@ export class SignedUrl {
   }
 
   private sign(data: string): string {
+    const napi = globalThis.__reamSecurityNapi
+    if (napi) return napi.hmacSign(data, this.secret)
     return createHmac('sha256', this.secret).update(data).digest('base64url')
   }
 }
