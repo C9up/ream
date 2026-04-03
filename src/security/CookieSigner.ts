@@ -1,11 +1,10 @@
 /**
  * Cookie signing and encryption.
- *
- * Uses Rust NAPI (hmac_sign/hmac_verify) when available,
- * falls back to Node.js crypto.
+ * Uses Rust NAPI via crypto facade when available.
  */
 
-import { createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { hmacSign, hmacVerify } from './crypto.js'
 
 export class CookieSigner {
   private secret: string
@@ -13,15 +12,13 @@ export class CookieSigner {
 
   constructor(secret: string) {
     this.secret = secret
+    // Derive a 32-byte key for AES-256-GCM
+    const { createHmac } = require('node:crypto') as typeof import('node:crypto')
     this.keyBuffer = Buffer.from(createHmac('sha256', secret).update('cookie-key').digest())
   }
 
   sign(value: string): string {
-    const napi = globalThis.__reamSecurityNapi
-    if (napi) {
-      return `${value}.${napi.hmacSign(value, this.secret)}`
-    }
-    const sig = createHmac('sha256', this.keyBuffer).update(value).digest('base64url')
+    const sig = hmacSign(value, this.secret)
     return `${value}.${sig}`
   }
 
@@ -30,17 +27,7 @@ export class CookieSigner {
     if (lastDot === -1) return null
     const value = signed.slice(0, lastDot)
     const sig = signed.slice(lastDot + 1)
-
-    const napi = globalThis.__reamSecurityNapi
-    if (napi) {
-      return napi.hmacVerify(value, sig, this.secret) ? value : null
-    }
-
-    const expected = createHmac('sha256', this.keyBuffer).update(value).digest('base64url')
-    const a = Buffer.from(sig)
-    const b = Buffer.from(expected)
-    if (a.length !== b.length || !timingSafeEqual(a, b)) return null
-    return value
+    return hmacVerify(value, sig, this.secret) ? value : null
   }
 
   encrypt(value: string): string {
@@ -65,19 +52,4 @@ export class CookieSigner {
       return null
     }
   }
-}
-
-declare global {
-  // biome-ignore lint/style/noVar: global declaration
-  var __reamSecurityNapi: {
-    hmacSign: (data: string, secret: string) => string
-    hmacVerify: (data: string, signature: string, secret: string) => boolean
-    randomBytesBase64: (len: number) => string
-    randomHex: (len: number) => string
-    argon2Hash: (password: string) => string
-    argon2Verify: (password: string, hash: string) => boolean
-    bcryptHash: (password: string, rounds?: number) => string
-    bcryptVerify: (password: string, hash: string) => boolean
-    constantTimeEq: (a: string, b: string) => boolean
-  } | undefined
 }

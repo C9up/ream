@@ -63,6 +63,14 @@ export type { MailConfig, MailMessage, MailTransport, MailAttachment } from './m
 
 // ─── Security ───────────────────────────────────────────────
 
+export {
+  _setNapi, hasNativeCrypto,
+  hmacSign, hmacVerify,
+  randomBytesBase64, randomHex,
+  constantTimeEq,
+  argon2Hash, argon2Verify,
+  bcryptHash, bcryptVerify,
+} from './security/crypto.js'
 export { default as CorsMiddleware } from './security/CorsMiddleware.js'
 export type { CorsConfig } from './security/CorsMiddleware.js'
 export { default as SecurityHeadersMiddleware } from './security/SecurityHeadersMiddleware.js'

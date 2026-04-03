@@ -1,9 +1,9 @@
 /**
  * Signed URLs — HMAC-SHA256 with expiration.
- * Uses Rust NAPI when available, Node.js crypto fallback.
+ * Uses Rust NAPI via crypto facade when available.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { hmacSign, constantTimeEq } from './crypto.js'
 
 export interface SignedUrlConfig {
   secret: string
@@ -24,7 +24,7 @@ export class SignedUrl {
     if (options?.purpose) {
       url.searchParams.set('purpose', options.purpose)
     }
-    url.searchParams.set('signature', this.sign(url.pathname + url.search))
+    url.searchParams.set('signature', hmacSign(url.pathname + url.search, this.secret))
     return url.pathname + url.search
   }
 
@@ -37,21 +37,8 @@ export class SignedUrl {
     if (purpose && url.searchParams.get('purpose') !== purpose) return false
 
     url.searchParams.delete('signature')
-    const expectedSig = this.sign(url.pathname + url.search)
-
-    const napi = globalThis.__reamSecurityNapi
-    if (napi) return napi.constantTimeEq(providedSig, expectedSig)
-
-    const a = Buffer.from(providedSig)
-    const b = Buffer.from(expectedSig)
-    if (a.length !== b.length) return false
-    return timingSafeEqual(a, b)
-  }
-
-  private sign(data: string): string {
-    const napi = globalThis.__reamSecurityNapi
-    if (napi) return napi.hmacSign(data, this.secret)
-    return createHmac('sha256', this.secret).update(data).digest('base64url')
+    const expectedSig = hmacSign(url.pathname + url.search, this.secret)
+    return constantTimeEq(providedSig, expectedSig)
   }
 }
 
