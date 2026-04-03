@@ -422,7 +422,7 @@ export class Ignitor {
 
     if (!existsSync(basePath)) return
 
-    const autoloadFiles = modulesConfig.autoload ?? ['routes']
+    const autoloadFiles = modulesConfig.autoload ?? ['routes', 'events']
     const moduleDirs = readdirSync(basePath, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name)
