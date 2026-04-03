@@ -36,6 +36,31 @@ export {
 
 export { Context } from './Context.js'
 
+// ─── Hash ───────────────────────────────────────────────────
+
+export { Hash } from './hash/Hash.js'
+export type { HashConfig, HashDriver } from './hash/Hash.js'
+
+// ─── Session ────────────────────────────────────────────────
+
+export { Session } from './session/Session.js'
+export type { SessionConfig, SessionDriver } from './session/Session.js'
+export { default as SessionMiddleware } from './session/SessionMiddleware.js'
+export { MemoryDriver as SessionMemoryDriver } from './session/drivers/MemoryDriver.js'
+export { CookieDriver as SessionCookieDriver } from './session/drivers/CookieDriver.js'
+
+// ─── Body Parser ────────────────────────────────────────────
+
+export { default as BodyParserMiddleware } from './bodyparser/BodyParserMiddleware.js'
+export type { BodyParserConfig } from './bodyparser/BodyParserMiddleware.js'
+export { MultipartFile } from './bodyparser/MultipartFile.js'
+export type { FileValidationOptions } from './bodyparser/MultipartFile.js'
+
+// ─── Mail ───────────────────────────────────────────────────
+
+export { Mail, MessageBuilder, SmtpTransport, LogTransport } from './mail/Mail.js'
+export type { MailConfig, MailMessage, MailTransport, MailAttachment } from './mail/Mail.js'
+
 // ─── Decorators ─────────────────────────────────────────────
 
 export { Inject, Service, inject, clearServiceRegistry, getServiceMetadata, getServiceRegistry } from './decorators/Service.js'

@@ -10,6 +10,7 @@
 //! @implements FR43, FR44, FR45, FR46, FR47, FR49, FR52, FR53
 
 pub mod argon2_hash;
+pub mod bcrypt_hash;
 pub mod blackhole;
 pub mod constant_time;
 pub mod csrf;

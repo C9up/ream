@@ -189,6 +189,24 @@ pub fn argon2_verify(password: String, hash: String) -> napi::Result<bool> {
     })
 }
 
+/// Hash a password with bcrypt (Rust-native).
+#[napi]
+pub fn bcrypt_hash(password: String, rounds: Option<u32>) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        ream_security::bcrypt_hash::hash_password(&password, rounds)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
+/// Verify a password against a bcrypt hash.
+#[napi]
+pub fn bcrypt_verify(password: String, hash: String) -> napi::Result<bool> {
+    catch_unwind_napi(|| {
+        ream_security::bcrypt_hash::verify_password(&password, &hash)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+    })
+}
+
 /// Generate a CSRF token.
 #[napi]
 pub fn csrf_generate() -> napi::Result<String> {

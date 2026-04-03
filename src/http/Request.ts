@@ -21,6 +21,7 @@ export class Request {
   private _parsedBody: Record<string, unknown> | undefined
   private _parsedQs: Record<string, unknown> | undefined
   private _merged: Record<string, unknown> | undefined
+  private _files: Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> = new Map()
 
   constructor(raw: RawRequest, params: Record<string, string>) {
     this._raw = raw
@@ -180,6 +181,47 @@ export class Request {
   }
 
   // ─── Internals ────────────────────────────────────────────
+
+  // ─── Files ─────────────────────────────────────────────────
+
+  /** Get an uploaded file by field name. */
+  file(fieldName: string, options?: import('../bodyparser/MultipartFile.js').FileValidationOptions): import('../bodyparser/MultipartFile.js').MultipartFile | null {
+    const files = this._files.get(fieldName)
+    if (!files || files.length === 0) return null
+    const file = files[0]
+    if (options) file.validate(options)
+    return file
+  }
+
+  /** Get all uploaded files for a field name. */
+  files(fieldName: string, options?: import('../bodyparser/MultipartFile.js').FileValidationOptions): import('../bodyparser/MultipartFile.js').MultipartFile[] {
+    const files = this._files.get(fieldName) ?? []
+    if (options) files.forEach((f) => f.validate(options))
+    return files
+  }
+
+  /** Get all uploaded files. */
+  allFiles(): Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> {
+    return this._files
+  }
+
+  /** @internal Set files (called by BodyParser middleware). */
+  _setFiles(files: import('../bodyparser/MultipartFile.js').MultipartFile[]): void {
+    this._files.clear()
+    for (const file of files) {
+      const existing = this._files.get(file.fieldName) ?? []
+      existing.push(file)
+      this._files.set(file.fieldName, existing)
+    }
+  }
+
+  // ─── Internals ────────────────────────────────────────────
+
+  /** @internal Set the parsed body (called by BodyParser middleware). */
+  _setParsedBody(body: Record<string, unknown>): void {
+    this._parsedBody = body
+    this._merged = undefined // reset merged cache
+  }
 
   private ensureParsedBody(): void {
     if (this._parsedBody !== undefined) return

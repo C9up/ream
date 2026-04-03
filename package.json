@@ -22,6 +22,22 @@
     "./services/server": {
       "import": "./src/services/server.ts",
       "types": "./src/services/server.ts"
+    },
+    "./hash/provider": {
+      "import": "./src/hash/HashProvider.ts",
+      "types": "./src/hash/HashProvider.ts"
+    },
+    "./mail/provider": {
+      "import": "./src/mail/MailProvider.ts",
+      "types": "./src/mail/MailProvider.ts"
+    },
+    "./bodyparser": {
+      "import": "./src/bodyparser/BodyParserMiddleware.ts",
+      "types": "./src/bodyparser/BodyParserMiddleware.ts"
+    },
+    "./session": {
+      "import": "./src/session/SessionMiddleware.ts",
+      "types": "./src/session/SessionMiddleware.ts"
     }
   },
   "scripts": {
