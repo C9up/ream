@@ -409,6 +409,8 @@ export class Router {
    *     r.get('/users', handler)
    *   })
    */
+  group(callback: () => void): GroupBuilder
+  group(config: { prefix?: string; middleware?: string[]; guards?: string[]; roles?: string[]; permissions?: string[] }, callback: (router: Router) => void): void
   group(
     callbackOrConfig: (() => void) | { prefix?: string; middleware?: string[]; guards?: string[]; roles?: string[]; permissions?: string[] },
     legacyCallback?: (router: Router) => void,
