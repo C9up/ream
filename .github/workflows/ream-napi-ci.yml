@@ -33,17 +33,17 @@ jobs:
           - { os: macos-14,         suffix: darwin-arm64 }
           - { os: windows-latest,   suffix: win32-x64-msvc }
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
         with: { version: 9 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install
       - run: pnpm build:napi
       - name: Upload artefact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ream-napi-${{ matrix.suffix }}
           path: |
@@ -58,12 +58,12 @@ jobs:
     needs: [build-and-test]
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with: { version: 9 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
@@ -106,7 +106,7 @@ jobs:
             echo "::error::Registry $npm_v > local $local_v — refuse rollback without confirm_overwrite=YES"; exit 1
           fi
       - run: pnpm install
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: ream-napi-*
           merge-multiple: true
