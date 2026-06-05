@@ -1,0 +1,16 @@
+node_modules/
+target/
+dist/
+*.node
+.env
+.env.local
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.turbo/
+coverage/
+*.log
+
+# Local-only working notes (not part of the published source tree)
+CORRECTIONS.md
