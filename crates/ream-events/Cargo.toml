@@ -1,0 +1,21 @@
+[package]
+name = "ream-events"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Ream event bus — part of ream core"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1.23", features = ["v4"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
+redis = { version = "0.32", features = ["tokio-comp"], optional = true }
+
+[features]
+default = []
+redis-store = ["redis"]

@@ -1,0 +1,656 @@
+/**
+ * Ignitor — AdonisJS-compatible application bootstrap.
+ *
+ * Usage (like AdonisJS):
+ *   new Ignitor(APP_ROOT, { importer: IMPORTER })
+ *     .tap((app) => {
+ *       app.booting(async () => { await import('#start/env') })
+ *       app.listen('SIGTERM', () => app.terminate())
+ *     })
+ *     .httpServer()
+ *     .start()
+ *
+ * @implements FR17, FR20, FR23
+ */
+
+import { Application } from './Application.js'
+import type { ErrorEvent } from './ErrorBoundary.js'
+import { ErrorBoundary } from './ErrorBoundary.js'
+import { ReamError } from './errors/ReamError.js'
+import type { Emitter } from './events/Emitter.js'
+import { startHotReload } from './HotReload.js'
+import type { HttpKernelRequest, HttpKernelResponse } from './HttpKernel.js'
+import { createHttpKernel } from './HttpKernel.js'
+import { ExceptionHandler } from './http/Exception.js'
+import type { MiddlewareFunction } from './middleware/Pipeline.js'
+import { MiddlewareRegistry } from './middleware/Pipeline.js'
+import type { AppContext, ProviderContract } from './Provider.js'
+import { callProviderPhase } from './Provider.js'
+import { Router } from './router/Router.js'
+import { Server } from './server/Server.js'
+import { _setApp } from './services/app.js'
+import { _setRouter } from './services/router.js'
+import { _setServer } from './services/server.js'
+
+/** Application environment. */
+export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
+
+/**
+ * Reamrc config — like AdonisJS adonisrc.ts with defineConfig().
+ */
+export interface ReamrcConfig {
+  providers?: Array<
+    | (() => Promise<{ default: new (app: AppContext) => ProviderContract }>)
+    | {
+        file: () => Promise<{ default: new (app: AppContext) => ProviderContract }>
+        environment?: string[]
+      }
+  >
+  preloads?: Array<
+    | (() => Promise<unknown>)
+    | {
+        file: () => Promise<unknown>
+        environment?: string[]
+      }
+  >
+  commands?: Array<() => Promise<unknown>>
+  modules?: {
+    /** Path to the modules directory (relative to app root). Default: './app/modules' */
+    path?: string
+    /** Auto-loaded files in each module directory. Default: ['routes'] */
+    autoload?: string[]
+  }
+  tests?: {
+    suites?: Array<{ name: string; files: string[]; timeout?: number }>
+    forceExit?: boolean
+  }
+}
+
+/** defineConfig helper — like AdonisJS defineConfig(). */
+export function defineConfig(config: ReamrcConfig): ReamrcConfig {
+  return config
+}
+
+/** Minimal interface for the HTTP server (NAPI or mock). */
+export interface HyperServerLike {
+  onRequest(callback: (request: HttpKernelRequest) => Promise<HttpKernelResponse>): void
+  /**
+   * Optional — present on the real `HyperServer` (Rust-backed), absent on
+   * trivial test mocks. Ignitor only calls it when a shield config is set.
+   */
+  configureShield?(config: { pathTraversal: boolean; paramPollution: boolean }): void
+  /** Optional — same lifecycle as `configureShield`. */
+  configureTrustedProxies?(cidrs: string[]): void
+  /** Optional — same lifecycle as `configureShield`. */
+  configureRateLimit?(config: { max: number; windowSecs: number } | null): void
+  listen(): Promise<void>
+  port(): Promise<number>
+  close(): Promise<void>
+  // Streaming primitives — optional so mock servers (no NAPI) opt out
+  // by simply not implementing them; the `response.sse()` helper throws
+  // a clean `STREAMING_UNSUPPORTED` error when called on such a host.
+  registerStream?(streamId: string): Promise<boolean>
+  writeStream?(streamId: string, chunk: string): Promise<boolean>
+  closeStream?(streamId: string): Promise<boolean>
+  onStreamDisconnect?(streamId: string, callback: () => void): void
+}
+
+export interface IgnitorConfig {
+  port?: number
+  serverFactory?: (port: number) => HyperServerLike
+  importer?: (filePath: string) => Promise<unknown>
+  watchDirs?: string[]
+}
+
+/**
+ * Ignitor — boots and wires the Ream framework.
+ *
+ * Lifecycle: register → boot → start → ready → shutdown
+ */
+export class Ignitor {
+  private app: Application
+  private router: Router
+  private server: Server
+  private middleware: MiddlewareRegistry
+  private errorBoundary: ErrorBoundary
+  private _httpServer?: HyperServerLike
+  private config: IgnitorConfig
+  private appRoot?: URL
+  private environment: AppEnvironment = 'unknown'
+  private reamrc?: ReamrcConfig
+  private providers: ProviderContract[] = []
+  private errorListeners: Array<(event: ErrorEvent) => void> = []
+  private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
+  private hotReloadCleanup?: () => void
+
+  // Inline configuration (for simple use or testing)
+  private inlineRoutes?: (router: Router) => void
+  private inlineMiddleware: MiddlewareFunction[] = []
+  private inlineNamedMiddleware: Array<[string, MiddlewareFunction]> = []
+  private inlineProviderFactories: Array<(app: Application) => ProviderContract> = []
+
+  /**
+   * Create the Ignitor.
+   *
+   * AdonisJS-style:
+   *   new Ignitor(APP_ROOT, { importer: IMPORTER })
+   *
+   * Simple-style:
+   *   new Ignitor({ port: 3000, serverFactory: ... })
+   */
+  constructor(appRootOrConfig?: URL | IgnitorConfig, config?: IgnitorConfig) {
+    if (appRootOrConfig instanceof URL) {
+      this.appRoot = appRootOrConfig
+      this.config = config ?? {}
+    } else {
+      this.config = appRootOrConfig ?? {}
+    }
+
+    this.app = new Application()
+    this.router = new Router()
+    this.server = new Server(this.router)
+    this.middleware = new MiddlewareRegistry()
+    this.errorBoundary = new ErrorBoundary((event) => this.handleError(event), this.isDevMode())
+
+    // Register framework services in container
+    this.app.container.singleton('router', () => this.router)
+    this.app.container.singleton('server', () => this.server)
+    this.app.container.singleton('middleware', () => this.middleware)
+    this.app.container.singleton('app', () => this.app)
+    // `appRoot` is the URL passed to `new Ignitor(new URL('../', import.meta.url))`.
+    // Providers resolve it through the container so they can interpret
+    // relative paths in config files (e.g. `pages.root: './resources/pages'`)
+    // against the project root — same convention `modules.path` uses.
+    if (this.appRoot) {
+      const root = this.appRoot
+      this.app.container.singleton('appRoot', () => root)
+    }
+
+    // Set service singletons so route/kernel files can import them
+    _setApp(this.app)
+    _setRouter(this.router)
+    _setServer(this.server)
+  }
+
+  // ─── Configuration ────────────────────────────────────────
+
+  /**
+   * Access the Application instance before start.
+   * Like AdonisJS: .tap((app) => { app.booting(...) })
+   */
+  tap(callback: (app: Application) => void): this {
+    callback(this.app)
+    return this
+  }
+
+  /** Set the application environment. */
+  setEnvironment(env: AppEnvironment): this {
+    this.environment = env
+    return this
+  }
+
+  getEnvironment(): AppEnvironment {
+    return this.environment
+  }
+
+  /**
+   * Load the reamrc config (equivalent to adonisrc.ts).
+   */
+  useRcFile(reamrc: ReamrcConfig): this {
+    this.reamrc = reamrc
+    return this
+  }
+
+  // === Inline configuration (simple mode / testing) ===
+
+  /** Define routes inline (simple mode). */
+  routes(callback: (router: Router) => void): this {
+    this.inlineRoutes = callback
+    return this
+  }
+
+  /** Add global middleware inline. */
+  use(mw: MiddlewareFunction): this {
+    this.inlineMiddleware.push(mw)
+    return this
+  }
+
+  /** Register a named middleware inline. */
+  named(name: string, mw: MiddlewareFunction): this {
+    this.inlineNamedMiddleware.push([name, mw])
+    return this
+  }
+
+  /** Register a provider inline (for testing or simple apps). */
+  provider(factory: (app: Application) => ProviderContract): this {
+    this.inlineProviderFactories.push(factory)
+    return this
+  }
+
+  /** Listen for error events. */
+  onError(listener: (event: ErrorEvent) => void): this {
+    this.errorListeners.push(listener)
+    return this
+  }
+
+  /** Set a config value. */
+  configure(key: string, value: unknown): this {
+    this.app.config.set(key, value)
+    return this
+  }
+
+  // ─── Mode selection ───────────────────────────────────────
+
+  /** Configure for HTTP server mode. */
+  httpServer(): this {
+    this.environment = 'web'
+    return this
+  }
+
+  /** Configure for CLI/console mode. Returns a ConsoleKernel for dispatching commands. */
+  console(): ConsoleKernel {
+    this.environment = 'console'
+    return new ConsoleKernel(this)
+  }
+
+  /** Configure for test mode. */
+  testMode(): this {
+    this.environment = 'test'
+    return this
+  }
+
+  // ─── Lifecycle ────────────────────────────────────────────
+
+  async start(): Promise<Ignitor> {
+    await this.phaseRegister()
+    await this.phaseBoot()
+    await this.phaseStart()
+    await this.phaseReady()
+    return this
+  }
+
+  private async phaseRegister(): Promise<void> {
+    // Auto-load config/*.ts files into app.config
+    await this.autoloadConfig()
+
+    // Load providers from reamrc
+    if (this.reamrc?.providers) {
+      for (const providerEntry of this.reamrc.providers) {
+        const providerImport =
+          typeof providerEntry === 'function' ? providerEntry : providerEntry.file
+        const env = typeof providerEntry === 'function' ? undefined : providerEntry.environment
+
+        // Skip providers not matching current environment
+        if (env && !env.includes(this.environment)) continue
+
+        const mod = await providerImport()
+        const ProviderClass = mod.default
+        const instance = new ProviderClass(this.app)
+        this.providers.push(instance)
+        this.app.register(instance)
+      }
+    }
+
+    // Register inline providers
+    for (const factory of this.inlineProviderFactories) {
+      const instance = factory(this.app)
+      this.providers.push(instance)
+      this.app.register(instance)
+    }
+
+    this.phase = 'registered'
+  }
+
+  private async phaseBoot(): Promise<void> {
+    await this.app.boot()
+    this.phase = 'booted'
+  }
+
+  private async phaseStart(): Promise<void> {
+    // Import preload files (routes.ts, kernel.ts, etc.)
+    if (this.reamrc?.preloads) {
+      for (const preloadEntry of this.reamrc.preloads) {
+        const preloadImport = typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
+        const env =
+          typeof preloadEntry === 'function'
+            ? undefined
+            : (preloadEntry as { environment?: string[] }).environment
+
+        if (env && !env.includes(this.environment)) continue
+        await preloadImport()
+      }
+    }
+
+    // Auto-load module files (routes.ts, etc.) from modules directory
+    await this.autoloadModules()
+
+    // Apply inline configuration
+    for (const mw of this.inlineMiddleware) {
+      this.middleware.use(mw)
+    }
+    for (const [name, mw] of this.inlineNamedMiddleware) {
+      this.middleware.register(name, mw)
+    }
+    if (this.inlineRoutes) {
+      this.inlineRoutes(this.router)
+    }
+
+    // Call start() on providers
+    for (const provider of this.providers) {
+      await callProviderPhase(provider, 'start')
+    }
+
+    this.phase = 'started'
+  }
+
+  private async phaseReady(): Promise<void> {
+    // Boot the Server (resolves lazy error handler etc.)
+    await this.server.boot()
+
+    // Start HTTP server if in web mode
+    if (this.environment === 'web' && this.config.serverFactory) {
+      // Build the HttpKernel with server middleware + router middleware.
+      // The streaming backend is resolved lazily — the HyperServer is
+      // created a few lines down, after the kernel — so the kernel
+      // closes over the `this._httpServer` slot and reads it on every
+      // request through the factory.
+      const kernel = createHttpKernel({
+        router: this.router,
+        middleware: this.middleware,
+        container: this.app.container,
+        exceptionHandler:
+          this.server.getErrorHandler() ?? new ExceptionHandler(!this.app.inProduction),
+        serverMiddleware: this.server.getServerMiddleware(),
+        routerMiddleware: this.router.getRouterMiddleware(),
+        onError: (error, ctx) => {
+          this.errorBoundary.serviceError('HttpKernel', error, ctx.id)
+        },
+        streamBackend: () => {
+          const server = this._httpServer
+          if (
+            server &&
+            typeof server.registerStream === 'function' &&
+            typeof server.writeStream === 'function' &&
+            typeof server.closeStream === 'function' &&
+            typeof server.onStreamDisconnect === 'function'
+          ) {
+            // Narrow to a backend-shaped record. All four methods are
+            // present at this point — the check above guards mocked
+            // servers without forcing a structural cast.
+            return {
+              registerStream: server.registerStream.bind(server),
+              writeStream: server.writeStream.bind(server),
+              closeStream: server.closeStream.bind(server),
+              onStreamDisconnect: server.onStreamDisconnect.bind(server),
+            }
+          }
+          return undefined
+        },
+      })
+
+      const desiredPort = this.config.port ?? 3000
+      const availablePort = await findAvailablePort(desiredPort)
+      this._httpServer = this.config.serverFactory(availablePort)
+      this._httpServer.onRequest(kernel)
+      // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
+      // listen. Security filtering itself lives in @c9up/blackhole.
+      const trustedProxies = this.server.getTrustedProxies()
+      if (
+        trustedProxies.length > 0 &&
+        typeof this._httpServer.configureTrustedProxies === 'function'
+      ) {
+        this._httpServer.configureTrustedProxies([...trustedProxies])
+      }
+      await this._httpServer.listen()
+    } else if (this.environment === 'web' && !this.config.serverFactory) {
+      throw new ReamError(
+        'IGNITOR_NO_SERVER_FACTORY',
+        'httpServer() requires a serverFactory in config',
+        {
+          hint: 'Example: new Ignitor({ serverFactory: (port) => new HyperServer(port) })',
+        },
+      )
+    }
+
+    // Install error boundary
+    this.errorBoundary.install()
+
+    // Call ready() on providers
+    for (const provider of this.providers) {
+      await callProviderPhase(provider, 'ready')
+    }
+
+    // Core domain event: the app finished booting (all providers ready).
+    // Emitted once through the bus when events are wired — zero hot-path cost.
+    if (this.app.container.has('events')) {
+      this.app.container
+        .resolve<Emitter>('events')
+        .emit('app:ready', { environment: this.environment })
+    }
+
+    // Hot-reload in dev mode
+    if (this.isDevMode()) {
+      const watchDirs = this.config.watchDirs ?? ['app', 'start']
+      this.hotReloadCleanup = startHotReload({
+        watchDirs,
+        onReload: async () => {
+          const { clearServiceRegistry } = await import('./decorators/Service.js')
+          clearServiceRegistry()
+          this.router.clear()
+          if (this.inlineRoutes) this.inlineRoutes(this.router)
+          if (this.reamrc?.preloads) {
+            for (const preloadEntry of this.reamrc.preloads) {
+              const preloadImport =
+                typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
+              await preloadImport()
+            }
+          }
+        },
+        logger: {
+          info: (msg) =>
+            this.handleError({
+              type: 'system.info',
+              source: 'HotReload',
+              message: msg,
+              severity: 'info',
+              timestamp: new Date().toISOString(),
+            } as ErrorEvent),
+        },
+      })
+    }
+
+    this.phase = 'ready'
+  }
+
+  /**
+   * Auto-load config/*.ts files into app.config store.
+   * Each file's default export is stored under its filename (without extension).
+   * e.g. config/database.ts → app.config.get('database')
+   */
+  private async autoloadConfig(): Promise<void> {
+    const { readdirSync, existsSync } = await import('node:fs')
+    const { join, basename } = await import('node:path')
+    const { fileURLToPath, pathToFileURL } = await import('node:url')
+
+    const configDir = this.appRoot
+      ? join(fileURLToPath(this.appRoot), 'config')
+      : join(process.cwd(), 'config')
+
+    if (!existsSync(configDir)) return
+
+    const files = readdirSync(configDir)
+      .filter((f: string) => (f.endsWith('.ts') || f.endsWith('.js')) && !f.startsWith('.'))
+      .sort()
+
+    for (const file of files) {
+      const key = basename(file).replace(/\.(ts|js)$/, '')
+      const mod = await import(pathToFileURL(join(configDir, file)).href)
+      this.app.config.set(key, mod.default ?? mod)
+    }
+  }
+
+  /**
+   * Auto-load module files (routes.ts, etc.) from the modules directory.
+   * Scans modules.path for subdirectories and imports matching files.
+   */
+  private async autoloadModules(): Promise<void> {
+    const modulesConfig = this.reamrc?.modules
+    if (!modulesConfig?.path) return
+
+    const { readdirSync, existsSync } = await import('node:fs')
+    const { join, resolve } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const { pathToFileURL } = await import('node:url')
+
+    // Resolve modules path relative to app root or cwd
+    const basePath = this.appRoot
+      ? join(fileURLToPath(this.appRoot), modulesConfig.path)
+      : resolve(modulesConfig.path)
+
+    if (!existsSync(basePath)) return
+
+    const autoloadFiles = modulesConfig.autoload ?? ['routes', 'events']
+    const moduleDirs = readdirSync(basePath, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+
+    for (const moduleDir of moduleDirs) {
+      for (const fileName of autoloadFiles) {
+        const tsPath = join(basePath, moduleDir, `${fileName}.ts`)
+        const jsPath = join(basePath, moduleDir, `${fileName}.js`)
+        const filePath = existsSync(tsPath) ? tsPath : existsSync(jsPath) ? jsPath : null
+        if (filePath) {
+          await import(pathToFileURL(filePath).href)
+        }
+      }
+    }
+  }
+
+  /** Graceful shutdown. */
+  async stop(): Promise<void> {
+    if (this.hotReloadCleanup) this.hotReloadCleanup()
+    if (this._httpServer) await this._httpServer.close()
+    this.errorBoundary.uninstall()
+    await this.app.shutdown()
+    this.phase = 'shutdown'
+  }
+
+  // ─── Accessors ────────────────────────────────────────────
+
+  async port(): Promise<number> {
+    return this._httpServer ? this._httpServer.port() : 0
+  }
+
+  getApp(): Application {
+    return this.app
+  }
+
+  getRouter(): Router {
+    return this.router
+  }
+
+  getServer(): Server {
+    return this.server
+  }
+
+  /** Get the kernel callback (for serverless / testing). */
+  getKernel(): (request: HttpKernelRequest) => Promise<HttpKernelResponse> {
+    return createHttpKernel({
+      router: this.router,
+      middleware: this.middleware,
+      container: this.app.container,
+      exceptionHandler:
+        this.server.getErrorHandler() ?? new ExceptionHandler(!this.app.inProduction),
+      serverMiddleware: this.server.getServerMiddleware(),
+      routerMiddleware: this.router.getRouterMiddleware(),
+    })
+  }
+
+  isDevMode(): boolean {
+    return this.app.inDev
+  }
+
+  getPhase(): string {
+    return this.phase
+  }
+
+  private handleError(event: ErrorEvent): void {
+    for (const listener of this.errorListeners) {
+      try {
+        listener(event)
+      } catch {
+        /* Don't let listeners crash */
+      }
+    }
+  }
+}
+
+/**
+ * Pretty-print an error (like AdonisJS prettyPrintError).
+ */
+export function prettyPrintError(error: unknown): void {
+  if (error instanceof ReamError) {
+    console.error(error.toDevString())
+  } else if (error instanceof Error) {
+    console.error(`\n  ${error.message}\n`)
+    if (error.stack) console.error(error.stack)
+  } else {
+    console.error(error)
+  }
+}
+
+/**
+ * ConsoleKernel — handles CLI command dispatching.
+ * Like AdonisJS: new Ignitor(...).console().handle(process.argv.splice(2))
+ */
+export class ConsoleKernel {
+  private ignitor: Ignitor
+
+  constructor(ignitor: Ignitor) {
+    this.ignitor = ignitor
+  }
+
+  async handle(argv: string[]): Promise<void> {
+    await this.ignitor.start()
+    const { CommandRunner } = await import('./console/CommandRunner.js')
+    const runner = new CommandRunner()
+
+    // Auto-register commands from reamrc
+    const reamrc = (this.ignitor as unknown as { reamrc?: ReamrcConfig }).reamrc
+    if (reamrc?.commands) {
+      for (const commandImport of reamrc.commands) {
+        const mod = await commandImport()
+        const cmd = (
+          mod as {
+            default: {
+              name: string
+              description: string
+              run: (args: string[], flags: Record<string, string | boolean>) => Promise<void>
+            }
+          }
+        ).default
+        if (cmd?.name && typeof cmd?.run === 'function') {
+          runner.register(cmd)
+        }
+      }
+    }
+
+    this.ignitor.getApp().container.singleton('console', () => runner)
+    await runner.handle(argv)
+    await this.ignitor.stop()
+  }
+}
+
+async function findAvailablePort(desired: number): Promise<number> {
+  const net = await import('node:net')
+  for (let port = desired; port < desired + 20; port++) {
+    const available = await new Promise<boolean>((resolve) => {
+      const server = net.createServer()
+      server.listen(port, () => server.close(() => resolve(true)))
+      server.on('error', () => resolve(false))
+    })
+    if (available) return port
+  }
+  return desired
+}

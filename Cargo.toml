@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/ream-napi-core",
+  "crates/ream-http",
+  "crates/ream-http-napi",
+  # ream-security removed — extracted to @c9up/blackhole + @c9up/warden (Epic 38)
+  "crates/ream-napi-test",
+  "crates/ream-scheduler",
+  "crates/ream-scheduler-napi",
+  "crates/ream-events",
+  "crates/ream-events-napi",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/C9up/ream"
