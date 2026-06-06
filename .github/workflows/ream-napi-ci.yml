@@ -27,11 +27,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    suffix: linux-x64-gnu }
-          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu }
-          - { os: macos-13,         suffix: darwin-x64 }
-          - { os: macos-14,         suffix: darwin-arm64 }
-          - { os: windows-latest,   suffix: win32-x64-msvc }
+          - { os: ubuntu-latest,    suffix: linux-x64-gnu,   target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, target: aarch64-unknown-linux-gnu }
+          # darwin-x64 is cross-compiled on an arm64 runner (macos-13 Intel
+          # runners are scarce/deprecated and leave this job queued forever).
+          - { os: macos-14,         suffix: darwin-x64,      target: x86_64-apple-darwin }
+          - { os: macos-14,         suffix: darwin-arm64,    target: aarch64-apple-darwin }
+          - { os: windows-latest,   suffix: win32-x64-msvc,  target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v6
@@ -40,8 +42,13 @@ jobs:
         with:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
       - run: pnpm install
-      - run: pnpm build:napi
+      - name: Build NAPI binaries (${{ matrix.target }})
+        run: pnpm build:napi
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
       - name: Upload artefact
         uses: actions/upload-artifact@v7
         with:
@@ -49,6 +56,7 @@ jobs:
           path: |
             index.${{ matrix.suffix }}.node
             scheduler.${{ matrix.suffix }}.node
+            events.${{ matrix.suffix }}.node
           if-no-files-found: error
 
   publish:

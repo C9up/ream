@@ -22,13 +22,25 @@
 
 import { copyFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { arch, platform } from 'node:process'
+import { arch, env, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 
-const SUFFIX_MAP = {
+// Rust target triple -> { suffix, os }. Set CARGO_BUILD_TARGET to cross-compile
+// (e.g. build the x86_64-apple-darwin binary on an arm64 macOS runner so we
+// don't depend on the scarce macos-13 Intel runners). When unset we fall back
+// to the host platform/arch and the default target/release dir.
+const TRIPLE_MAP = {
+  'x86_64-unknown-linux-gnu': { suffix: 'linux-x64-gnu', os: 'linux' },
+  'aarch64-unknown-linux-gnu': { suffix: 'linux-arm64-gnu', os: 'linux' },
+  'x86_64-apple-darwin': { suffix: 'darwin-x64', os: 'darwin' },
+  'aarch64-apple-darwin': { suffix: 'darwin-arm64', os: 'darwin' },
+  'x86_64-pc-windows-msvc': { suffix: 'win32-x64-msvc', os: 'win32' },
+}
+
+const HOST_SUFFIX_MAP = {
   'linux-x64': 'linux-x64-gnu',
   'linux-arm64': 'linux-arm64-gnu',
   'darwin-x64': 'darwin-x64',
@@ -36,9 +48,25 @@ const SUFFIX_MAP = {
   'win32-x64': 'win32-x64-msvc',
 }
 
-const suffix = SUFFIX_MAP[`${platform}-${arch}`]
-if (!suffix) {
-  throw new Error(`[ream:napi] unsupported platform/arch: ${platform}-${arch}`)
+const triple = env.CARGO_BUILD_TARGET ?? ''
+let suffix
+let os
+let releaseDir
+if (triple) {
+  const entry = TRIPLE_MAP[triple]
+  if (!entry) {
+    throw new Error(`[ream:napi] unsupported CARGO_BUILD_TARGET: ${triple}`)
+  }
+  suffix = entry.suffix
+  os = entry.os
+  releaseDir = join(root, 'target', triple, 'release')
+} else {
+  suffix = HOST_SUFFIX_MAP[`${platform}-${arch}`]
+  os = platform
+  releaseDir = join(root, 'target', 'release')
+  if (!suffix) {
+    throw new Error(`[ream:napi] unsupported platform/arch: ${platform}-${arch}`)
+  }
 }
 
 // Every NAPI crate shipped from the @c9up/ream package. `crateLib` is the
@@ -57,16 +85,16 @@ const NAPI_CRATES = [
 // `.dll`. Check both Windows shapes so we degrade gracefully if upstream
 // cargo ever switches naming.
 function buildCandidates(crateLib) {
-  if (platform === 'win32') {
+  if (os === 'win32') {
     return [
-      join(root, 'target', 'release', `${crateLib}.dll`),
-      join(root, 'target', 'release', `lib${crateLib}.dll`),
+      join(releaseDir, `${crateLib}.dll`),
+      join(releaseDir, `lib${crateLib}.dll`),
     ]
   }
-  if (platform === 'darwin') {
-    return [join(root, 'target', 'release', `lib${crateLib}.dylib`)]
+  if (os === 'darwin') {
+    return [join(releaseDir, `lib${crateLib}.dylib`)]
   }
-  return [join(root, 'target', 'release', `lib${crateLib}.so`)]
+  return [join(releaseDir, `lib${crateLib}.so`)]
 }
 
 for (const { crateLib, targetName } of NAPI_CRATES) {
