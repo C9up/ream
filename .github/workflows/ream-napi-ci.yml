@@ -59,11 +59,39 @@ jobs:
             events.${{ matrix.suffix }}.node
           if-no-files-found: error
 
+  # Rust test suite — platform-independent, runs once on linux.
+  rust-tests:
+    name: Cargo tests (linux-x64-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all
+
+  # TypeScript: compile (produces the dist/ that ships) AND run vitest. vitest
+  # loads the native addons, so build them for this runner first.
+  ts-tests:
+    name: TypeScript (build + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with: { version: 9 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install
+      - run: pnpm build:napi
+      - name: Build TS (tsc -> dist/)
+        run: pnpm build
+      - run: pnpm exec vitest run
+
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-and-test]
+    needs: [build-and-test, rust-tests, ts-tests]
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
@@ -116,6 +144,11 @@ jobs:
             echo "::error::Registry $npm_v > local $local_v — refuse rollback without confirm_overwrite=YES"; exit 1
           fi
       - run: pnpm install
+      # Compile TS -> dist/ so the published tarball actually contains the
+      # JS + .d.ts (package.json `files` ships dist/). Without this the publish
+      # would pack source only and omit the compiled output.
+      - name: Build TS (tsc -> dist/)
+        run: pnpm build
       - uses: actions/download-artifact@v7
         with:
           pattern: ream-napi-*
