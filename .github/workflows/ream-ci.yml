@@ -59,18 +59,21 @@ jobs:
             events.${{ matrix.suffix }}.node
           if-no-files-found: error
 
-  # Rust test suite — platform-independent, runs once on linux.
+  # Rust test suite — platform-independent, runs once on linux. Gated on the
+  # native build so nothing runs until the Rust build is green.
   rust-tests:
     name: Cargo tests (linux-x64-gnu)
     runs-on: ubuntu-latest
+    needs: build-and-test
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all
 
-  # TypeScript: compile (produces the dist/ that ships) AND run vitest. vitest
-  # loads the native addons, so it must run AFTER the build matrix and consume
-  # the already-built linux binary (no redundant Rust rebuild, correct order).
+  # TypeScript: compile (produces the dist/ that ships) AND run vitest. Gated on
+  # the native build (runs only once the Rust build is green). Builds the host
+  # binary on this runner — reliable, no cross-runner artefact plumbing — and
+  # stages it where the http/napi integration loaders require() it.
   ts-tests:
     name: TypeScript (build + vitest)
     runs-on: ubuntu-latest
@@ -82,17 +85,18 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install
-      - name: Download linux native binary (built by build-and-test)
-        uses: actions/download-artifact@v7
-        with:
-          name: ream-napi-linux-x64-gnu
-      # The http/napi integration loaders require() the binary from their own
-      # dir; the artefact lands at the package root, so stage a copy.
-      - name: Stage native binary for integration tests
+      - name: Build host native binaries
+        run: pnpm build:napi
+      - name: Stage native binaries for integration tests
         run: |
+          # http loader require()s the real ream-http-napi binary from its dir.
           cp index.*.node tests/integration/http/
-          cp index.*.node tests/integration/napi/
+          # napi-roundtrip loader require()s the ream-napi-test FIXTURE crate
+          # (hello/add/noop helpers), not the production binary — build + stage it.
+          cargo build --release -p ream-napi-test
+          cp target/release/libream_napi_test.so tests/integration/napi/index.linux-x64-gnu.node
       - name: Build TS (tsc -> dist/)
         run: pnpm build
       - run: pnpm exec vitest run
