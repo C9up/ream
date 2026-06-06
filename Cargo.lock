@@ -97,6 +97,7 @@ checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 [[package]]
 name = "blackhole-engine"
 version = "0.1.0"
+source = "git+https://github.com/C9up/blackhole?tag=v0.1.0#72404461b0ec11aabf34850e6f72b430754f5c7b"
 dependencies = [
  "ammonia",
  "base64",
@@ -106,6 +107,7 @@ dependencies = [
  "rand 0.8.5",
  "sha2",
  "subtle",
+ "urlencoding",
 ]
 
 [[package]]
@@ -1612,6 +1614,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "sigil-engine"
 version = "0.1.0"
+source = "git+https://github.com/C9up/sigil?tag=v0.1.0#35f62105d9866ead4e7aa88b66db621ea116655a"
 dependencies = [
  "argon2",
  "bcrypt",
@@ -1988,6 +1991,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "warden-engine"
 version = "0.1.0"
+source = "git+https://github.com/C9up/warden?tag=v0.1.0#f49019c48fd5cfd59a9b0ab509ecf27142ef1c5e"
 dependencies = [
  "base64",
  "hex",

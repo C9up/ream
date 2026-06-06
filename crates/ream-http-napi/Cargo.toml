@@ -17,9 +17,14 @@ ream-graphql = { path = "../ream-graphql" }
 # (argon2/bcrypt were dropped in Story 52.1 since Sigil is the canonical
 # password-hashing service since Story 40.1). Sigil supplies argon2id +
 # bcrypt + scrypt for the corresponding NAPI exports.
-blackhole-engine = { path = "../../../blackhole/crates/blackhole-engine" }
-warden-engine = { path = "../../../warden/crates/warden-engine" }
-sigil-engine = { path = "../../../sigil/crates/sigil-engine" }
+# git deps (not relative paths) so this crate's NAPI build resolves in an
+# isolated CI checkout — the sibling repos are public and pinned to their
+# v0.1.0 tag. Consumers get prebuilt .node binaries, so these only matter at
+# ream's own native build time. For monorepo engine dev, override locally with
+# a gitignored .cargo/config.toml `[patch]` to the sibling path.
+blackhole-engine = { git = "https://github.com/C9up/blackhole", tag = "v0.1.0" }
+warden-engine = { git = "https://github.com/C9up/warden", tag = "v0.1.0" }
+sigil-engine = { git = "https://github.com/C9up/sigil", tag = "v0.1.0" }
 ream-napi-core = { path = "../ream-napi-core" }
 napi = { version = "2", default-features = false, features = ["napi8", "serde-json", "async"] }
 napi-derive = "2"
