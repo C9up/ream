@@ -1,4 +1,4 @@
-name: ream-napi-ci
+name: ream-ci
 
 on:
   push:
@@ -69,10 +69,12 @@ jobs:
       - run: cargo test --all
 
   # TypeScript: compile (produces the dist/ that ships) AND run vitest. vitest
-  # loads the native addons, so build them for this runner first.
+  # loads the native addons, so it must run AFTER the build matrix and consume
+  # the already-built linux binary (no redundant Rust rebuild, correct order).
   ts-tests:
     name: TypeScript (build + vitest)
     runs-on: ubuntu-latest
+    needs: build-and-test
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v6
@@ -80,9 +82,17 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install
-      - run: pnpm build:napi
+      - name: Download linux native binary (built by build-and-test)
+        uses: actions/download-artifact@v7
+        with:
+          name: ream-napi-linux-x64-gnu
+      # The http/napi integration loaders require() the binary from their own
+      # dir; the artefact lands at the package root, so stage a copy.
+      - name: Stage native binary for integration tests
+        run: |
+          cp index.*.node tests/integration/http/
+          cp index.*.node tests/integration/napi/
       - name: Build TS (tsc -> dist/)
         run: pnpm build
       - run: pnpm exec vitest run
