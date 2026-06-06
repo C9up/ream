@@ -91,8 +91,10 @@ jobs:
         run: |
           local_v=$(node -p "require('./package.json').version")
           npm_err=$(mktemp)
-          npm_v=$(npm view --fetch-timeout=30000 @c9up/ream version 2>"$npm_err")
-          status=$?; err=$(cat "$npm_err"); rm -f "$npm_err"
+          # `if` form so `set -e` (bash -e) does not abort on a non-zero
+          # `npm view` (e.g. E404 first publish) before status is captured.
+          if npm_v=$(npm view --fetch-timeout=30000 @c9up/ream version 2>"$npm_err"); then status=0; else status=$?; fi
+          err=$(cat "$npm_err"); rm -f "$npm_err"
           if [ "$status" -ne 0 ]; then
             if echo "$err" | grep -qE 'E404|404 Not Found'; then npm_v=""; else
               echo "::error::npm registry unreachable: $err"; exit 1; fi
