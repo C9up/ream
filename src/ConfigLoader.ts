@@ -4,13 +4,12 @@
  * @implements FR18, FR19
  */
 
-import type { ConfigStoreContract } from './Provider.js'
-
 /**
- * Simple in-memory config store.
- * In production, this reads from config/*.ts files with defineConfig().
+ * In-memory config store. In production this is populated from config/*.ts
+ * files via `defineConfig()`. The class is its own contract — `AppContext.config`
+ * is typed against it directly (structural).
  */
-export class ConfigStore implements ConfigStoreContract {
+export class ConfigStore {
   private store: Map<string, unknown> = new Map()
 
   get<T = unknown>(key: string): T | undefined {

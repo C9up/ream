@@ -7,16 +7,12 @@
  *   register() → boot() → start() → ready() → ... → shutdown()
  */
 
+import type { ConfigStore } from './ConfigLoader.js'
 import type { Container } from './container/Container.js'
 
 export interface AppContext {
   container: Container
-  config: ConfigStoreContract
-}
-
-export interface ConfigStoreContract {
-  get<T = unknown>(key: string): T | undefined
-  set(key: string, value: unknown): void
+  config: ConfigStore
 }
 
 /**

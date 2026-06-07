@@ -1,10 +1,10 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
-import type { AppContext, ConfigStoreContract } from '../../src/index.js'
+import type { AppContext } from '../../src/index.js'
 import { Container, OpenApiGenerator, OpenApiProvider, Router } from '../../src/index.js'
 
 function buildApp(container: Container): AppContext {
-  const config: ConfigStoreContract = { get: () => undefined, set: () => {} }
+  const config = { get: () => undefined, set: () => {} }
   return { container, config }
 }
 

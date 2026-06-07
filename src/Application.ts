@@ -15,12 +15,12 @@
 
 import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
-import type { AppContext, ConfigStoreContract, ProviderContract } from './Provider.js'
+import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
 export class Application implements AppContext {
   readonly container: Container
-  readonly config: ConfigStoreContract
+  readonly config: ConfigStore
   private providers: ProviderContract[] = []
   private _booted = false
   private _bootingHooks: Array<() => Promise<void> | void> = []

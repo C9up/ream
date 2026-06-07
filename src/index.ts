@@ -159,7 +159,7 @@ export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignito
 
 // ─── Providers ──────────────────────────────────────────────
 
-export type { AppContext, ConfigStoreContract, ProviderContract } from './Provider.js'
+export type { AppContext, ProviderContract } from './Provider.js'
 export { Provider } from './Provider.js'
 
 // ─── Codemods ───────────────────────────────────────────────
