@@ -62,7 +62,7 @@ universe through the container, never via a static import.
 | [@c9up/inker](https://github.com/C9up/inker) | Server-side templating |
 | [@c9up/station](https://github.com/C9up/station) | Admin scaffolding |
 | [@c9up/helix](https://github.com/C9up/helix) | Framework-agnostic test runtime |
-| [forge](https://github.com/C9up/ream-cli) | CLI & code generators (Rust binary, `ream` command) |
+| [@c9up/ream-cli](https://github.com/C9up/ream-cli) | CLI & code generators (Rust binary, `ream` command) |
 | [@c9up/ream-mcp](https://github.com/C9up/ream-mcp) | MCP server — agent-ready framework assistant |
 
 ## License
