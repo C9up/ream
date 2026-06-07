@@ -9,7 +9,7 @@ import 'reflect-metadata'
 // ─── Core ───────────────────────────────────────────────────
 
 export { Application } from './Application.js'
-export { defineModuleConfig, env, SimpleConfigStore } from './ConfigLoader.js'
+export { defineModuleConfig, env, ConfigStore } from './ConfigLoader.js'
 export { Container } from './container/Container.js'
 export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './container/types.js'
 
@@ -159,7 +159,7 @@ export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignito
 
 // ─── Providers ──────────────────────────────────────────────
 
-export type { AppContext, ConfigStore, ProviderContract } from './Provider.js'
+export type { AppContext, ConfigStoreContract, ProviderContract } from './Provider.js'
 export { Provider } from './Provider.js'
 
 // ─── Codemods ───────────────────────────────────────────────

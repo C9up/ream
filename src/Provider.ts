@@ -11,10 +11,10 @@ import type { Container } from './container/Container.js'
 
 export interface AppContext {
   container: Container
-  config: ConfigStore
+  config: ConfigStoreContract
 }
 
-export interface ConfigStore {
+export interface ConfigStoreContract {
   get<T = unknown>(key: string): T | undefined
   set(key: string, value: unknown): void
 }

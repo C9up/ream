@@ -2,7 +2,7 @@ import 'reflect-metadata'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AppContext,
-  ConfigStore,
+  ConfigStoreContract,
   ScheduleInvocation,
   Scheduler,
   TaskInfo,
@@ -68,7 +68,7 @@ class MockScheduler {
 }
 
 function buildApp(container: Container): AppContext {
-  const config: ConfigStore = {
+  const config: ConfigStoreContract = {
     get: () => undefined,
     set: () => {},
   }

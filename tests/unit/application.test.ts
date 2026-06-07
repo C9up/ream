@@ -5,7 +5,7 @@ import {
   defineModuleConfig,
   env,
   Provider,
-  SimpleConfigStore,
+  ConfigStore,
 } from '../../src/index.js'
 
 describe('application > provider lifecycle', () => {
@@ -101,16 +101,16 @@ describe('application > provider lifecycle', () => {
   })
 })
 
-describe('config > SimpleConfigStore', () => {
+describe('config > ConfigStore', () => {
   it('get and set values', () => {
-    const config = new SimpleConfigStore()
+    const config = new ConfigStore()
     config.set('db.host', 'localhost')
     expect(config.get('db.host')).toBe('localhost')
     expect(config.get('nonexistent')).toBeUndefined()
   })
 
   it('loadFromObject loads multiple values', () => {
-    const config = new SimpleConfigStore()
+    const config = new ConfigStore()
     config.loadFromObject({
       'db.host': 'localhost',
       'db.port': 5432,

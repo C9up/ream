@@ -1,10 +1,10 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
-import type { AppContext, ConfigStore } from '../../src/index.js'
+import type { AppContext, ConfigStoreContract } from '../../src/index.js'
 import { Container, RpcProvider, RpcRouter } from '../../src/index.js'
 
 function buildApp(container: Container): AppContext {
-  const config: ConfigStore = { get: () => undefined, set: () => {} }
+  const config: ConfigStoreContract = { get: () => undefined, set: () => {} }
   return { container, config }
 }
 

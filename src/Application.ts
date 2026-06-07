@@ -13,14 +13,14 @@
  * @implements FR17, FR20
  */
 
-import { SimpleConfigStore } from './ConfigLoader.js'
+import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
-import type { AppContext, ConfigStore, ProviderContract } from './Provider.js'
+import type { AppContext, ConfigStoreContract, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
 export class Application implements AppContext {
   readonly container: Container
-  readonly config: ConfigStore
+  readonly config: ConfigStoreContract
   private providers: ProviderContract[] = []
   private _booted = false
   private _bootingHooks: Array<() => Promise<void> | void> = []
@@ -29,7 +29,7 @@ export class Application implements AppContext {
 
   constructor() {
     this.container = new Container()
-    this.config = new SimpleConfigStore()
+    this.config = new ConfigStore()
   }
 
   // ─── Environment ──────────────────────────────────────────
