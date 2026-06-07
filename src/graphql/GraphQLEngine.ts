@@ -42,21 +42,21 @@ interface GraphqlNative {
   graphqlParse(query: string): string
 }
 
-let _graphqlNative: GraphqlNative | undefined
+let graphqlNativeCache: GraphqlNative | undefined
 /**
  * Lazily load the Rust GraphQL parser from the `index` NAPI binary. There is no
  * TS fallback — when Rust exists, the engine is full-Rust. `loadNapi` throws a
  * typed `ReamError` if the native module is missing.
  */
 function graphqlNative(): GraphqlNative {
-  if (_graphqlNative === undefined) {
-    _graphqlNative = loadNapi<GraphqlNative>({
+  if (graphqlNativeCache === undefined) {
+    graphqlNativeCache = loadNapi<GraphqlNative>({
       binaryName: 'index',
       callerMetaUrl: import.meta.url,
       errorCodePrefix: 'GRAPHQL',
     })
   }
-  return _graphqlNative
+  return graphqlNativeCache
 }
 
 const OPERATION_TYPE: Record<string, string> = {

@@ -95,7 +95,7 @@ export { StaticProvider } from './storage/StaticProvider.js'
 // lives in @c9up/blackhole. ream core keeps only the crypto primitives.
 export { CookieSigner } from './security/CookieSigner.js'
 export {
-  _setNapi,
+  setNapi,
   constantTimeEq,
   hasNativeCrypto,
   hmacSign,
@@ -215,9 +215,9 @@ export type {
 
 // ─── Services ───────────────────────────────────────────────
 
-export { _setApp } from './services/app.js'
-export { _setRouter } from './services/router.js'
-export { _setServer } from './services/server.js'
+export { setApp } from './services/app.js'
+export { setRouter } from './services/router.js'
+export { setServer } from './services/server.js'
 
 // ─── Scheduler ──────────────────────────────────────────────
 

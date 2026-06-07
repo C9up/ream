@@ -11,28 +11,28 @@
 
 import type { Emitter } from '../Emitter.js'
 
-let _instance: Emitter | undefined
+let instance: Emitter | undefined
 
 /** @internal Bind the singleton (called by EventsProvider). */
-export function _setEmitter(instance: Emitter): void {
-  _instance = instance
+export function setEmitter(instance: Emitter): void {
+  instance = instance
 }
 
 /** @internal Read the singleton (or `undefined` pre-boot). */
-export function _getEmitter(): Emitter | undefined {
-  return _instance
+export function getEmitter(): Emitter | undefined {
+  return instance
 }
 
 const emitter: Emitter = new Proxy({} as Emitter, {
   get(_target, prop) {
-    if (!_instance) {
+    if (!instance) {
       throw new Error(
         '[ream:events] Emitter singleton accessed before EventsProvider.boot() ran. ' +
           'Check that `@c9up/ream/events/provider` is listed in your reamrc.ts providers.',
       )
     }
-    const value = Reflect.get(_instance, prop, _instance)
-    return typeof value === 'function' ? value.bind(_instance) : value
+    const value = Reflect.get(instance, prop, instance)
+    return typeof value === 'function' ? value.bind(instance) : value
   },
 })
 

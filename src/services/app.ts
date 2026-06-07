@@ -12,7 +12,7 @@ import type { Application } from '../Application.js'
 let instance: Application | undefined
 
 /** @internal Set the app instance (called by Ignitor). */
-export function _setApp(app: Application): void {
+export function setApp(app: Application): void {
   instance = app
 }
 

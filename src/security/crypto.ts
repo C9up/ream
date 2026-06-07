@@ -29,7 +29,7 @@ try {
 }
 
 /** @internal Set the NAPI bindings (called once by the NAPI loader). */
-export function _setNapi(bindings: NapiCrypto): void {
+export function setNapi(bindings: NapiCrypto): void {
   napi = bindings
 }
 

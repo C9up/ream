@@ -10,16 +10,16 @@
 
 import type { Router } from '../router/Router.js'
 
-let _instance: Router | undefined
+let instance: Router | undefined
 
 /** @internal Set the router instance (called by Ignitor). */
-export function _setRouter(router: Router): void {
-  _instance = router
+export function setRouter(router: Router): void {
+  instance = router
 }
 
 /** @internal Get the router instance directly. */
-export function _getRouter(): Router | undefined {
-  return _instance
+export function getRouter(): Router | undefined {
+  return instance
 }
 
 /**
@@ -28,7 +28,7 @@ export function _getRouter(): Router | undefined {
  */
 const router: Router = new Proxy({} as Router, {
   get(_target, prop) {
-    if (!_instance) {
+    if (!instance) {
       throw new Error(
         'Router accessed before initialization. ' +
           'Ensure your route files are loaded as preloads in reamrc.ts, not at import time.',
@@ -36,8 +36,8 @@ const router: Router = new Proxy({} as Router, {
     }
     // Bind methods so private-field writes inside the class resolve
     // against the real instance brand instead of the Proxy.
-    const value = Reflect.get(_instance, prop, _instance)
-    return typeof value === 'function' ? value.bind(_instance) : value
+    const value = Reflect.get(instance, prop, instance)
+    return typeof value === 'function' ? value.bind(instance) : value
   },
 })
 

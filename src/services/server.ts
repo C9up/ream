@@ -9,21 +9,21 @@
 
 import type { Server } from '../server/Server.js'
 
-let _instance: Server | undefined
+let instance: Server | undefined
 
 /** @internal Set the server instance (called by Ignitor). */
-export function _setServer(server: Server): void {
-  _instance = server
+export function setServer(server: Server): void {
+  instance = server
 }
 
 /** @internal Get the server instance directly. */
-export function _getServer(): Server | undefined {
-  return _instance
+export function getServer(): Server | undefined {
+  return instance
 }
 
 const server: Server = new Proxy({} as Server, {
   get(_target, prop) {
-    if (!_instance) {
+    if (!instance) {
       throw new Error(
         'Server accessed before initialization. ' +
           'Ensure your kernel files are loaded as preloads in reamrc.ts.',
@@ -32,8 +32,8 @@ const server: Server = new Proxy({} as Server, {
     // Bind methods to the real instance so private-field access inside
     // them resolves against the underlying class brand — passing the
     // Proxy as `this` breaks `#field` writes (Proxy isn't branded).
-    const value = Reflect.get(_instance, prop, _instance)
-    return typeof value === 'function' ? value.bind(_instance) : value
+    const value = Reflect.get(instance, prop, instance)
+    return typeof value === 'function' ? value.bind(instance) : value
   },
 })
 

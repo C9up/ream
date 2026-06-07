@@ -1,6 +1,6 @@
 import { BaseEvent, Emitter } from './Emitter.js'
 import { EventBus } from './native.js'
-import { _setEmitter } from './services/main.js'
+import { setEmitter } from './services/main.js'
 
 /**
  * Host context for the events provider. The container is referenced
@@ -49,7 +49,7 @@ export default class EventsProvider {
   async boot() {
     const emitter = this.app.container.resolve<Emitter>(Emitter)
     BaseEvent.useEmitter(emitter)
-    _setEmitter(emitter)
+    setEmitter(emitter)
   }
 
   async shutdown() {

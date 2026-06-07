@@ -28,9 +28,9 @@ import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 import { Router } from './router/Router.js'
 import { Server } from './server/Server.js'
-import { _setApp } from './services/app.js'
-import { _setRouter } from './services/router.js'
-import { _setServer } from './services/server.js'
+import { setApp } from './services/app.js'
+import { setRouter } from './services/router.js'
+import { setServer } from './services/server.js'
 
 /** Application environment. */
 export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
@@ -167,9 +167,9 @@ export class Ignitor {
     }
 
     // Set service singletons so route/kernel files can import them
-    _setApp(this.app)
-    _setRouter(this.router)
-    _setServer(this.server)
+    setApp(this.app)
+    setRouter(this.router)
+    setServer(this.server)
   }
 
   // ─── Configuration ────────────────────────────────────────
