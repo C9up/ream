@@ -1,0 +1,173 @@
+name: ream-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm_overwrite:
+        description: 'Type YES to override the drift gate (force-publish even if registry version >= package.json version). Use only for rollback scenarios.'
+        required: false
+        default: 'no'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (${{ matrix.suffix }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    suffix: linux-x64-gnu,   target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, target: aarch64-unknown-linux-gnu }
+          # darwin-x64 is cross-compiled on an arm64 runner (macos-13 Intel
+          # runners are scarce/deprecated and leave this job queued forever).
+          - { os: macos-14,         suffix: darwin-x64,      target: x86_64-apple-darwin }
+          - { os: macos-14,         suffix: darwin-arm64,    target: aarch64-apple-darwin }
+          - { os: windows-latest,   suffix: win32-x64-msvc,  target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with: { version: 9 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+      - run: pnpm install
+      - name: Build NAPI binaries (${{ matrix.target }})
+        run: pnpm build:napi
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+      - name: Upload artefact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ream-napi-${{ matrix.suffix }}
+          path: |
+            index.${{ matrix.suffix }}.node
+            scheduler.${{ matrix.suffix }}.node
+            events.${{ matrix.suffix }}.node
+          if-no-files-found: error
+
+  # Rust test suite — platform-independent, runs once on linux. Gated on the
+  # native build so nothing runs until the Rust build is green.
+  rust-tests:
+    name: Cargo tests (linux-x64-gnu)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all
+
+  # TypeScript: compile (produces the dist/ that ships) AND run vitest. Gated on
+  # the native build (runs only once the Rust build is green). Builds the host
+  # binary on this runner — reliable, no cross-runner artefact plumbing — and
+  # stages it where the http/napi integration loaders require() it.
+  ts-tests:
+    name: TypeScript (build + vitest)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with: { version: 9 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install
+      - name: Build host native binaries
+        run: pnpm build:napi
+      - name: Stage native binaries for integration tests
+        run: |
+          # http loader require()s the real ream-http-napi binary from its dir.
+          cp index.*.node tests/integration/http/
+          # napi-roundtrip loader require()s the ream-napi-test FIXTURE crate
+          # (hello/add/noop helpers), not the production binary — build + stage it.
+          cargo build --release -p ream-napi-test
+          cp target/release/libream_napi_test.so tests/integration/napi/index.linux-x64-gnu.node
+      - name: Build TS (tsc -> dist/)
+        run: pnpm build
+      - run: pnpm exec vitest run
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-and-test, rust-tests, ts-tests]
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with: { version: 9 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Verify NPM_TOKEN secret
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "::error::NPM_TOKEN secret missing — set in repo settings before manual publish"
+            exit 1
+          fi
+      - name: Tag-vs-package.json gate
+        run: |
+          tag=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+          if [ -z "$tag" ]; then
+            echo "::error::HEAD has no v<X.Y.Z>-shaped tag — refuse to publish from an untagged commit"
+            exit 1
+          fi
+          pkg_v=$(node -p "require('./package.json').version")
+          if [ "$tag" != "v${pkg_v}" ]; then
+            echo "::error::Tag $tag does not match package.json v${pkg_v}"
+            exit 1
+          fi
+      - name: Drift fail-closed gate
+        env:
+          CONFIRM_OVERWRITE: ${{ inputs.confirm_overwrite }}
+        run: |
+          local_v=$(node -p "require('./package.json').version")
+          npm_err=$(mktemp)
+          # `if` form so `set -e` (bash -e) does not abort on a non-zero
+          # `npm view` (e.g. E404 first publish) before status is captured.
+          if npm_v=$(npm view --fetch-timeout=30000 @c9up/ream version 2>"$npm_err"); then status=0; else status=$?; fi
+          err=$(cat "$npm_err"); rm -f "$npm_err"
+          if [ "$status" -ne 0 ]; then
+            if echo "$err" | grep -qE 'E404|404 Not Found'; then npm_v=""; else
+              echo "::error::npm registry unreachable: $err"; exit 1; fi
+          fi
+          if [ -z "$npm_v" ]; then echo "First publish ($local_v)"; exit 0; fi
+          if [ "$local_v" = "$npm_v" ] && [ "$CONFIRM_OVERWRITE" != "YES" ]; then
+            echo "::error::$local_v already published — confirm_overwrite=YES required"; exit 1
+          fi
+          highest=$(printf '%s\n%s\n' "$npm_v" "$local_v" | sort -V | tail -1)
+          if [ "$highest" = "$npm_v" ] && [ "$local_v" != "$npm_v" ] && [ "$CONFIRM_OVERWRITE" != "YES" ]; then
+            echo "::error::Registry $npm_v > local $local_v — refuse rollback without confirm_overwrite=YES"; exit 1
+          fi
+      - run: pnpm install
+      # Compile TS -> dist/ so the published tarball actually contains the
+      # JS + .d.ts (package.json `files` ships dist/). Without this the publish
+      # would pack source only and omit the compiled output.
+      - name: Build TS (tsc -> dist/)
+        run: pnpm build
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: ream-napi-*
+          merge-multiple: true
+
+      - run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
