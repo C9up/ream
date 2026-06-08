@@ -1,0 +1,14 @@
+{
+  "name": "@test-fixture/register-sample",
+  "version": "0.0.0-fixture",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./configure": "./src/configure.ts",
+    "./commands/echo": "./src/commands/echo.ts",
+    "./middleware/sample": "./src/middleware/sample.ts"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
