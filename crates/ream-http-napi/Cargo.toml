@@ -1,6 +1,6 @@
 [package]
 name = "ream-http-napi"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,9 +22,9 @@ ream-graphql = { path = "../ream-graphql" }
 # v0.1.0 tag. Consumers get prebuilt .node binaries, so these only matter at
 # ream's own native build time. For monorepo engine dev, override locally with
 # a gitignored .cargo/config.toml `[patch]` to the sibling path.
-blackhole-engine = { git = "https://github.com/C9up/blackhole", tag = "v0.1.3" }
-warden-engine = { git = "https://github.com/C9up/warden", tag = "v0.1.3" }
-sigil-engine = { git = "https://github.com/C9up/sigil", tag = "v0.1.3" }
+blackhole-engine = { git = "https://github.com/C9up/blackhole", tag = "v0.1.4" }
+warden-engine = { git = "https://github.com/C9up/warden", tag = "v0.1.4" }
+sigil-engine = { git = "https://github.com/C9up/sigil", tag = "v0.1.4" }
 ream-napi-core = { path = "../ream-napi-core" }
 napi = { version = "2", default-features = false, features = ["napi8", "serde-json", "async"] }
 napi-derive = "2"
