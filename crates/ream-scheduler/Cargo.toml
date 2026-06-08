@@ -1,0 +1,19 @@
+[package]
+name = "ream-scheduler"
+version = "0.1.3"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cron parser + task ticker core for the Ream scheduler"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+cron = "0.12"
+chrono = { version = "0.4", features = ["clock"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+ream-napi-core = { path = "../ream-napi-core" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
