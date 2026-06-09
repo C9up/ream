@@ -13,6 +13,9 @@
  * @implements FR17, FR20, FR23
  */
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { parseEnv } from 'node:util'
 import { Application } from './Application.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
@@ -262,11 +265,47 @@ export class Ignitor {
   // ─── Lifecycle ────────────────────────────────────────────
 
   async start(): Promise<Ignitor> {
+    this.#loadEnvironmentFiles()
     await this.phaseRegister()
     await this.phaseBoot()
     await this.phaseStart()
     await this.phaseReady()
     return this
+  }
+
+  /**
+   * Load `.env` files into `process.env` before config and providers boot —
+   * mirroring AdonisJS, which loads env in BOTH the HTTP and the ace (console)
+   * flows. Without this, `ream migrate` and other console commands booted in a
+   * clean subprocess never saw the `.env` the web server got from the shell.
+   *
+   * Uses Node's built-in parser (no dependency). Values already present in
+   * `process.env` win, so the shell / CI always overrides the files.
+   */
+  #loadEnvironmentFiles(): void {
+    if (!this.appRoot) return
+    const nodeEnv = process.env.NODE_ENV
+    // Most-specific first; with "existing wins", earlier files take precedence.
+    const files = [
+      nodeEnv ? `.env.${nodeEnv}.local` : null,
+      this.environment === 'test' ? null : '.env.local',
+      nodeEnv ? `.env.${nodeEnv}` : null,
+      '.env',
+    ].filter((name): name is string => name !== null)
+
+    for (const name of files) {
+      let contents: string
+      try {
+        contents = readFileSync(fileURLToPath(new URL(name, this.appRoot)), 'utf8')
+      } catch {
+        continue // file absent — nothing to load
+      }
+      for (const [key, value] of Object.entries(parseEnv(contents))) {
+        if (typeof value === 'string' && process.env[key] === undefined) {
+          process.env[key] = value
+        }
+      }
+    }
   }
 
   private async phaseRegister(): Promise<void> {
