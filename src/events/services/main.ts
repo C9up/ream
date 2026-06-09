@@ -14,8 +14,8 @@ import type { Emitter } from '../Emitter.js'
 let instance: Emitter | undefined
 
 /** @internal Bind the singleton (called by EventsProvider). */
-export function setEmitter(instance: Emitter): void {
-  instance = instance
+export function setEmitter(next: Emitter): void {
+  instance = next
 }
 
 /** @internal Read the singleton (or `undefined` pre-boot). */

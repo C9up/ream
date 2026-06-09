@@ -9,7 +9,7 @@ import 'reflect-metadata'
 // ─── Core ───────────────────────────────────────────────────
 
 export { Application } from './Application.js'
-export { defineModuleConfig, env, ConfigStore } from './ConfigLoader.js'
+export { ConfigStore, defineModuleConfig, env } from './ConfigLoader.js'
 export { Container } from './container/Container.js'
 export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './container/types.js'
 
@@ -95,13 +95,13 @@ export { StaticProvider } from './storage/StaticProvider.js'
 // lives in @c9up/blackhole. ream core keeps only the crypto primitives.
 export { CookieSigner } from './security/CookieSigner.js'
 export {
-  setNapi,
   constantTimeEq,
   hasNativeCrypto,
   hmacSign,
   hmacVerify,
   randomBytesBase64,
   randomHex,
+  setNapi,
 } from './security/crypto.js'
 export type { SignedUrlConfig } from './security/SignedUrl.js'
 export { SignedUrl } from './security/SignedUrl.js'
@@ -260,4 +260,4 @@ export {
   StatsTracker,
 } from './scheduler/index.js'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.1.5'
