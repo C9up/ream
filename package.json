@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
@@ -151,6 +151,34 @@
       "./session": {
         "types": "./dist/session/SessionMiddleware.d.ts",
         "import": "./dist/session/SessionMiddleware.js"
+      },
+      "./events": {
+        "types": "./dist/events/index.d.ts",
+        "import": "./dist/events/index.js"
+      },
+      "./events/provider": {
+        "types": "./dist/events/EventsProvider.d.ts",
+        "import": "./dist/events/EventsProvider.js"
+      },
+      "./events/config": {
+        "types": "./dist/events/config.d.ts",
+        "import": "./dist/events/config.js"
+      },
+      "./events/services/main": {
+        "types": "./dist/events/services/main.d.ts",
+        "import": "./dist/events/services/main.js"
+      },
+      "./events/testing": {
+        "types": "./dist/events/testing/FakeBus.d.ts",
+        "import": "./dist/events/testing/FakeBus.js"
+      },
+      "./events/helix": {
+        "types": "./dist/events/helix/helpers.d.ts",
+        "import": "./dist/events/helix/helpers.js"
+      },
+      "./events/configure": {
+        "types": "./dist/events/configure.d.ts",
+        "import": "./dist/events/configure.js"
       },
       "./helpers": {
         "types": "./dist/helpers/index.d.ts",
