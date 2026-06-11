@@ -32,7 +32,13 @@ export interface TestResponse {
   json<T = unknown>(): T
 }
 
-export interface TestRequestBuilder {
+/**
+ * Fluent request builder. Thenable like AdonisJS/japa's api-client: `await
+ * client.get('/x')` sends the request, and chaining works on every verb —
+ * `await client.get('/x').header('authorization', token)`. The explicit
+ * `.send()` is kept for callers that prefer it.
+ */
+export interface TestRequestBuilder extends PromiseLike<TestResponse> {
   /** Set a request header. */
   header(name: string, value: string): TestRequestBuilder
   /** Set the request body as JSON. */
@@ -91,9 +97,9 @@ export class TestClient {
     return this
   }
 
-  /** GET request. */
-  get(path: string): Promise<TestResponse> {
-    return this.request('GET', path).send()
+  /** GET request. Returns a chainable, awaitable builder (await sends it). */
+  get(path: string): TestRequestBuilder {
+    return this.request('GET', path)
   }
 
   /** POST request. */
@@ -111,9 +117,9 @@ export class TestClient {
     return this.request('PATCH', path)
   }
 
-  /** DELETE request. */
-  delete(path: string): Promise<TestResponse> {
-    return this.request('DELETE', path).send()
+  /** DELETE request. Returns a chainable, awaitable builder (await sends it). */
+  delete(path: string): TestRequestBuilder {
+    return this.request('DELETE', path)
   }
 
   /**
@@ -165,6 +171,11 @@ export class TestClient {
         }
         return sendRequest(this.#port, method, path, headers, bodyContent)
       },
+      // Thenable: `await client.get('/x')` (or any builder) sends the request,
+      // matching AdonisJS/japa's api-client ergonomics. The `then` IS the public
+      // contract here — awaiting the builder is the documented way to send.
+      // biome-ignore lint/suspicious/noThenProperty: thenable request builder is the intended API (AdonisJS/japa parity) — `await client.get(path)` sends
+      then: (onfulfilled, onrejected) => builder.send().then(onfulfilled, onrejected),
     }
 
     return builder
