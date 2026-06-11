@@ -145,32 +145,6 @@ impl StreamRegistry {
         entry.sender.closed().await;
     }
 
-    /// Reap stray registrations whose receiver was never consumed (i.e.
-    /// the response never went out — handler panicked between
-    /// `register` and returning the NapiResponse).
-    #[allow(dead_code)]
-    pub async fn gc_strays(&self) {
-        let now = Instant::now();
-        let mut map = self.inner.lock().await;
-        let stale: Vec<String> = map
-            .iter()
-            .filter_map(|(id, entry)| {
-                if entry.sender.is_closed() {
-                    return Some(id.clone());
-                }
-                if now.duration_since(entry.created_at) > STRAY_TTL {
-                    // Receiver never picked up — the response builder
-                    // never saw a matching stream_id. Likely a panic
-                    // between register() and the return.
-                    return Some(id.clone());
-                }
-                None
-            })
-            .collect();
-        for id in stale {
-            map.remove(&id);
-        }
-    }
 }
 
 #[cfg(test)]

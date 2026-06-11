@@ -16,7 +16,7 @@ import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { HttpContext } from './http/HttpContext.js'
 import type { MiddlewareFunction, MiddlewareRegistry } from './middleware/Pipeline.js'
 import { compose } from './middleware/Pipeline.js'
-import type { Router } from './router/Router.js'
+import type { RouteDefinition, Router } from './router/Router.js'
 import type { Dict } from './types/helpers.js'
 
 export interface HttpKernelConfig {
@@ -73,16 +73,14 @@ export function createHttpKernel(
   const serverMw = config.serverMiddleware ?? []
   const routerMw = config.routerMiddleware ?? []
 
-  // Pipeline cache: compiled middleware chain per route key (PERF-7)
-  // Cleared when router.clear() is called (hot-reload).
-  const pipelineCache = new Map<string, { chain: MiddlewareFunction }>()
-
-  // Hook into router clear for cache invalidation
-  const origClear = config.router.clear.bind(config.router)
-  config.router.clear = () => {
-    origClear()
-    pipelineCache.clear()
-  }
+  // Pipeline cache: compiled middleware chain per ROUTE OBJECT (PERF-7).
+  // Keyed by route identity, not `method:path` — two routes sharing a path but
+  // differing by `domain` would otherwise collide and serve the first-warmed
+  // handler for both. WeakMap also makes hot-reload invalidation automatic:
+  // router.clear() drops the route objects, their chains become unreachable
+  // and are GC'd — no need to monkey-patch router.clear (which leaked a
+  // wrapper chain when createHttpKernel ran more than once on one router).
+  const pipelineCache = new WeakMap<RouteDefinition, { chain: MiddlewareFunction }>()
 
   // Resolve the events emitter once, only when the app registered
   // `EventsProvider`. Lazy + cached: the binding may not exist yet at kernel
@@ -152,9 +150,7 @@ export function createHttpKernel(
           throw new E_ROUTE_NOT_FOUND(reqData.method, reqData.path)
         }
 
-        // Cache key: method + path pattern (static per route definition)
-        const cacheKey = `${match.route.method}:${match.route.path}`
-        let cached = pipelineCache.get(cacheKey)
+        let cached = pipelineCache.get(match.route)
 
         if (!cached) {
           // Resolve handler (once per route)
@@ -195,7 +191,7 @@ export function createHttpKernel(
           )
 
           cached = { chain }
-          pipelineCache.set(cacheKey, cached)
+          pipelineCache.set(match.route, cached)
         }
 
         // API versioning headers (per-request, cheap)

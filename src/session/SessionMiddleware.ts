@@ -78,6 +78,12 @@ export default class SessionMiddleware {
       const shouldEmit = session.isDirty() || (rolling && hadIncomingCookie)
       if (shouldEmit) {
         const encoded = this.#cookieDriver.encode(session.toJSON())
+        if (encoded.length > 4096) {
+          process.stderr.write(
+            `[session] Cookie session exceeds 4096 bytes (${encoded.length}). ` +
+              'Switch to a server-side driver (memory/redis) or reduce session data.\n',
+          )
+        }
         ctx.response.cookie(cookieName, encoded, {
           maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
           path: '/',

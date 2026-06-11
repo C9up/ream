@@ -17,6 +17,14 @@ export function setRouter(router: Router): void {
   instance = router
 }
 
+/**
+ * @internal Unset the locator IF it still points at `router` (called by
+ * Ignitor.stop()). Ownership-guarded — see services/app.ts.
+ */
+export function clearRouter(router: Router): void {
+  if (instance === router) instance = undefined
+}
+
 /** @internal Get the router instance directly. */
 export function getRouter(): Router | undefined {
   return instance

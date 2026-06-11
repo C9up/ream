@@ -16,6 +16,15 @@ export function setApp(app: Application): void {
   instance = app
 }
 
+/**
+ * @internal Unset the locator IF it still points at `app` (called by
+ * Ignitor.stop()). Ownership-guarded: when a second Ignitor rebound the
+ * locator, the older app's stop() must not tear down the newer binding.
+ */
+export function clearApp(app: Application): void {
+  if (instance === app) instance = undefined
+}
+
 const app: Application = new Proxy({} as Application, {
   get(_target, prop) {
     if (!instance) {

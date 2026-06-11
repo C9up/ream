@@ -82,4 +82,3 @@ export class MemoryLockBackend implements LockBackend {
   }
 }
 
-export default MemoryLockBackend

@@ -31,9 +31,9 @@ import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 import { Router } from './router/Router.js'
 import { Server } from './server/Server.js'
-import { setApp } from './services/app.js'
-import { setRouter } from './services/router.js'
-import { setServer } from './services/server.js'
+import { clearApp, setApp } from './services/app.js'
+import { clearRouter, setRouter } from './services/router.js'
+import { clearServer, setServer } from './services/server.js'
 
 /** Application environment. */
 export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
@@ -265,11 +265,33 @@ export class Ignitor {
   // ─── Lifecycle ────────────────────────────────────────────
 
   async start(): Promise<Ignitor> {
+    // Double-start guard: a second start() would re-run phaseRegister and
+    // instantiate + register every reamrc provider a second time.
+    if (this.phase !== 'created') {
+      throw new ReamError(
+        'IGNITOR_ALREADY_STARTED',
+        `start() called while in phase '${this.phase}' — an Ignitor boots once`,
+        { hint: 'Create a new Ignitor instance instead of restarting this one.' },
+      )
+    }
     this.#loadEnvironmentFiles()
-    await this.phaseRegister()
-    await this.phaseBoot()
-    await this.phaseStart()
-    await this.phaseReady()
+    try {
+      await this.phaseRegister()
+      await this.phaseBoot()
+      await this.phaseStart()
+      await this.phaseReady()
+    } catch (err) {
+      // A throw mid-boot (e.g. a provider ready() failing AFTER the HTTP port
+      // is bound) must release everything the partial boot opened — port,
+      // scheduler tickers, watchers — or the process hangs with leaked
+      // resources. Best-effort: the original boot error stays the one thrown.
+      try {
+        await this.stop()
+      } catch {
+        /* surface the boot error, not the rollback error */
+      }
+      throw err
+    }
     return this
   }
 
@@ -428,7 +450,13 @@ export class Ignitor {
       })
 
       const desiredPort = this.config.port ?? 3000
-      const availablePort = await findAvailablePort(desiredPort)
+      // Port-scan fallback (+1..+19) is a DEV convenience only. In production
+      // a silent drift to :3001 while the LB targets :3000 is an outage —
+      // bind the configured port and let EADDRINUSE fail loudly. The probe
+      // also has an inherent TOCTOU; acceptable in dev, not in prod.
+      const availablePort = this.app.inProduction
+        ? desiredPort
+        : await findAvailablePort(desiredPort)
       this._httpServer = this.config.serverFactory(availablePort)
       this._httpServer.onRequest(kernel)
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
@@ -467,23 +495,30 @@ export class Ignitor {
         .emit('app:ready', { environment: this.environment })
     }
 
-    // Hot-reload in dev mode
+    // Dev-mode change watcher. IMPORTANT: this does NOT attempt an in-process
+    // reload. The previous implementation cleared the router + service registry
+    // and re-invoked the reamrc preload thunks — but a dynamic import() of an
+    // already-loaded ESM module returns the CACHED module without re-executing
+    // its body (the thunk's specifier is opaque, so it cannot be cache-busted).
+    // The "reload" therefore destroyed every preload-registered route on the
+    // first file save and never restored them. Process-level restart is the
+    // reload mechanism (`ream dev` runs `tsx watch`, which restarts on change);
+    // this watcher only surfaces an informational event for hosts that embed
+    // the Ignitor without a supervisor. A future true HMR needs a loader-hook
+    // (hot-hook style) that can invalidate the ESM cache — plug it in here.
     if (this.isDevMode()) {
       const watchDirs = this.config.watchDirs ?? ['app', 'start']
       this.hotReloadCleanup = startHotReload({
         watchDirs,
-        onReload: async () => {
-          const { clearServiceRegistry } = await import('./decorators/Service.js')
-          clearServiceRegistry()
-          this.router.clear()
-          if (this.inlineRoutes) this.inlineRoutes(this.router)
-          if (this.reamrc?.preloads) {
-            for (const preloadEntry of this.reamrc.preloads) {
-              const preloadImport =
-                typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
-              await preloadImport()
-            }
-          }
+        onReload: () => {
+          this.handleError({
+            type: 'system.info',
+            source: 'HotReload',
+            message:
+              'File change detected — a process restart is required to apply it (`ream dev` restarts automatically).',
+            severity: 'info',
+            timestamp: new Date().toISOString(),
+          } as ErrorEvent)
         },
         logger: {
           info: (msg) =>
@@ -566,13 +601,43 @@ export class Ignitor {
     }
   }
 
-  /** Graceful shutdown. */
+  /**
+   * Graceful shutdown. Every step runs even when an earlier one throws — a
+   * failing `httpServer.close()` must not leave the error boundary installed,
+   * providers un-shutdown (open DB pools), or the locators bound. Errors are
+   * aggregated and rethrown at the end.
+   */
   async stop(): Promise<void> {
-    if (this.hotReloadCleanup) this.hotReloadCleanup()
-    if (this._httpServer) await this._httpServer.close()
-    this.errorBoundary.uninstall()
-    await this.app.shutdown()
+    const errors: unknown[] = []
+    const attempt = async (step: () => void | Promise<void>): Promise<void> => {
+      try {
+        await step()
+      } catch (err) {
+        errors.push(err)
+      }
+    }
+
+    await attempt(() => {
+      if (this.hotReloadCleanup) this.hotReloadCleanup()
+    })
+    await attempt(async () => {
+      if (this._httpServer) await this._httpServer.close()
+    })
+    await attempt(() => this.errorBoundary.uninstall())
+    await attempt(() => this.app.shutdown())
+
+    // Release the process-wide service locators (ownership-guarded): a stopped
+    // app must not keep its container/router reachable through the module
+    // singletons, and must not clobber a newer Ignitor's bindings.
+    clearApp(this.app)
+    clearRouter(this.router)
+    clearServer(this.server)
+
     this.phase = 'shutdown'
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Ignitor.stop() completed with errors')
+    }
   }
 
   // ─── Accessors ────────────────────────────────────────────
@@ -593,9 +658,12 @@ export class Ignitor {
     return this.server
   }
 
-  /** Get the kernel callback (for serverless / testing). */
+  /**
+   * Get the kernel callback (for serverless / testing). Memoized — building a
+   * kernel per call would discard its compiled-pipeline cache every time.
+   */
   getKernel(): (request: HttpKernelRequest) => Promise<HttpKernelResponse> {
-    return createHttpKernel({
+    this.#kernel ??= createHttpKernel({
       router: this.router,
       middleware: this.middleware,
       container: this.app.container,
@@ -604,7 +672,10 @@ export class Ignitor {
       serverMiddleware: this.server.getServerMiddleware(),
       routerMiddleware: this.router.getRouterMiddleware(),
     })
+    return this.#kernel
   }
+
+  #kernel?: (request: HttpKernelRequest) => Promise<HttpKernelResponse>
 
   isDevMode(): boolean {
     return this.app.inDev
@@ -676,8 +747,13 @@ export class ConsoleKernel {
     }
 
     this.ignitor.getApp().container.singleton('console', () => runner)
-    await runner.handle(argv)
-    await this.ignitor.stop()
+    try {
+      await runner.handle(argv)
+    } finally {
+      // A throwing command must still release the Ignitor's resources
+      // (scheduler tickers, watchers) — otherwise the CLI process hangs.
+      await this.ignitor.stop()
+    }
   }
 }
 

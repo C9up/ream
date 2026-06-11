@@ -27,7 +27,10 @@ export interface BodyParserConfig {
   }
   multipart?: {
     enabled?: boolean
+    /** Total multipart body size cap (sum of all file sizes). Default: '20mb'. */
     limit?: string
+    /** Maximum number of files per request. Default: 20. */
+    maxFiles?: number
     maxFields?: number
     tmpDir?: string
     types?: string[]
@@ -60,6 +63,7 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
   multipart: {
     enabled: true,
     limit: '20mb',
+    maxFiles: 20,
     maxFields: 500,
     tmpDir: '/tmp',
     types: ['multipart/form-data'],
@@ -113,6 +117,7 @@ export default class BodyParserMiddleware {
     if (this.#config.multipart.enabled && matchesType(contentType, this.#config.multipart.types)) {
       const payload = ctx.request.multipart()
       if (payload) {
+        if (this.#rejectMultipart(ctx, payload.files)) return
         const { fields, files } = hydrateMultipartPayload(payload)
         ctx.request.setParsedBody(fields)
         ctx.request.setFiles(files)
@@ -127,6 +132,32 @@ export default class BodyParserMiddleware {
     if (matchesType(contentType, this.#config.form.types)) return this.#config.form.limit
     if (matchesType(contentType, this.#config.multipart.types)) return this.#config.multipart.limit
     return this.#config.raw.limit
+  }
+
+  /** Returns true (and writes a 413/400) when the multipart payload exceeds configured limits. */
+  #rejectMultipart(
+    ctx: HttpContext,
+    files: Array<{ size: number }>,
+  ): boolean {
+    const cfg = this.#config.multipart
+    const maxBytes = parseSize(cfg.limit)
+
+    if (files.length > cfg.maxFiles) {
+      ctx.response
+        .status(400)
+        .json({ error: { code: 'E_TOO_MANY_FILES', message: `Upload exceeds maxFiles (${cfg.maxFiles})` } })
+      return true
+    }
+
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
+    if (totalBytes > maxBytes) {
+      ctx.response
+        .status(413)
+        .json({ error: { code: 'E_REQUEST_ENTITY_TOO_LARGE', message: 'Upload exceeds size limit' } })
+      return true
+    }
+
+    return false
   }
 }
 

@@ -35,6 +35,9 @@ export interface ScheduleProviderOptions {
   scheduler?: Scheduler
 }
 
+/** Prevents two ScheduleProvider instances from ticking simultaneously (two apps, same process). */
+let activeProvider: ScheduleProvider | undefined
+
 export class ScheduleProvider extends Provider {
   readonly scheduler: Scheduler
   #booted = false
@@ -168,10 +171,17 @@ export class ScheduleProvider extends Provider {
   }
 
   override async start(): Promise<void> {
+    if (activeProvider !== undefined && activeProvider !== this) {
+      // A previous app's scheduler is still running — stop it before this one starts,
+      // otherwise every @Schedule task fires twice per tick.
+      activeProvider.scheduler.stop()
+    }
+    activeProvider = this
     this.scheduler.start()
   }
 
   override async shutdown(): Promise<void> {
+    if (activeProvider === this) activeProvider = undefined
     this.scheduler.stop()
   }
 }

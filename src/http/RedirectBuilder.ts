@@ -13,6 +13,18 @@ import type { Response } from './Response.js'
 
 export type RouteUrlResolver = (name: string, params?: Record<string, string>) => string
 
+function isSameOriginOrRelative(referer: string, requestUrl?: string): boolean {
+  if (referer.startsWith('/') && !referer.startsWith('//')) return true
+  if (!requestUrl) return false
+  try {
+    const ref = new URL(referer)
+    const req = new URL(requestUrl)
+    return ref.origin === req.origin
+  } catch {
+    return false
+  }
+}
+
 export class RedirectBuilder {
   #response: Response
   #status = 302
@@ -69,10 +81,18 @@ export class RedirectBuilder {
     this.toPath(path)
   }
 
-  /** Redirect back to the previous page (Referer header). */
+  /**
+   * Redirect back to the previous page (Referer header).
+   * Only trusts same-origin or relative referers — external URLs fall back
+   * to `fallback` to prevent open redirect attacks.
+   */
   back(fallback = '/'): void {
-    const referer = this.#requestReferer ?? fallback
-    this.toPath(referer)
+    const referer = this.#requestReferer
+    if (referer && isSameOriginOrRelative(referer, this.#requestUrl)) {
+      this.toPath(referer)
+    } else {
+      this.toPath(fallback)
+    }
   }
 
   #appendQs(path: string): string {
