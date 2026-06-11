@@ -71,3 +71,53 @@ describe('BodyParserMiddleware — raw text', () => {
     expect(ctx.request.body()).toEqual({ _body: '<doc/>' })
   })
 })
+
+describe('BodyParserMiddleware — multipart limits', () => {
+  function makeMultipartCtx(
+    fields: Array<{ name: string; value: string }>,
+    files: Array<{ size: number }> = [],
+  ): HttpContext {
+    const raw: RawRequest = {
+      method: 'POST',
+      path: '/',
+      query: '',
+      headers: { 'content-type': 'multipart/form-data; boundary=x' },
+      body: '',
+      multipart: {
+        fields,
+        files: files.map((f, i) => ({
+          fieldName: `f${i}`,
+          clientName: `f${i}.bin`,
+          contentType: 'application/octet-stream',
+          size: f.size,
+          contentB64: '',
+        })),
+      },
+    }
+    return new HttpContext('test', raw, {}, { pattern: '/', middleware: [] })
+  }
+
+  it('rejects with 400 E_TOO_MANY_FIELDS when fields exceed maxFields', async () => {
+    let nextCalled = false
+    const ctx = makeMultipartCtx([
+      { name: 'a', value: '1' },
+      { name: 'b', value: '2' },
+      { name: 'c', value: '3' },
+    ])
+    await new BodyParserMiddleware({ multipart: { maxFields: 2 } }).handle(ctx, async () => {
+      nextCalled = true
+    })
+    expect(ctx.response.getStatus()).toBe(400)
+    expect(ctx.response.getBody()).toContain('E_TOO_MANY_FIELDS')
+    expect(nextCalled).toBe(false)
+  })
+
+  it('allows the request when fields are within maxFields', async () => {
+    let nextCalled = false
+    const ctx = makeMultipartCtx([{ name: 'a', value: '1' }])
+    await new BodyParserMiddleware({ multipart: { maxFields: 2 } }).handle(ctx, async () => {
+      nextCalled = true
+    })
+    expect(nextCalled).toBe(true)
+  })
+})

@@ -121,7 +121,12 @@ export class RouteBuilder {
     return this
   }
 
-  /** Attach a validator. */
+  /**
+   * Tag a validator name on the route. NOTE: this is currently **metadata only**
+   * — it is consumed by the OpenAPI generator to attach a requestBody schema and
+   * is NOT executed at request time (ream ships no runtime validation engine yet).
+   * Do not rely on this to validate input; validate explicitly in your handler.
+   */
   validate(validator: string): this {
     this.#route.validators.push(validator)
     return this
@@ -605,10 +610,7 @@ export class Router {
         // to END at the placeholder boundary. Keys are validated identifiers
         // in route paths, but escape defensively (caller-supplied object).
         const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        url = url.replace(
-          new RegExp(`:${escaped}\\??(?![\\w])`, 'g'),
-          encodeURIComponent(value),
-        )
+        url = url.replace(new RegExp(`:${escaped}\\??(?![\\w])`, 'g'), encodeURIComponent(value))
       }
     }
     // Strip remaining optional placeholders (`:name?` segments not provided).

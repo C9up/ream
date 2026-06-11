@@ -81,4 +81,3 @@ export function getInjectTokens(target: AnyConstructor): Map<number, string> {
 export function inject(): ClassDecorator {
   return Service({ scope: 'transient' })
 }
-

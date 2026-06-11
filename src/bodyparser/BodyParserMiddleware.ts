@@ -117,7 +117,7 @@ export default class BodyParserMiddleware {
     if (this.#config.multipart.enabled && matchesType(contentType, this.#config.multipart.types)) {
       const payload = ctx.request.multipart()
       if (payload) {
-        if (this.#rejectMultipart(ctx, payload.files)) return
+        if (this.#rejectMultipart(ctx, payload.files, payload.fields)) return
         const { fields, files } = hydrateMultipartPayload(payload)
         ctx.request.setParsedBody(fields)
         ctx.request.setFiles(files)
@@ -138,22 +138,33 @@ export default class BodyParserMiddleware {
   #rejectMultipart(
     ctx: HttpContext,
     files: Array<{ size: number }>,
+    fields: Array<unknown>,
   ): boolean {
     const cfg = this.#config.multipart
     const maxBytes = parseSize(cfg.limit)
 
+    if (fields.length > cfg.maxFields) {
+      ctx.response.status(400).json({
+        error: {
+          code: 'E_TOO_MANY_FIELDS',
+          message: `Upload exceeds maxFields (${cfg.maxFields})`,
+        },
+      })
+      return true
+    }
+
     if (files.length > cfg.maxFiles) {
-      ctx.response
-        .status(400)
-        .json({ error: { code: 'E_TOO_MANY_FILES', message: `Upload exceeds maxFiles (${cfg.maxFiles})` } })
+      ctx.response.status(400).json({
+        error: { code: 'E_TOO_MANY_FILES', message: `Upload exceeds maxFiles (${cfg.maxFiles})` },
+      })
       return true
     }
 
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
     if (totalBytes > maxBytes) {
-      ctx.response
-        .status(413)
-        .json({ error: { code: 'E_REQUEST_ENTITY_TOO_LARGE', message: 'Upload exceeds size limit' } })
+      ctx.response.status(413).json({
+        error: { code: 'E_REQUEST_ENTITY_TOO_LARGE', message: 'Upload exceeds size limit' },
+      })
       return true
     }
 
