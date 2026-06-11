@@ -62,7 +62,11 @@ export class HttpContext {
   /** Authentication state — populated by auth middleware. */
   auth: AuthState = { authenticated: false }
 
-  /** Detected locale. */
+  /**
+   * Request locale — the primary subtag of the first `Accept-Language` entry
+   * (e.g. `fr-CH,fr;q=0.9` → `fr`), defaulting to `en`. Middleware (or i18n)
+   * may override it; it's a plain mutable field.
+   */
   locale = 'en'
 
   /** Per-request key-value store (for middleware to pass data downstream). */
@@ -89,6 +93,7 @@ export class HttpContext {
     this.route = route
     this.request = new Request(rawRequest, params)
     this.response = new Response()
+    this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
 
     // Wire redirect builder with request context
     this.response.setRedirectFactory(
@@ -105,4 +110,12 @@ export class HttpContext {
   setRouteUrlResolver(resolver: RouteUrlResolver): void {
     this.#routeUrlResolver = resolver
   }
+}
+
+/** Primary subtag of the first Accept-Language entry: `fr-CH,fr;q=0.9` → `fr`. */
+function parseAcceptLanguage(header: string | undefined): string | undefined {
+  if (!header) return undefined
+  const first = header.split(',')[0]?.trim().split(';')[0]?.trim()
+  const primary = first?.split('-')[0]?.toLowerCase()
+  return primary || undefined
 }
