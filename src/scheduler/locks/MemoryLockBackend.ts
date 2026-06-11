@@ -81,4 +81,3 @@ export class MemoryLockBackend implements LockBackend {
     return this.#locks.size
   }
 }
-
