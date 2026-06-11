@@ -63,10 +63,6 @@ export interface ReamrcConfig {
     /** Auto-loaded files in each module directory. Default: ['routes'] */
     autoload?: string[]
   }
-  tests?: {
-    suites?: Array<{ name: string; files: string[]; timeout?: number }>
-    forceExit?: boolean
-  }
 }
 
 /** defineConfig helper — like AdonisJS defineConfig(). */
