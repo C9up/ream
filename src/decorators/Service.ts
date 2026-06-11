@@ -5,7 +5,7 @@
  */
 
 import 'reflect-metadata'
-import type { ServiceMetadata, ServiceScope } from '../container/types.js'
+import type { ServiceMetadata, ServiceScope, ServiceToken } from '../container/types.js'
 
 const SERVICE_METADATA_KEY = Symbol('ream:service')
 const INJECT_METADATA_KEY = Symbol('ream:inject')
@@ -50,9 +50,9 @@ export function Service(options: { scope?: ServiceScope; as?: string } = {}): Cl
  *
  * @implements FR16
  */
-export function Inject(token: string): ParameterDecorator {
+export function Inject(token: ServiceToken): ParameterDecorator {
   return (target, _propertyKey, parameterIndex) => {
-    const existingTokens: Map<number, string> =
+    const existingTokens: Map<number, ServiceToken> =
       Reflect.getOwnMetadata(INJECT_METADATA_KEY, target) ?? new Map()
     existingTokens.set(parameterIndex, token)
     Reflect.defineMetadata(INJECT_METADATA_KEY, existingTokens, target)
@@ -62,7 +62,7 @@ export function Inject(token: string): ParameterDecorator {
 /**
  * Get named injection tokens for a class constructor.
  */
-export function getInjectTokens(target: AnyConstructor): Map<number, string> {
+export function getInjectTokens(target: AnyConstructor): Map<number, ServiceToken> {
   return Reflect.getOwnMetadata(INJECT_METADATA_KEY, target) ?? new Map()
 }
 
