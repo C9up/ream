@@ -88,11 +88,18 @@ export class Application implements AppContext {
 
   // ─── Signal handling ──────────────────────────────────────
 
+  /** Signal handlers installed via listen()/listenIf(), removed on shutdown. */
+  #signalHandlers: Array<[NodeJS.Signals, () => void]> = []
+
   /**
    * Listen for a process signal.
    * Like AdonisJS app.listen('SIGTERM', () => app.terminate()).
+   * Tracked and removed on shutdown() — otherwise every boot/stop cycle leaks
+   * a process listener, and a real signal would fire the handlers of every
+   * previously stopped app instance.
    */
   listen(signal: NodeJS.Signals, callback: () => void): void {
+    this.#signalHandlers.push([signal, callback])
     process.on(signal, callback)
   }
 
@@ -102,7 +109,7 @@ export class Application implements AppContext {
    */
   listenIf(condition: boolean, signal: NodeJS.Signals, callback: () => void): void {
     if (condition) {
-      process.on(signal, callback)
+      this.listen(signal, callback)
     }
   }
 
@@ -149,17 +156,41 @@ export class Application implements AppContext {
     }
   }
 
-  /** Shutdown all providers in reverse order. */
+  /**
+   * Shutdown all providers in reverse order. Each hook/provider shutdown is
+   * isolated: one throwing provider must not prevent the remaining providers
+   * from closing their resources (DB pools, queues). Errors are aggregated.
+   */
   async shutdown(): Promise<void> {
-    // Run shutdown hooks
+    const errors: unknown[] = []
+
     for (const hook of this._shutdownHooks) {
-      await hook()
+      try {
+        await hook()
+      } catch (err) {
+        errors.push(err)
+      }
     }
 
     for (const provider of [...this.providers].reverse()) {
-      await callProviderPhase(provider, 'shutdown')
+      try {
+        await callProviderPhase(provider, 'shutdown')
+      } catch (err) {
+        errors.push(err)
+      }
     }
+
+    // Remove the process signal handlers this app installed.
+    for (const [signal, callback] of this.#signalHandlers) {
+      process.off(signal, callback)
+    }
+    this.#signalHandlers = []
+
     this._booted = false
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Application.shutdown() completed with errors')
+    }
   }
 
   /** Register a shutdown hook. */

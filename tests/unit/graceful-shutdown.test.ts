@@ -67,7 +67,7 @@ describe('ream > installGracefulShutdown', () => {
       logger,
     })
 
-    await expect(handle.trigger()).rejects.toThrow('__exit_0__')
+    await expect(handle.trigger()).rejects.toThrow('__exit_1__')
     expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/drain-fail/))
 
     handle.cleanup()
@@ -86,7 +86,7 @@ describe('ream > installGracefulShutdown', () => {
       logger,
     })
 
-    await expect(handle.trigger()).rejects.toThrow('__exit_0__')
+    await expect(handle.trigger()).rejects.toThrow('__exit_1__')
     expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/Drain timeout exceeded/))
     // Resolve the dangling drain promise so vitest doesn't carry an
     // unresolved task into the next test.

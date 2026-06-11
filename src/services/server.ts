@@ -16,6 +16,14 @@ export function setServer(server: Server): void {
   instance = server
 }
 
+/**
+ * @internal Unset the locator IF it still points at `server` (called by
+ * Ignitor.stop()). Ownership-guarded — see services/app.ts.
+ */
+export function clearServer(server: Server): void {
+  if (instance === server) instance = undefined
+}
+
 /** @internal Get the server instance directly. */
 export function getServer(): Server | undefined {
   return instance

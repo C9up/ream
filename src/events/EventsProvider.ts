@@ -23,6 +23,8 @@ export interface EventsAppContext {
 }
 
 export default class EventsProvider {
+  #emitter: Emitter | undefined
+
   constructor(protected app: EventsAppContext) {}
 
   register() {
@@ -47,12 +49,12 @@ export default class EventsProvider {
   }
 
   async boot() {
-    const emitter = this.app.container.resolve<Emitter>(Emitter)
-    BaseEvent.useEmitter(emitter)
-    setEmitter(emitter)
+    this.#emitter = this.app.container.resolve<Emitter>(Emitter)
+    BaseEvent.useEmitter(this.#emitter)
+    setEmitter(this.#emitter)
   }
 
   async shutdown() {
-    BaseEvent.resetEmitter()
+    if (this.#emitter) BaseEvent.resetEmitter(this.#emitter)
   }
 }

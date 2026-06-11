@@ -12,7 +12,11 @@
  * Listeners support @inject() for DI when a container resolver is provided.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { EventBus } from './native.js'
+
+/** Per-request correlation ID stored in async context so concurrent requests don't corrupt each other. */
+const correlationStorage = new AsyncLocalStorage<string>()
 
 /**
  * Listener class interface — must have a handle() method.
@@ -229,38 +233,27 @@ export class Emitter {
 
   // ─── Correlation context ──────────────────────────────────
 
-  /** Current correlation ID for event chain tracing. */
-  private _correlationId?: string
-
-  /** Set the correlation ID for subsequent events (typically from HTTP request context). */
-  setCorrelationId(id: string): void {
-    this._correlationId = id
-  }
-
-  /** Get the current correlation ID. */
-  getCorrelationId(): string | undefined {
-    return this._correlationId
-  }
-
   /**
-   * Inject the active correlation ID at the top level of the payload so
-   * the bus's Event envelope (`{ id, name, data, correlationId, ... }`)
-   * surfaces it on the subscriber side — both the Rust `ream-events`
-   * envelope serde and `FakeBus.parseEmitData()` already read
-   * `correlationId` from the parsed `data` string. Without this injection
-   * `setCorrelationId()` was a no-op functional API. Returns `data`
-   * unchanged when no correlation ID is set OR when `data` is not a plain
-   * object (primitives / arrays / null can't carry a sibling field).
+   * Set the correlation ID for subsequent events in the current async context.
+   * Uses AsyncLocalStorage so concurrent requests each have their own trace ID —
+   * a shared mutable field would let concurrent requests corrupt each other.
    */
+  setCorrelationId(id: string): void {
+    correlationStorage.enterWith(id)
+  }
+
+  /** Get the correlation ID for the current async context. */
+  getCorrelationId(): string | undefined {
+    return correlationStorage.getStore()
+  }
+
+  /** Inject the active correlation ID at the top level of the payload. */
   #wrapForBus(data: unknown): unknown {
-    if (this._correlationId === undefined) return data
-    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-      return data
-    }
-    const obj = data as Record<string, unknown>
-    // User-supplied correlationId wins — don't clobber an explicit value.
-    if (typeof obj.correlationId === 'string') return data
-    return { ...obj, correlationId: this._correlationId }
+    const correlationId = correlationStorage.getStore()
+    if (correlationId === undefined) return data
+    if (!isPlainObject(data)) return data
+    if (typeof data.correlationId === 'string') return data
+    return { ...data, correlationId }
   }
 
   // ─── Introspection ────────────────────────────────────────
@@ -304,8 +297,9 @@ export class BaseEvent {
     BaseEvent._emitter = emitter
   }
 
-  static resetEmitter(): void {
-    BaseEvent._emitter = undefined
+  /** @internal Ownership-guarded reset — only clears if `emitter` is still the active one. */
+  static resetEmitter(emitter: Emitter): void {
+    if (BaseEvent._emitter === emitter) BaseEvent._emitter = undefined
   }
 
   /**
@@ -330,4 +324,8 @@ function classToEventName(cls: EventConstructor): string {
 /** Check if a listener entry is a class (has prototype.handle) vs a function. */
 function isListenerClass(listener: Listener): boolean {
   return typeof listener === 'function' && typeof listener.prototype?.handle === 'function'
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

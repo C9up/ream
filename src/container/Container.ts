@@ -158,15 +158,12 @@ export class Container {
     const paramTypes: unknown[] =
       Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
 
-    const args = paramTypes.map((type, index) => {
-      // Runtime values take precedence
-      if (runtimeValues && index < runtimeValues.length) {
-        return runtimeValues[index]
-      }
-      // Auto-resolve class dependencies — type is a constructor function here
-      if (isClassConstructor(type)) {
-        return this.resolve(type)
-      }
+    const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0)
+    const args = Array.from({ length: len }, (_, index) => {
+      // Runtime values take precedence (and fill slots beyond paramTypes)
+      if (runtimeValues && index < runtimeValues.length) return runtimeValues[index]
+      const type = paramTypes[index]
+      if (isClassConstructor(type)) return this.resolve(type)
       return undefined
     })
 

@@ -29,20 +29,25 @@ export function installGracefulShutdown(options: ShutdownOptions): ShutdownHandl
   const logger = options.logger ?? { info: () => {}, error: () => {} }
   let shutdownInProgress = false
 
+  let hadError = false
+
   const shutdown = async () => {
     if (shutdownInProgress) return
     shutdownInProgress = true
 
     logger.info('Graceful shutdown initiated...')
 
+    let timedOut = false
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 
     const drainPromise = options.onShutdown().catch((err) => {
+      hadError = true
       logger.error(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`)
     })
 
     const timeoutPromise = new Promise<void>((resolve) => {
       timeoutHandle = setTimeout(() => {
+        timedOut = true
         logger.error(`Drain timeout exceeded (${drainTimeout}ms) — forcing shutdown`)
         resolve()
       }, drainTimeout)
@@ -52,21 +57,24 @@ export function installGracefulShutdown(options: ShutdownOptions): ShutdownHandl
     if (timeoutHandle) clearTimeout(timeoutHandle)
 
     logger.info('Shutdown complete')
-    process.exit(0)
+    process.exit(hadError || timedOut ? 1 : 0)
   }
 
-  const onSigterm = () => {
+  const handleSignal = () => {
+    if (shutdownInProgress) {
+      // Second signal while draining — escalate immediately.
+      logger.error('Forced exit: second signal received during shutdown')
+      process.exit(1)
+      return
+    }
     shutdown().catch((err) => {
       logger.error(`Fatal: ${err}`)
       process.exit(1)
     })
   }
-  const onSigint = () => {
-    shutdown().catch((err) => {
-      logger.error(`Fatal: ${err}`)
-      process.exit(1)
-    })
-  }
+
+  const onSigterm = handleSignal
+  const onSigint = handleSignal
 
   process.on('SIGTERM', onSigterm)
   process.on('SIGINT', onSigint)

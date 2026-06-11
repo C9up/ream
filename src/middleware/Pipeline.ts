@@ -55,10 +55,19 @@ export class MiddlewareRegistry {
     const stack: MiddlewareFunction[] = [
       // 1. Global middleware
       ...this.#global,
-      // 2. Named middleware
-      ...namedMiddleware
-        .map((name) => this.#named.get(name))
-        .filter((mw): mw is MiddlewareFunction => mw !== undefined),
+      // 2. Named middleware — an unknown name is a hard error, NOT a silent
+      // skip: a typo'd `.middleware('auht')` must never run the route
+      // unprotected with zero diagnostics.
+      ...namedMiddleware.map((name) => {
+        const mw = this.#named.get(name)
+        if (mw === undefined) {
+          throw new Error(
+            `[E_MIDDLEWARE_NOT_FOUND] Named middleware '${name}' is not registered. ` +
+              `Registered: ${[...this.#named.keys()].join(', ') || '(none)'}`,
+          )
+        }
+        return mw
+      }),
       // 3. Inline middleware
       ...inlineMiddleware,
       // 4. Guard enforcement (throws exceptions instead of setting response)

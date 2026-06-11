@@ -82,4 +82,3 @@ export function inject(): ClassDecorator {
   return Service({ scope: 'transient' })
 }
 
-export { INJECT_METADATA_KEY, SERVICE_METADATA_KEY }

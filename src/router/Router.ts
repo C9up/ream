@@ -5,6 +5,7 @@
  */
 
 import type { HttpContext } from '../http/HttpContext.js'
+import { safeDecodeURIComponent } from '../http/urlDecode.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { MiddlewareEntry } from '../server/Server.js'
 import { resolveMiddlewareEntry } from '../server/Server.js'
@@ -572,6 +573,13 @@ export class Router {
       }
     }
 
+    // HEAD falls back to the matching GET route (RFC 9110 §9.3.2 semantics —
+    // same headers, no body). Without this, `curl -I` and LB health probes
+    // 404 on every GET-only route.
+    if (method === 'HEAD') {
+      return this.match('GET', path, host)
+    }
+
     return undefined
   }
 
@@ -592,9 +600,15 @@ export class Router {
     let url = route.path
     if (params) {
       for (const [key, value] of Object.entries(params)) {
-        url = url
-          .replace(`:${key}?`, encodeURIComponent(value))
-          .replace(`:${key}`, encodeURIComponent(value))
+        // Word-boundary substitution: a bare `.replace(':id')` would corrupt
+        // `:idx` (`/x/:idx` → `/x/42x`). The lookahead requires the param name
+        // to END at the placeholder boundary. Keys are validated identifiers
+        // in route paths, but escape defensively (caller-supplied object).
+        const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        url = url.replace(
+          new RegExp(`:${escaped}\\??(?![\\w])`, 'g'),
+          encodeURIComponent(value),
+        )
       }
     }
     // Strip remaining optional placeholders (`:name?` segments not provided).
@@ -617,9 +631,17 @@ export class Router {
     return [...this.#routes]
   }
 
-  /** Clear all registered routes (used by hot-reload). */
+  /**
+   * Clear all registered routes AND registries (used by hot-reload). Router
+   * middleware, named middleware, and global matchers are reset too — the
+   * preloads that registered them re-run on reload, so keeping them would
+   * accumulate duplicates (middleware executing N+1 times after N reloads).
+   */
   clear(): void {
     this.#routes = []
+    this.#routerMiddleware = []
+    this.#namedMiddleware.clear()
+    this.#globalMatchers = {}
     this.#indexDirty = true
   }
 
@@ -660,6 +682,10 @@ export class Router {
       const matcher = matcherMap[param]
       if (!matcher) continue
       const regex = matcher instanceof RegExp ? matcher : matcher.pattern
+      // A user-supplied /g or /y regex is stateful (`lastIndex` advances on
+      // match) — without a reset, the same URL alternates match/no-match
+      // across requests. Reset before every test.
+      if (regex.global || regex.sticky) regex.lastIndex = 0
       if (!regex.test(value)) return false
     }
     return true
@@ -684,12 +710,17 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
     for (let i = 0; i < wildcardIdx; i++) {
       const part = patternParts[i]
       if (part.startsWith(':')) {
-        params[part.substring(1)] = actualParts[i]
+        params[part.substring(1)] = safeDecodeURIComponent(actualParts[i])
       } else if (part !== actualParts[i]) {
         return null
       }
     }
-    params['*'] = actualParts.slice(wildcardIdx).join('/')
+    // Decode per segment, then rejoin — an encoded `/` inside a segment stays
+    // a value character, the path structure was already split on raw `/`.
+    params['*'] = actualParts
+      .slice(wildcardIdx)
+      .map((s) => safeDecodeURIComponent(s))
+      .join('/')
     return params
   }
 
@@ -708,7 +739,10 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
     if (part.startsWith(':')) {
       const paramName = isOptional ? part.slice(1, -1) : part.substring(1)
       if (i < actualParts.length) {
-        params[paramName] = actualParts[i]
+        // Percent-decode the captured segment (query strings already are) so
+        // `/users/Jos%C3%A9` yields `José` and matchers test the real value.
+        // safeDecode falls back to the raw segment on malformed input.
+        params[paramName] = safeDecodeURIComponent(actualParts[i])
       }
       // Optional param with no actual part — skip (param not set)
     } else if (i < actualParts.length && part !== actualParts[i]) {
