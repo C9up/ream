@@ -12,13 +12,22 @@
  */
 
 import { ReamError } from '../errors/ReamError.js'
-import { E_FORBIDDEN, E_UNAUTHORIZED } from '../http/Exception.js'
+import { E_FORBIDDEN, E_UNAUTHORIZED, E_VALIDATION_ERROR } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 
 export type MiddlewareFunction = (
   ctx: HttpContext,
   next: () => Promise<void>,
 ) => Promise<void> | void
+
+/**
+ * Structural contract for a route validator. A `@c9up/rune` schema matches this
+ * shape, so ream stays decoupled from the validation engine — any object with a
+ * `validate(data)` returning `{ valid, errors, data? }` works.
+ */
+export interface RuntimeValidator {
+  validate(data: unknown): { valid: boolean; errors: unknown[]; data?: unknown }
+}
 
 /** Named middleware registry. */
 export class MiddlewareRegistry {
@@ -50,7 +59,12 @@ export class MiddlewareRegistry {
     namedMiddleware: string[],
     inlineMiddleware: MiddlewareFunction[],
     handler: MiddlewareFunction,
-    options?: { guards?: string[]; roles?: string[]; permissions?: string[] },
+    options?: {
+      guards?: string[]
+      roles?: string[]
+      permissions?: string[]
+      validators?: RuntimeValidator[]
+    },
   ): MiddlewareFunction {
     const stack: MiddlewareFunction[] = [
       // 1. Global middleware
@@ -75,6 +89,11 @@ export class MiddlewareRegistry {
       (options?.roles?.length ?? 0) > 0 ||
       (options?.permissions?.length ?? 0) > 0
         ? [createGuardMiddleware(options?.guards ?? [], options?.roles, options?.permissions)]
+        : []),
+      // 4b. Validation — runs AFTER auth (so unauthenticated requests 401 before
+      // the body is inspected) and BEFORE the handler.
+      ...((options?.validators?.length ?? 0) > 0
+        ? [createValidationMiddleware(options?.validators ?? [])]
         : []),
       // 5. Handler
       handler,
@@ -138,6 +157,26 @@ function createGuardMiddleware(
       }
     }
 
+    await next()
+  }
+}
+
+/**
+ * Validation enforcement middleware. Runs each resolved route validator against
+ * the request body; the first failure throws `E_VALIDATION_ERROR` (422). On
+ * success the sanitized/coerced payload is stored on `request.validated()`.
+ */
+function createValidationMiddleware(validators: RuntimeValidator[]): MiddlewareFunction {
+  return async (ctx, next) => {
+    for (const validator of validators) {
+      const result = validator.validate(ctx.request.body())
+      if (!result.valid) {
+        throw new E_VALIDATION_ERROR(result.errors)
+      }
+      if (result.data !== undefined) {
+        ctx.request.setValidated(result.data)
+      }
+    }
     await next()
   }
 }

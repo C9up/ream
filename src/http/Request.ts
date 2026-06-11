@@ -55,6 +55,7 @@ export class Request {
   #parsedQs: Dict<unknown> | undefined
   #merged: Dict<unknown> | undefined
   #files: Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> = new Map()
+  #validated: unknown
 
   /**
    * CSRF token for this request (AdonisJS idiom: `request.csrfToken`). Seeded
@@ -374,6 +375,25 @@ export class Request {
   setParsedBody(body: Dict<unknown>): void {
     this.#parsedBody = body
     this.#merged = undefined // reset merged cache
+  }
+
+  /**
+   * @internal Store the validated + transformed payload (called by the
+   * validation middleware after a route validator passes).
+   */
+  setValidated(data: unknown): void {
+    this.#validated = data
+  }
+
+  /**
+   * The validated + coerced payload produced by the route's `.validate()`
+   * validator, or `undefined` when the route declares no validator. Prefer
+   * this over `body()` in a validated handler — it carries the sanitized,
+   * type-coerced values, not the raw input. Returns `unknown`; narrow it at
+   * the call site (the validator already guaranteed the shape).
+   */
+  validated(): unknown {
+    return this.#validated
   }
 
   #ensureParsedBody(): void {

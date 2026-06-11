@@ -122,10 +122,19 @@ export class RouteBuilder {
   }
 
   /**
-   * Tag a validator name on the route. NOTE: this is currently **metadata only**
-   * — it is consumed by the OpenAPI generator to attach a requestBody schema and
-   * is NOT executed at request time (ream ships no runtime validation engine yet).
-   * Do not rely on this to validate input; validate explicitly in your handler.
+   * Validate the request body against a named validator. At request time the
+   * kernel resolves the validator from the IoC container under the token
+   * `validator:<name>` and runs it after the auth guards and before the handler;
+   * a failure short-circuits with `422 E_VALIDATION_ERROR` and the validated,
+   * coerced payload is exposed on `ctx.request.validated()`. The same name also
+   * feeds the OpenAPI generator's requestBody schema.
+   *
+   * Register the validator (any object with `validate(data) => { valid, errors,
+   * data? }`, e.g. a `@c9up/rune` schema):
+   *
+   *     container.singleton('validator:createUser', () => schema({ ... }))
+   *
+   * An unregistered name is a hard error — validation is never silently skipped.
    */
   validate(validator: string): this {
     this.#route.validators.push(validator)
