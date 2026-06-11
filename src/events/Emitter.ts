@@ -60,8 +60,9 @@ export class Emitter {
   /**
    * Listen for a string-based event.
    *   emitter.on('user:registered', (user) => { ... })
+   *   emitter.on<User>('user:registered', (user) => { ... })  // typed payload
    */
-  on(event: string, listener: ListenerFn): void
+  on<T>(event: string, listener: ListenerFn<T>): void
   on(event: EventConstructor | string, listener: Listener): void {
     if (typeof event === 'string') {
       const list = this.stringListeners.get(event) ?? []
