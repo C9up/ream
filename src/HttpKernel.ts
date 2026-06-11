@@ -14,7 +14,11 @@ import type { Container } from './container/Container.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { HttpContext } from './http/HttpContext.js'
-import type { MiddlewareFunction, MiddlewareRegistry } from './middleware/Pipeline.js'
+import type {
+  MiddlewareFunction,
+  MiddlewareRegistry,
+  RuntimeValidator,
+} from './middleware/Pipeline.js'
 import { compose } from './middleware/Pipeline.js'
 import type { RouteDefinition, Router } from './router/Router.js'
 import type { Dict } from './types/helpers.js'
@@ -180,6 +184,21 @@ export function createHttpKernel(
             permissions = [...permissions, ...meta.permissions]
           }
 
+          // Resolve route validators by name (container token `validator:<name>`).
+          // A declared validator that isn't registered is a HARD error — never
+          // silently skip validation, that's a security footgun (a typo'd
+          // `.validate('craeteUser')` must fail loudly, not pass unvalidated).
+          const validators: RuntimeValidator[] = match.route.validators.map((name) => {
+            const token = `validator:${name}`
+            if (!config.container?.has(token)) {
+              throw new Error(
+                `[E_VALIDATOR_NOT_FOUND] Route validator '${name}' is not registered. ` +
+                  `Bind it with container.singleton('${token}', () => schema({ ... })).`,
+              )
+            }
+            return config.container.resolve<RuntimeValidator>(token)
+          })
+
           // Compile pipeline once
           const chain = config.middleware.buildChain(
             match.route.middleware,
@@ -187,7 +206,7 @@ export function createHttpKernel(
             async (c) => {
               await routeHandler(c)
             },
-            { guards, roles, permissions },
+            { guards, roles, permissions, validators },
           )
 
           cached = { chain }
