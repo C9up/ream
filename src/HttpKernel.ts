@@ -137,6 +137,14 @@ export function createHttpKernel(
     const ctx = new HttpContext(correlationId, reqData, match?.params ?? {}, routeInfo)
     ctx.setRouteUrlResolver((name, params) => config.router.makeUrl(name, params))
     ctx.events = resolveEvents()
+    // Core lifecycle event: a request entered the kernel. Fire-and-forget through
+    // the bus when events are wired (`?.` → zero cost when no provider). The
+    // `http:response` counterpart fires before every exit below.
+    ctx.events?.emit('http:request', {
+      id: correlationId,
+      method: reqData.method,
+      path: reqData.path,
+    })
     // Wire the streaming backend so `ctx.response.sse()` can talk to
     // the HyperServer NAPI. Falls back silently when no backend is
     // available (mock server, websocket-only host) — the SSE helper
@@ -232,6 +240,12 @@ export function createHttpKernel(
       const fullPipeline = compose([...serverMw, coreHandler])
       await fullPipeline(ctx, async () => {})
 
+      ctx.events?.emit('http:response', {
+        id: correlationId,
+        method: reqData.method,
+        path: reqData.path,
+        status: ctx.response.getStatus(),
+      })
       return serializeResponse(ctx)
     } catch (error) {
       // If the handler opened an SSE stream via `response.sse()` and
@@ -264,6 +278,12 @@ export function createHttpKernel(
         error: error instanceof Error ? error.message : String(error),
       })
 
+      ctx.events?.emit('http:response', {
+        id: correlationId,
+        method: reqData.method,
+        path: reqData.path,
+        status: ctx.response.getStatus(),
+      })
       return serializeResponse(ctx)
     }
   }
