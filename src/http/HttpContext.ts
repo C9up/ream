@@ -27,6 +27,23 @@ export interface AuthState {
   permissions?: string[]
 }
 
+/**
+ * Per-request authorization entry point — populated by an authorization
+ * middleware (e.g. `@c9up/warden`'s Bouncer initializer). A structural
+ * contract only: Ream stays agnostic of any concrete authorization package,
+ * exactly as `auth` is a slot that Warden fills. A handler authorizes via
+ * `await ctx.bouncer?.authorize('post.edit', post)` (throws on denial, mapped
+ * to 403 by the ExceptionHandler) or branches on `ctx.bouncer?.allows(...)`.
+ */
+export interface Authorizer {
+  /** True iff the action is authorized. Never throws on denial. */
+  allows(ability: string, ...args: unknown[]): Promise<boolean>
+  /** Boolean negation of {@link allows}. Never throws on denial. */
+  denies(ability: string, ...args: unknown[]): Promise<boolean>
+  /** Resolves on allow; throws an authorization failure (status 403) on deny. */
+  authorize(ability: string, ...args: unknown[]): Promise<void>
+}
+
 export interface RouteInfo {
   pattern: string
   name?: string
@@ -78,6 +95,13 @@ export class HttpContext {
    * `ctx.events?.emit('user:updated', user)`. Undefined when events aren't wired.
    */
   events?: Emitter
+
+  /**
+   * Per-request authorization entry point, when an authorization middleware
+   * is wired (e.g. `@c9up/warden`'s Bouncer initializer). Undefined when no
+   * such middleware ran. See {@link Authorizer}.
+   */
+  bouncer?: Authorizer
 
   /** Route URL resolver for redirect().toRoute(). */
   #routeUrlResolver?: RouteUrlResolver

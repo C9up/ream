@@ -25,7 +25,7 @@ export {
   Exception,
   ExceptionHandler,
 } from './http/Exception.js'
-export type { AuthState, RouteInfo } from './http/HttpContext.js'
+export type { Authorizer, AuthState, RouteInfo } from './http/HttpContext.js'
 export { HttpContext } from './http/HttpContext.js'
 export { RedirectBuilder } from './http/RedirectBuilder.js'
 export type { RawRequest } from './http/Request.js'
