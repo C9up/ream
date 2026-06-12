@@ -15,6 +15,7 @@
  * @implements Story 24.5
  */
 
+import { ReamError } from '../errors/ReamError.js'
 import type { AppContext } from '../Provider.js'
 import { Provider } from '../Provider.js'
 import type { Router } from '../router/Router.js'
@@ -42,9 +43,23 @@ export class GraphQLProvider extends Provider {
     const config = this.app.config.get<GraphQLConfig>('graphql')
     const engine = this.#engine ?? (config?.schemaPath ? new GraphQLEngine(config) : undefined)
     if (!engine) return // GraphQL not configured — opt-out.
-    engine.useContainer(this.app.container)
+    const container = this.app.container
+    if (container.has('graphql')) {
+      if (container.resolve('graphql') === engine) {
+        this.#engine = engine
+        return // re-register is idempotent
+      }
+      throw new ReamError(
+        'GRAPHQL_PROVIDER_ALREADY_REGISTERED',
+        "Container token 'graphql' is already bound to a different instance",
+        {
+          hint: 'Only one GraphQLProvider can own the graphql binding. Remove the duplicate provider from your reamrc.ts.',
+        },
+      )
+    }
+    engine.useContainer(container)
     this.#engine = engine
-    this.app.container.singleton('graphql', () => engine)
+    container.singleton('graphql', () => engine)
   }
 
   override async boot(): Promise<void> {
