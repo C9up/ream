@@ -55,6 +55,57 @@ describe('events > ctx.events wiring', () => {
     expect(errors[0].error).toBe('kaboom')
   })
 
+  it('emits "http:request" then "http:response" around a successful request', async () => {
+    const container = new Container()
+    new EventsProvider({ container }).register()
+    const emitter = container.resolve<Emitter>('events')
+    const order: string[] = []
+    const payloads: unknown[] = []
+    emitter.on('http:request', (p) => {
+      order.push('http:request')
+      payloads.push(p)
+    })
+    emitter.on('http:response', (p) => {
+      order.push('http:response')
+      payloads.push(p)
+    })
+
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+    router.get('/ping', async (ctx) => {
+      ctx.response.status(201).json({ ok: true })
+    })
+
+    const kernel = createHttpKernel({ router, middleware, container })
+    const res = await kernel(req('/ping'))
+
+    expect(res.status).toBe(201)
+    expect(order).toEqual(['http:request', 'http:response'])
+    expect(payloads[0]).toMatchObject({ method: 'GET', path: '/ping' })
+    expect(payloads[1]).toMatchObject({ method: 'GET', path: '/ping', status: 201 })
+  })
+
+  it('emits "http:response" on the error path with the error status', async () => {
+    const container = new Container()
+    new EventsProvider({ container }).register()
+    const emitter = container.resolve<Emitter>('events')
+    const responses: unknown[] = []
+    emitter.on('http:response', (p) => responses.push(p))
+
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+    router.get('/boom', async () => {
+      throw new Error('kaboom')
+    })
+
+    const kernel = createHttpKernel({ router, middleware, container })
+    const res = await kernel(req('/boom'))
+
+    expect(res.status).toBe(500)
+    expect(responses).toHaveLength(1)
+    expect(responses[0]).toMatchObject({ path: '/boom', status: 500 })
+  })
+
   it('leaves ctx.events undefined when no EventsProvider is registered', async () => {
     const router = new Router()
     const middleware = new MiddlewareRegistry()
