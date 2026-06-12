@@ -9,10 +9,10 @@
 //! @implements MISS-28
 
 use graphql_parser::query::{
-    parse_query, Definition, Document, OperationDefinition, Selection, Value,
+    parse_query, Definition, Document, FragmentDefinition, OperationDefinition, Selection, Value,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Parsed field from a GraphQL query.
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,33 +56,46 @@ pub fn parse_graphql_query(query: &str) -> ParseResult {
         errors: vec![],
     };
 
+    // Collect named fragment definitions first so spreads can be expanded inline
+    // wherever they appear in the operation's selection set.
+    let mut fragments: HashMap<String, &FragmentDefinition<String>> = HashMap::new();
+    for def in &doc.definitions {
+        if let Definition::Fragment(frag) = def {
+            fragments.insert(frag.name.clone(), frag);
+        }
+    }
+
     for def in &doc.definitions {
         match def {
             Definition::Operation(op) => {
+                let mut visiting: HashSet<String> = HashSet::new();
                 match op {
                     OperationDefinition::Query(q) => {
                         result.operation_type = "query".to_string();
                         result.operation_name = q.name.clone();
-                        result.fields = extract_fields(&q.selection_set.items);
+                        result.fields =
+                            extract_fields(&q.selection_set.items, &fragments, &mut visiting);
                     }
                     OperationDefinition::Mutation(m) => {
                         result.operation_type = "mutation".to_string();
                         result.operation_name = m.name.clone();
-                        result.fields = extract_fields(&m.selection_set.items);
+                        result.fields =
+                            extract_fields(&m.selection_set.items, &fragments, &mut visiting);
                     }
                     OperationDefinition::Subscription(s) => {
                         result.operation_type = "subscription".to_string();
                         result.operation_name = s.name.clone();
-                        result.fields = extract_fields(&s.selection_set.items);
+                        result.fields =
+                            extract_fields(&s.selection_set.items, &fragments, &mut visiting);
                     }
                     OperationDefinition::SelectionSet(ss) => {
                         result.operation_type = "query".to_string();
-                        result.fields = extract_fields(&ss.items);
+                        result.fields = extract_fields(&ss.items, &fragments, &mut visiting);
                     }
                 }
             }
             Definition::Fragment(_) => {
-                // Fragment definitions — not resolved here (future enhancement)
+                // Collected above; nothing to emit at the top level.
             }
         }
     }
@@ -90,18 +103,27 @@ pub fn parse_graphql_query(query: &str) -> ParseResult {
     result
 }
 
-/// Extract fields from a selection set.
-fn extract_fields(selections: &[Selection<String>]) -> Vec<ParsedField> {
+/// Extract fields from a selection set, expanding fragment spreads and inline
+/// fragments inline. `visiting` tracks the named fragments currently being
+/// expanded so a cyclic fragment (`fragment A on T { ...A }`) is skipped instead
+/// of recursing forever.
+fn extract_fields(
+    selections: &[Selection<String>],
+    fragments: &HashMap<String, &FragmentDefinition<String>>,
+    visiting: &mut HashSet<String>,
+) -> Vec<ParsedField> {
     let mut fields = Vec::new();
 
     for sel in selections {
         match sel {
             Selection::Field(f) => {
-                let args = f.arguments.iter().map(|(name, value)| {
-                    (name.clone(), graphql_value_to_json(value))
-                }).collect();
+                let args = f
+                    .arguments
+                    .iter()
+                    .map(|(name, value)| (name.clone(), graphql_value_to_json(value)))
+                    .collect();
 
-                let sub_fields = extract_fields(&f.selection_set.items);
+                let sub_fields = extract_fields(&f.selection_set.items, fragments, visiting);
 
                 fields.push(ParsedField {
                     name: f.name.clone(),
@@ -110,8 +132,28 @@ fn extract_fields(selections: &[Selection<String>]) -> Vec<ParsedField> {
                     sub_fields,
                 });
             }
-            Selection::FragmentSpread(_) | Selection::InlineFragment(_) => {
-                // Fragment handling — future enhancement
+            Selection::FragmentSpread(spread) => {
+                let name = &spread.fragment_name;
+                // Cycle guard: skip a fragment already being expanded on this path.
+                if visiting.contains(name) {
+                    continue;
+                }
+                if let Some(frag) = fragments.get(name) {
+                    visiting.insert(name.clone());
+                    let mut expanded =
+                        extract_fields(&frag.selection_set.items, fragments, visiting);
+                    visiting.remove(name);
+                    fields.append(&mut expanded);
+                }
+                // Unknown fragment name → nothing to expand (spec would error;
+                // here it simply contributes no fields).
+            }
+            Selection::InlineFragment(inline) => {
+                // Inline fragments (`... on Type { ... }` / `... { ... }`) have no
+                // name to cycle on; expand their selection set in place.
+                let mut expanded =
+                    extract_fields(&inline.selection_set.items, fragments, visiting);
+                fields.append(&mut expanded);
             }
         }
     }
@@ -224,5 +266,63 @@ mod tests {
         let result = parse_graphql_query("{ myTasks: tasks { id } }");
         assert_eq!(result.fields[0].name, "tasks");
         assert_eq!(result.fields[0].alias, Some("myTasks".to_string()));
+    }
+
+    #[test]
+    fn test_fragment_spread_is_expanded() {
+        let result = parse_graphql_query(
+            "query { task { ...TaskFields } } fragment TaskFields on Task { id title }",
+        );
+        assert!(result.errors.is_empty());
+        let task = &result.fields[0];
+        assert_eq!(task.name, "task");
+        // The spread expanded into the fragment's fields.
+        let names: Vec<&str> = task.sub_fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["id", "title"]);
+    }
+
+    #[test]
+    fn test_fragment_spread_mixed_with_explicit_fields() {
+        let result = parse_graphql_query(
+            "query { task { id ...Rest } } fragment Rest on Task { title status }",
+        );
+        let task = &result.fields[0];
+        let names: Vec<&str> = task.sub_fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["id", "title", "status"]);
+    }
+
+    #[test]
+    fn test_inline_fragment_is_expanded() {
+        let result = parse_graphql_query("query { node { ... on Task { id title } } }");
+        let node = &result.fields[0];
+        let names: Vec<&str> = node.sub_fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["id", "title"]);
+    }
+
+    #[test]
+    fn test_cyclic_fragment_does_not_loop() {
+        // A self-referential fragment must not recurse forever; the cycle guard
+        // skips the re-entry and the parse simply terminates.
+        let result = parse_graphql_query(
+            "query { task { ...A } } fragment A on Task { id ...A }",
+        );
+        assert!(result.errors.is_empty());
+        let names: Vec<&str> = result.fields[0]
+            .sub_fields
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id"]);
+    }
+
+    #[test]
+    fn test_unknown_fragment_contributes_nothing() {
+        let result = parse_graphql_query("query { task { id ...Missing } }");
+        let names: Vec<&str> = result.fields[0]
+            .sub_fields
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id"]);
     }
 }
