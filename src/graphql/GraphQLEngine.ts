@@ -307,15 +307,18 @@ export class GraphQLEngine {
       return 'Unauthorized'
     }
 
+    // Read roles/permissions from the top level OR nested under `user` — the
+    // auth provider (e.g. warden) sets `ctx.auth.user.roles`, not the top level.
+    // Mirrors the HTTP guard middleware fix.
     if (roles.length > 0) {
-      const userRoles = ctx.auth?.roles ?? []
+      const userRoles = ctx.auth?.roles ?? ctx.auth?.user?.roles ?? []
       if (!roles.some((r) => userRoles.includes(r))) {
         return 'Insufficient role'
       }
     }
 
     if (permissions.length > 0) {
-      const userPerms = ctx.auth?.permissions ?? []
+      const userPerms = ctx.auth?.permissions ?? ctx.auth?.user?.permissions ?? []
       if (!permissions.every((p) => userPerms.includes(p))) {
         return 'Insufficient permissions'
       }
