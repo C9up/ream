@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import type { AppContext } from '../../src/index.js'
-import { Container, RpcProvider, RpcRouter } from '../../src/index.js'
+import { Container, ReamError, RpcProvider, RpcRouter } from '../../src/index.js'
 
 function buildApp(container: Container): AppContext {
   const config = { get: () => undefined, set: () => {} }
@@ -28,6 +28,32 @@ describe('RpcProvider > container binding', () => {
     provider.register()
     expect(container.resolve('rpc')).toBe(provider.rpc)
     expect(provider.rpc).toBeInstanceOf(RpcRouter)
+  })
+
+  // Pinning test (epic-24 retro A1): the collision guard was silently dropped by
+  // the 56.6 refactor and re-added on review — these lock it so a future refactor
+  // cannot erase it unnoticed.
+  it('re-registering the same provider instance is idempotent (no throw)', () => {
+    const container = new Container()
+    const provider = new RpcProvider(buildApp(container))
+    provider.register()
+    expect(() => provider.register()).not.toThrow()
+    expect(container.resolve('rpc')).toBe(provider.rpc)
+  })
+
+  it('throws RPC_PROVIDER_ALREADY_REGISTERED when a different provider claims the `rpc` token', () => {
+    const container = new Container()
+    new RpcProvider(buildApp(container)).register()
+    const other = new RpcProvider(buildApp(container))
+    try {
+      other.register()
+      expect.fail('expected register() to throw on a duplicate rpc binding')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReamError)
+      if (error instanceof ReamError) {
+        expect(error.code).toBe('RPC_PROVIDER_ALREADY_REGISTERED')
+      }
+    }
   })
 })
 
