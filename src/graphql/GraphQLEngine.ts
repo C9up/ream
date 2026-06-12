@@ -40,6 +40,43 @@ interface RustParseResult {
 }
 interface GraphqlNative {
   graphqlParse(query: string): string
+  /** `{ "Type.field": { "argName": "ScalarType" } }` extracted from the SDL. */
+  graphqlSchemaArgTypes(sdl: string): string
+}
+
+/**
+ * Coerce an argument value to its schema-declared scalar type. GraphQL input
+ * coercion: a string literal `"5"` for an `Int` arg becomes the number `5`, a
+ * number for an `ID` becomes its string form, etc. Arrays coerce element-wise.
+ * Unknown / custom / enum types pass through untouched.
+ */
+function coerceScalar(value: unknown, type: string): unknown {
+  if (value === null || value === undefined) return value
+  if (Array.isArray(value)) return value.map((v) => coerceScalar(v, type))
+  switch (type) {
+    case 'Int':
+      if (typeof value === 'number') return value
+      if (typeof value === 'string' && value.trim() !== '' && Number.isInteger(Number(value))) {
+        return Number(value)
+      }
+      return value
+    case 'Float':
+      if (typeof value === 'number') return value
+      if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) {
+        return Number(value)
+      }
+      return value
+    case 'Boolean':
+      if (typeof value === 'boolean') return value
+      if (value === 'true') return true
+      if (value === 'false') return false
+      return value
+    case 'ID':
+      return typeof value === 'number' ? String(value) : value
+    default:
+      // String, custom scalars, enums, input objects — left as the client sent.
+      return value
+  }
 }
 
 let graphqlNativeCache: GraphqlNative | undefined
@@ -172,6 +209,21 @@ export class GraphQLEngine {
   #maxQueryBytes: number
   #maxDepth: number
   #maxComplexity: number
+  /** Lazily-parsed `Type.field → argName → scalarType` map for input coercion. */
+  #argTypes?: Record<string, Record<string, string>>
+
+  /** Parse (once) the schema's argument types from the SDL for coercion. */
+  #schemaArgTypes(): Record<string, Record<string, string>> {
+    if (this.#argTypes === undefined) {
+      try {
+        this.#argTypes = JSON.parse(graphqlNative().graphqlSchemaArgTypes(this.#schemaSource))
+      } catch {
+        // Native unavailable or schema unparseable → coercion becomes a no-op.
+        this.#argTypes = {}
+      }
+    }
+    return this.#argTypes ?? {}
+  }
 
   constructor(config: GraphQLConfig) {
     if (!fs.existsSync(config.schemaPath)) {
@@ -331,7 +383,7 @@ export class GraphQLEngine {
         }
       }
 
-      const args = this.#buildArgs(field, request.variables)
+      const args = this.#buildArgs(field, request.variables, typeName)
       const result = await handler.call(instance, null, args, ctx)
       // Prune to the client's selection set: a resolver returning a rich
       // object (ORM entity, etc.) must not leak fields the client did not
@@ -350,6 +402,7 @@ export class GraphQLEngine {
   #buildArgs(
     field: SelectionField,
     variables: Record<string, unknown> | undefined,
+    typeName: string,
   ): Record<string, unknown> {
     const args: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(field.args)) {
@@ -362,6 +415,15 @@ export class GraphQLEngine {
     if (variables) {
       for (const [k, v] of Object.entries(variables)) {
         if (!(k in args)) args[k] = v
+      }
+    }
+    // Coerce each argument to its schema-declared scalar type (Int/Float/Boolean/
+    // ID). A literal `task(id: "5")` or a string variable thus reaches the
+    // resolver as the right runtime type instead of being silently mistyped.
+    const argTypes = this.#schemaArgTypes()[`${typeName}.${field.name}`]
+    if (argTypes) {
+      for (const [k, declaredType] of Object.entries(argTypes)) {
+        if (k in args) args[k] = coerceScalar(args[k], declaredType)
       }
     }
     return args

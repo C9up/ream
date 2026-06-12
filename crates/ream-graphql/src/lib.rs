@@ -200,6 +200,48 @@ pub fn validate_query(query: &str) -> Vec<String> {
     result.errors
 }
 
+/// Extract the declared argument scalar types from a GraphQL SDL schema.
+///
+/// Returns `{ "Type.field": { "argName": "ScalarTypeName" } }` so the TypeScript
+/// engine can coerce incoming argument values to their schema-declared types
+/// (e.g. a string literal `"5"` for an `Int` arg → number). List/non-null
+/// wrappers are unwrapped to the underlying named type; coercion is applied
+/// element-wise when the value is an array.
+pub fn parse_schema_arg_types(sdl: &str) -> HashMap<String, HashMap<String, String>> {
+    use graphql_parser::schema::{
+        parse_schema, Definition as SchemaDef, Type as SchemaType, TypeDefinition,
+    };
+
+    fn named_type(t: &SchemaType<String>) -> String {
+        match t {
+            SchemaType::NamedType(name) => name.clone(),
+            SchemaType::ListType(inner) => named_type(inner),
+            SchemaType::NonNullType(inner) => named_type(inner),
+        }
+    }
+
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let doc = match parse_schema::<String>(sdl) {
+        Ok(d) => d,
+        Err(_) => return out,
+    };
+    for def in &doc.definitions {
+        if let SchemaDef::TypeDefinition(TypeDefinition::Object(obj)) = def {
+            for field in &obj.fields {
+                if field.arguments.is_empty() {
+                    continue;
+                }
+                let mut args = HashMap::new();
+                for arg in &field.arguments {
+                    args.insert(arg.name.clone(), named_type(&arg.value_type));
+                }
+                out.insert(format!("{}.{}", obj.name, field.name), args);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +366,19 @@ mod tests {
             .map(|f| f.name.as_str())
             .collect();
         assert_eq!(names, vec!["id"]);
+    }
+
+    #[test]
+    fn test_schema_arg_types_are_extracted() {
+        let sdl = "type Query { task(id: Int!, tag: String): Task count(ids: [ID!]): Int } type Task { id: Int }";
+        let types = parse_schema_arg_types(sdl);
+        let task = types.get("Query.task").expect("Query.task args");
+        assert_eq!(task.get("id").map(String::as_str), Some("Int"));
+        assert_eq!(task.get("tag").map(String::as_str), Some("String"));
+        // List + NonNull are unwrapped to the underlying named type.
+        let count = types.get("Query.count").expect("Query.count args");
+        assert_eq!(count.get("ids").map(String::as_str), Some("ID"));
+        // Fields with no arguments are omitted.
+        assert!(!types.contains_key("Task.id"));
     }
 }
