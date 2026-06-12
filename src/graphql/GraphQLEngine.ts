@@ -65,6 +65,39 @@ const OPERATION_TYPE: Record<string, string> = {
   subscription: 'Subscription',
 }
 
+/**
+ * Bound a parsed selection tree's depth and total field count. Iterative (explicit
+ * stack) so a pathological deeply-nested query can't overflow the JS call stack
+ * during the check itself, and short-circuits as soon as a limit is crossed.
+ * Returns an error message, or `null` when the query is within limits.
+ */
+function checkSelectionLimits(
+  fields: SelectionField[],
+  maxDepth: number,
+  maxComplexity: number,
+): string | null {
+  let count = 0
+  const stack: Array<{ field: SelectionField; depth: number }> = fields.map((field) => ({
+    field,
+    depth: 1,
+  }))
+  while (stack.length > 0) {
+    const top = stack.pop()
+    if (!top) break
+    if (top.depth > maxDepth) {
+      return `Query is too deep (max depth ${maxDepth})`
+    }
+    count += 1
+    if (count > maxComplexity) {
+      return `Query is too complex (max ${maxComplexity} fields)`
+    }
+    for (const child of top.field.selection) {
+      stack.push({ field: child, depth: top.depth + 1 })
+    }
+  }
+  return null
+}
+
 /** Map a Rust `ParsedField` (sub_fields) onto the engine's `SelectionField` (selection). */
 function mapRustField(f: RustParsedField): SelectionField {
   return {
@@ -82,6 +115,22 @@ export interface GraphQLConfig {
   path?: string
   /** Enable playground/introspection in dev (default: true when NODE_ENV !== 'production'). */
   playground?: boolean
+  /**
+   * Reject a query string longer than this many characters BEFORE parsing —
+   * caps the work the parser does on a hostile payload (default: 100_000).
+   */
+  maxQueryBytes?: number
+  /**
+   * Reject a query whose selection set nests deeper than this — bounds
+   * resolver recursion / amplification (default: 12).
+   */
+  maxDepth?: number
+  /**
+   * Reject a query selecting more than this many fields in total (aliases
+   * count) — bounds fan-out where a client repeats an expensive resolver
+   * (default: 1000).
+   */
+  maxComplexity?: number
 }
 
 export interface ResolverOptions {
@@ -120,6 +169,9 @@ export class GraphQLEngine {
   #container?: { make<T>(target: new (...args: unknown[]) => T): T }
   readonly path: string
   #playground: boolean
+  #maxQueryBytes: number
+  #maxDepth: number
+  #maxComplexity: number
 
   constructor(config: GraphQLConfig) {
     if (!fs.existsSync(config.schemaPath)) {
@@ -128,6 +180,9 @@ export class GraphQLEngine {
     this.#schemaSource = fs.readFileSync(config.schemaPath, 'utf8')
     this.path = config.path ?? '/graphql'
     this.#playground = config.playground ?? process.env.NODE_ENV !== 'production'
+    this.#maxQueryBytes = config.maxQueryBytes ?? 100_000
+    this.#maxDepth = config.maxDepth ?? 12
+    this.#maxComplexity = config.maxComplexity ?? 1000
   }
 
   /** Set IoC container for resolver instantiation. */
@@ -196,10 +251,26 @@ export class GraphQLEngine {
     data?: Record<string, unknown>
     errors?: Array<{ message: string; path?: string[] }>
   }> {
+    // DoS guard 1 — cap the raw query size BEFORE handing it to the parser, so a
+    // hostile multi-MB payload can't tie up the native parser.
+    if (request.query.length > this.#maxQueryBytes) {
+      return {
+        errors: [{ message: `Query exceeds the maximum size of ${this.#maxQueryBytes} bytes` }],
+      }
+    }
+
     // Parse the query to extract operation type and fields
     const parsed = this.#parseQuery(request.query)
     if (parsed.errors) {
       return { errors: parsed.errors }
+    }
+
+    // DoS guard 2 — bound the selection tree's depth and total field count
+    // (aliases included) before resolving anything. Iterative walk so the check
+    // itself can't blow the stack on a deeply nested query.
+    const limitError = checkSelectionLimits(parsed.fields, this.#maxDepth, this.#maxComplexity)
+    if (limitError) {
+      return { errors: [{ message: limitError }] }
     }
 
     const data: Record<string, unknown> = {}
