@@ -142,8 +142,13 @@ function createGuardMiddleware(
       throw new E_UNAUTHORIZED()
     }
 
+    // Auth providers may expose roles/permissions at the top level OR nested
+    // under `user` (e.g. @c9up/warden sets `ctx.auth.user.roles`). Read both so
+    // route-level `.role()`/`.permission()` work regardless of the provider's
+    // shape — reading only the top level silently denied every authenticated
+    // user when warden was wired.
     if (roles && roles.length > 0) {
-      const userRoles = ctx.auth.roles ?? []
+      const userRoles = ctx.auth.roles ?? ctx.auth.user?.roles ?? []
       const hasAnyRole = roles.some((r) => userRoles.includes(r))
       if (!hasAnyRole) {
         throw new E_FORBIDDEN('Insufficient role', roles)
@@ -151,7 +156,7 @@ function createGuardMiddleware(
     }
 
     if (permissions && permissions.length > 0) {
-      const userPerms = ctx.auth.permissions ?? []
+      const userPerms = ctx.auth.permissions ?? ctx.auth.user?.permissions ?? []
       if (!permissions.every((p) => userPerms.includes(p))) {
         throw new E_FORBIDDEN('Insufficient permissions', permissions)
       }
