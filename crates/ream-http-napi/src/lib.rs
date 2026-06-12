@@ -516,3 +516,15 @@ pub fn graphql_validate(query: String) -> napi::Result<String> {
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
     })
 }
+
+/// Extract argument scalar types from a GraphQL SDL schema.
+/// Returns JSON: `{ "Type.field": { "argName": "ScalarType" } }` for argument
+/// coercion in the TypeScript engine.
+#[napi]
+pub fn graphql_schema_arg_types(sdl: String) -> napi::Result<String> {
+    catch_unwind_napi(|| {
+        let types = ream_graphql::parse_schema_arg_types(&sdl);
+        serde_json::to_string(&types)
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+    })
+}
