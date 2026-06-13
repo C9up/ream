@@ -12,8 +12,20 @@
  */
 
 import type { HttpContext } from '../http/HttpContext.js'
+import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
+import { compose } from '../middleware/Pipeline.js'
 
 export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown> | unknown
+
+/**
+ * Subset of the IoC container RpcRouter needs: resolve `namespace()` controllers,
+ * the shared `'middleware'` registry, and `validator:<name>` schemas.
+ */
+interface RpcContainer {
+  make<T>(target: new (...args: unknown[]) => T): T
+  resolve<T>(token: string): T
+  has(token: string): boolean
+}
 
 export interface RpcMethodDefinition {
   name: string
@@ -60,13 +72,17 @@ export class RpcMethodBuilder {
 
 interface RpcErrorResponse {
   jsonrpc: '2.0'
-  error: { code: number; message: string }
+  error: { code: number; message: string; data?: unknown }
   id: unknown
 }
 
 /** Build a JSON-RPC 2.0 error envelope. */
-function rpcError(code: number, message: string, id: unknown): RpcErrorResponse {
-  return { jsonrpc: '2.0', error: { code, message }, id }
+function rpcError(code: number, message: string, id: unknown, data?: unknown): RpcErrorResponse {
+  return {
+    jsonrpc: '2.0',
+    error: data === undefined ? { code, message } : { code, message, data },
+    id,
+  }
 }
 
 type ParsedRpcRequest =
@@ -105,13 +121,15 @@ function checkRpcAuthorization(
     return { code: -32003, message: 'Unauthorized' }
   }
   if (def.roles.length > 0) {
-    const userRoles = ctx.auth?.roles ?? []
+    // Warden nests roles/permissions under ctx.auth.user — mirror the HTTP path
+    // (Pipeline.ts createGuardMiddleware) so RPC role gates aren't fail-closed-dead.
+    const userRoles = ctx.auth?.roles ?? ctx.auth?.user?.roles ?? []
     if (!def.roles.some((r: string) => userRoles.includes(r))) {
       return { code: -32003, message: 'Insufficient role' }
     }
   }
   if (def.permissions.length > 0) {
-    const userPerms = ctx.auth?.permissions ?? []
+    const userPerms = ctx.auth?.permissions ?? ctx.auth?.user?.permissions ?? []
     if (!def.permissions.every((p: string) => userPerms.includes(p))) {
       return { code: -32003, message: 'Insufficient permissions' }
     }
@@ -122,7 +140,7 @@ function checkRpcAuthorization(
 export class RpcRouter {
   #methods: Map<string, RpcMethodDefinition> = new Map()
   #groupConfig: { guards: string[]; roles: string[]; middleware: string[] } | null = null
-  #container?: { make<T>(target: new (...args: unknown[]) => T): T }
+  #container?: RpcContainer
 
   /**
    * Set the IoC container used to resolve `namespace()` controllers — mirrors
@@ -130,7 +148,7 @@ export class RpcRouter {
    * same way (fresh DI per call). Without a container, controllers fall back to
    * `new Controller()`.
    */
-  useContainer(container: { make<T>(target: new (...args: unknown[]) => T): T }): void {
+  useContainer(container: RpcContainer): void {
     this.#container = container
   }
 
@@ -209,6 +227,33 @@ export class RpcRouter {
     ctx.response.status(200).json(result)
   }
 
+  /**
+   * Run the method's declared named middleware (resolved from the shared
+   * `'middleware'` registry) onion-style before the handler. Guards/auth
+   * middleware deny by THROWING — #processOne maps the throw to a JSON-RPC
+   * error. An unknown middleware name is a hard error, never a silent skip.
+   * (RPC shares one ctx per batch, so response-writing/short-circuit middleware
+   * are unsupported — deny by throwing.)
+   */
+  async #runMiddleware(ctx: HttpContext, names: string[]): Promise<void> {
+    const registry = this.#container?.has('middleware')
+      ? this.#container.resolve<MiddlewareRegistry>('middleware')
+      : undefined
+    if (!registry) {
+      throw new Error(
+        `[E_MIDDLEWARE_NOT_FOUND] RPC middleware [${names.join(', ')}] is declared but no middleware registry is wired into the RpcRouter.`,
+      )
+    }
+    const fns = names.map((name) => {
+      const mw = registry.get(name)
+      if (!mw) {
+        throw new Error(`[E_MIDDLEWARE_NOT_FOUND] Named middleware '${name}' is not registered.`)
+      }
+      return mw
+    })
+    await compose(fns)(ctx, async () => {})
+  }
+
   async #processOne(ctx: HttpContext, request: unknown): Promise<unknown> {
     const parsed = parseRpcRequest(request)
     if (!parsed.ok) return parsed.response
@@ -221,7 +266,30 @@ export class RpcRouter {
       const denied = checkRpcAuthorization(ctx, def)
       if (denied) return rpcError(denied.code, denied.message, id)
 
-      const result = await def.handler(ctx, params)
+      // Run declared named middleware (e.g. guards) — they throw to deny, mapped
+      // to a JSON-RPC error by the catch below.
+      if (def.middleware.length > 0) {
+        await this.#runMiddleware(ctx, def.middleware)
+      }
+
+      // Run the declared validator against params. A declared-but-unregistered
+      // validator is a hard error — never silently skip validation.
+      let effectiveParams = params
+      if (def.validator) {
+        const token = `validator:${def.validator}`
+        if (!this.#container?.has(token)) {
+          return rpcError(
+            -32603,
+            `Validator '${def.validator}' is not registered (bind container.singleton('${token}', () => schema)).`,
+            id,
+          )
+        }
+        const outcome = this.#container.resolve<RuntimeValidator>(token).validate(params)
+        if (!outcome.valid) return rpcError(-32602, 'Invalid params', id, outcome.errors)
+        effectiveParams = outcome.data ?? params
+      }
+
+      const result = await def.handler(ctx, effectiveParams)
       return { jsonrpc: '2.0', result, id }
     } catch (err) {
       // Don't leak internal error details to caller
