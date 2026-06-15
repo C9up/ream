@@ -233,6 +233,62 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     expect(out[0]).not.toHaveProperty('result')
   })
 
+  it('does not reply to a notification (no id) but still runs it (JSON-RPC §4.1)', async () => {
+    const container = new Container()
+    let ran = false
+    const { provider, posted } = mount(container, (rpc) => {
+      rpc.method('ping', () => {
+        ran = true
+        return 'pong'
+      })
+    })
+    await provider.boot()
+    let status = 0
+    let sent: unknown
+    const json: unknown[] = []
+    await posted[0]({
+      request: { body: () => ({ jsonrpc: '2.0', method: 'ping', params: {} }) },
+      response: {
+        status(c: number) {
+          status = c
+          return this
+        },
+        json(p: unknown) {
+          json.push(p)
+        },
+        send(d: unknown) {
+          sent = d
+        },
+      },
+    })
+    expect(ran).toBe(true) // side-effect ran
+    expect(json).toEqual([]) // no JSON-RPC reply
+    expect(status).toBe(204) // No Content
+    expect(sent).toBe('')
+  })
+
+  it('group() restores the previous group config when the callback throws', async () => {
+    const container = new Container()
+    const { provider, posted } = mount(container, (rpc) => {
+      expect(() =>
+        rpc.group({ guards: ['g'] }, () => {
+          throw new Error('boom')
+        }),
+      ).toThrow('boom')
+      // Registered AFTER the throwing group — must NOT inherit its guard, or an
+      // unauthenticated call would be denied -32003 (leaked group config).
+      rpc.method('free.ping', () => 'pong')
+    })
+    await provider.boot()
+    const out = await call(posted[0], {
+      jsonrpc: '2.0',
+      method: 'free.ping',
+      params: {},
+      id: 9,
+    })
+    expect(out).toEqual([{ jsonrpc: '2.0', result: 'pong', id: 9 }])
+  })
+
   it('runs the handler when declared middleware passes (calls next)', async () => {
     const container = new Container()
     const registry = new MiddlewareRegistry()

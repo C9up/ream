@@ -108,6 +108,24 @@ function parseRpcRequest(request: unknown): ParsedRpcRequest {
 }
 
 /**
+ * A JSON-RPC notification is a well-formed request with NO `id` member. The spec
+ * (§4.1) says the server MUST NOT reply to one — it still runs for side-effects.
+ * A malformed object (no method / wrong version) is NOT a notification: it gets
+ * an `id:null` error response since the server can't tell the client's intent.
+ */
+function isNotification(request: unknown): boolean {
+  return (
+    !!request &&
+    typeof request === 'object' &&
+    'jsonrpc' in request &&
+    request.jsonrpc === '2.0' &&
+    'method' in request &&
+    typeof request.method === 'string' &&
+    !('id' in request)
+  )
+}
+
+/**
  * Enforce the method's guards/roles/permissions against the request auth state.
  * Returns the JSON-RPC error code+message to reject with, or undefined when the
  * caller is authorized.
@@ -196,8 +214,13 @@ export class RpcRouter {
       roles: [],
       middleware: config.middleware ?? [],
     }
-    callback(this)
-    this.#groupConfig = prevConfig
+    // try/finally so a throwing callback can't leave #groupConfig stuck at the
+    // group's value and leak its guards/middleware onto sibling registrations.
+    try {
+      callback(this)
+    } finally {
+      this.#groupConfig = prevConfig
+    }
   }
 
   /** Handle an incoming JSON-RPC request. */
@@ -215,15 +238,28 @@ export class RpcRouter {
         return
       }
       // Note: batch items share the same ctx (auth state). Each is processed sequentially.
+      // Notifications still run (side-effects) but their result is omitted from
+      // the reply per JSON-RPC §4.1.
       const results: unknown[] = []
       for (const req of body) {
-        results.push(await this.#processOne(ctx, req))
+        const r = await this.#processOne(ctx, req)
+        if (!isNotification(req)) results.push(r)
+      }
+      // An all-notification batch produces no response body (spec: no reply).
+      if (results.length === 0) {
+        ctx.response.status(204).send('')
+        return
       }
       ctx.response.status(200).json(results)
       return
     }
 
     const result = await this.#processOne(ctx, body)
+    // A notification runs for side-effects but MUST NOT receive a reply.
+    if (isNotification(body)) {
+      ctx.response.status(204).send('')
+      return
+    }
     ctx.response.status(200).json(result)
   }
 
