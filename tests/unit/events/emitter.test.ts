@@ -7,9 +7,17 @@
  * Uses `FakeBus` (already public via `@c9up/ream/events/testing`) as the bus
  * substitute — no napi binding required.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BaseEvent, type ContainerResolver, Emitter } from '../../../src/events/Emitter.js'
 import { FakeBus } from '../../../src/events/testing/FakeBus.js'
+
+// correlationId lives in a module-level AsyncLocalStorage set via `enterWith`,
+// which does not auto-unset — it leaks across sequential tests sharing a worker
+// and made the correlation-ID tests flaky depending on order. Reset before each
+// test so the suite is deterministic.
+beforeEach(() => {
+  new Emitter(new FakeBus()).clearCorrelationId()
+})
 
 describe('events > Emitter > string-based events', () => {
   it('dispatches to registered string listeners synchronously', () => {
