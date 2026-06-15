@@ -8,6 +8,7 @@
 
 import type { HttpContext } from '../http/HttpContext.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
+import { parseSize } from './parseSize.js'
 
 export interface BodyParserConfig {
   json?: {
@@ -174,22 +175,6 @@ export default class BodyParserMiddleware {
 
 function matchesType(contentType: string, types: string[]): boolean {
   return types.some((t) => contentType.includes(t))
-}
-
-function parseSize(size: string): number {
-  const match = size.match(/^(\d+)(kb|mb|gb)?$/i)
-  if (!match) return 1024 * 1024 // default 1mb
-  const num = parseInt(match[1], 10)
-  switch (match[2]?.toLowerCase()) {
-    case 'kb':
-      return num * 1024
-    case 'mb':
-      return num * 1024 * 1024
-    case 'gb':
-      return num * 1024 * 1024 * 1024
-    default:
-      return num
-  }
 }
 
 function parseFormUrlEncoded(body: string): Record<string, unknown> {
