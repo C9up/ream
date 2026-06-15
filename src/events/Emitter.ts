@@ -16,7 +16,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { EventBus } from './native.js'
 
 /** Per-request correlation ID stored in async context so concurrent requests don't corrupt each other. */
-const correlationStorage = new AsyncLocalStorage<string>()
+const correlationStorage = new AsyncLocalStorage<string | undefined>()
 
 /**
  * Listener class interface — must have a handle() method.
@@ -241,6 +241,15 @@ export class Emitter {
    */
   setCorrelationId(id: string): void {
     correlationStorage.enterWith(id)
+  }
+
+  /**
+   * Clear the correlation ID for the current async context. `enterWith` does
+   * not auto-unset, so a long-lived/reused context (and, notably, sequential
+   * tests sharing a worker) would leak the last set id — call this to reset.
+   */
+  clearCorrelationId(): void {
+    correlationStorage.enterWith(undefined)
   }
 
   /** Get the correlation ID for the current async context. */
