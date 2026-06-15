@@ -1,6 +1,7 @@
 /**
  * Parse a human-readable size string (e.g. '1mb', '512kb', '2gb') to bytes.
- * Single source of truth — used by both BodyParserMiddleware and MultipartFile.
+ * Single source of truth, imported by BodyParserMiddleware (which previously
+ * carried an identical inline copy — consolidated 2026-06-15).
  */
 export function parseSize(size: string): number {
   const match = size.match(/^(\d+)(kb|mb|gb)?$/i)
