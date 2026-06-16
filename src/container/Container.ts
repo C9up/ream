@@ -278,14 +278,47 @@ export class Container {
     const paramTypes: unknown[] =
       explicitDeps ?? Reflect.getMetadata('design:paramtypes', target) ?? []
 
+    const injectTokens = getInjectTokens(target)
+    const lazyIndices = getLazyParams(target)
+
+    // No `design:paramtypes` (a dev transpiler may not emit decorator metadata —
+    // esbuild / tsx don't). Recover what we can, and NEVER construct with
+    // silently-undefined deps (that masked a whole DI outage in dev):
     if (paramTypes.length === 0) {
+      // (a) `@Inject(token)` records its tokens INDEPENDENTLY of decorator
+      //     metadata, so even without `design:paramtypes` we can resolve the
+      //     constructor from that map alone.
+      if (injectTokens.size > 0) {
+        const maxIndex = Math.max(...injectTokens.keys())
+        const deps = Array.from({ length: maxIndex + 1 }, (_value, index) => {
+          const depToken = injectTokens.get(index)
+          if (!depToken) return undefined
+          if (lazyIndices.includes(index)) {
+            return createLazyProxy(() => this.resolve<object>(depToken))
+          }
+          return this.resolve(depToken)
+        })
+        const instance = new target(...deps)
+        if (scope === 'singleton') this.#singletons.set(key, instance)
+        return instance
+      }
+      // (b) The constructor declares parameters but we have no way to resolve
+      //     them (no metadata, no @Inject, no containerInjections). Fail LOUDLY
+      //     instead of `new target()` with undefined deps.
+      if (target.length > 0) {
+        throw new ReamError(
+          'CONTAINER_MISSING_METADATA',
+          `Cannot auto-construct ${target.name}: it declares ${target.length} constructor parameter(s) but no dependency metadata was found.`,
+          {
+            hint: 'Enable decorator metadata (swc/tsc emitDecoratorMetadata), annotate constructor params with @Inject(token), or declare static containerInjections.',
+          },
+        )
+      }
+      // (c) Genuine zero-argument class.
       const instance = new target()
       if (scope === 'singleton') this.#singletons.set(key, instance)
       return instance
     }
-
-    const injectTokens = getInjectTokens(target)
-    const lazyIndices = getLazyParams(target)
 
     const deps = paramTypes.map((type, index) => {
       const namedToken = injectTokens.get(index)
