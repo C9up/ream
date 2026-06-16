@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { Container, Service } from '../../src/index.js'
+import { Container, Inject, Service } from '../../src/index.js'
 
 describe('container > basic resolution', () => {
   let container: InstanceType<typeof Container>
@@ -339,5 +339,63 @@ describe('container > has & size', () => {
     container.singleton('a', () => 1)
     container.bind('b', () => 2)
     expect(container.size).toBe(2)
+  })
+})
+
+describe('container > autoConstruct without decorator metadata (dev loader)', () => {
+  // The ream dev loader (esbuild/tsx) does NOT emit `design:paramtypes`. Since
+  // the transpiler used for tests varies (esbuild locally, metadata-emitting in
+  // CI), these tests `Reflect.deleteMetadata` to reproduce the metadata-less dev
+  // condition DETERMINISTICALLY. Regression for the DI outage where the container
+  // silently `new Class()`-d with undefined deps.
+  let container: InstanceType<typeof Container>
+
+  beforeEach(() => {
+    container = new Container()
+  })
+
+  it('resolves constructor deps via @Inject tokens even without design:paramtypes', () => {
+    container.singleton('db', () => ({ dialect: 'sqlite' }))
+
+    @Service()
+    class Repo {
+      db: { dialect: string }
+      constructor(db: { dialect: string }) {
+        this.db = db
+      }
+    }
+    // Apply the @Inject('db') parameter decorator imperatively. biome's parser
+    // does not accept parameter-decorator SYNTAX, but the runtime effect — the
+    // inject-token map at index 0 — is identical to `constructor(@Inject('db') db)`.
+    Inject('db')(Repo, undefined, 0)
+    // Force the metadata-less condition deterministically (a transpiler that
+    // DOES emit design:paramtypes would otherwise resolve via the normal path).
+    Reflect.deleteMetadata('design:paramtypes', Repo)
+
+    const repo = container.make<Repo>(Repo)
+    expect(repo.db).toEqual({ dialect: 'sqlite' })
+  })
+
+  it('throws CONTAINER_MISSING_METADATA instead of constructing with undefined deps', () => {
+    @Service()
+    class NeedsDeps {
+      captured: unknown
+      constructor(db: unknown) {
+        this.captured = db
+      }
+    }
+    // Simulate a dev loader that doesn't emit decorator metadata.
+    Reflect.deleteMetadata('design:paramtypes', NeedsDeps)
+
+    expect(() => container.make(NeedsDeps)).toThrow(/no dependency metadata/)
+  })
+
+  it('still constructs a genuine zero-argument class', () => {
+    @Service()
+    class NoDeps {
+      value = 42
+    }
+
+    expect(container.make<NoDeps>(NoDeps).value).toBe(42)
   })
 })

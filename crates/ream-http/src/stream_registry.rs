@@ -145,6 +145,43 @@ impl StreamRegistry {
         entry.sender.closed().await;
     }
 
+    /// Reap registered-but-never-served strays older than [`STRAY_TTL`] — the
+    /// "5-min idle GC pass" from the module doc. A stray is an entry whose
+    /// receiver was never taken (the handler panicked between `register` and
+    /// returning the response), so it would otherwise leak. Returns how many
+    /// were removed.
+    pub async fn reap_strays(&self) -> usize {
+        self.reap_older_than(STRAY_TTL).await
+    }
+
+    /// Reap never-served entries older than `ttl`. An ACTIVE served stream
+    /// (its receiver already taken by the response builder) is exempt no matter
+    /// its age, so a long-lived SSE connection is never killed. `ttl` is a
+    /// parameter so callers/tests can pick the window; [`reap_strays`] uses
+    /// [`STRAY_TTL`].
+    pub async fn reap_older_than(&self, ttl: Duration) -> usize {
+        let mut map = self.inner.lock().await;
+        // `try_lock` on the receiver slot tells served-vs-stray without
+        // awaiting under the map lock: a served stream's slot is `None`; a
+        // stray's is still `Some`. A momentarily-locked slot (mid take) is
+        // treated as in-use and left alone.
+        let strays: Vec<StreamId> = map
+            .iter()
+            .filter(|(_, entry)| entry.created_at.elapsed() > ttl)
+            .filter(|(_, entry)| {
+                entry
+                    .receiver
+                    .try_lock()
+                    .map(|slot| slot.is_some())
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &strays {
+            map.remove(id);
+        }
+        strays.len()
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +231,27 @@ mod tests {
         });
         drop(rx);
         assert!(waiter.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn reap_removes_never_served_strays_but_keeps_active_streams() {
+        let reg = StreamRegistry::new();
+        reg.register("stray".to_string()).await; // never served (receiver not taken)
+        reg.register("served".to_string()).await;
+        let _rx = reg.take_receiver("served").await.expect("receiver"); // active
+
+        // ttl = ZERO ⇒ every entry is "older than ttl"; only the never-served
+        // stray is reaped, the active stream survives regardless of age.
+        let reaped = reg.reap_older_than(Duration::ZERO).await;
+        assert_eq!(reaped, 1);
+
+        assert!(
+            !reg.send_chunk("stray", Bytes::from_static(b"x")).await,
+            "stray must be gone"
+        );
+        assert!(
+            reg.send_chunk("served", Bytes::from_static(b"x")).await,
+            "active served stream must survive"
+        );
     }
 }
