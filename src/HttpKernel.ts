@@ -133,8 +133,17 @@ export function createHttpKernel(
         }
       : { pattern: '', middleware: [] }
 
-    // 4. Create HttpContext
-    const ctx = new HttpContext(correlationId, reqData, match?.params ?? {}, routeInfo)
+    // 4. Create HttpContext. Pass the app container as the per-request
+    //    `ctx.containerResolver` (Adonis idiom) so agnostic middleware
+    //    (Warden, Blackhole) resolve host services from the context they are
+    //    handed instead of importing `@c9up/ream/services/app` at runtime.
+    const ctx = new HttpContext(
+      correlationId,
+      reqData,
+      match?.params ?? {},
+      routeInfo,
+      config.container,
+    )
     ctx.setRouteUrlResolver((name, params) => config.router.makeUrl(name, params))
     ctx.events = resolveEvents()
     // Core lifecycle event: a request entered the kernel. Fire-and-forget through
