@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import {
   clearServiceRegistry,
+  Container,
   createHttpKernel,
   MiddlewareRegistry,
   ReamError,
@@ -94,6 +95,51 @@ describe('HttpKernel > integration', () => {
 
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body).orderId).toBe('123')
+  })
+
+  it('exposes the app container as ctx.containerResolver — service resolves end-to-end (Adonis idiom)', async () => {
+    // Regression: ream's HttpContext must carry the IoC resolver so agnostic
+    // middleware (Warden, Blackhole) resolve host services from the ctx they
+    // are HANDED — never by importing `@c9up/ream/services/app` at runtime.
+    // Before this, ctx had no container and that whole contract was missing.
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+    const container = new Container()
+    const greeter = { hello: () => 'hi from container' }
+    container.singleton('greeter', () => greeter)
+
+    let resolved: { hello(): string } | undefined
+    router.get('/svc', async (ctx) => {
+      resolved = ctx.containerResolver?.make<{ hello(): string }>('greeter')
+      ctx.response.json({ ok: resolved !== undefined })
+    })
+
+    const kernel = createHttpKernel({ router, middleware, container })
+    const response = await kernel({
+      method: 'GET',
+      path: '/svc',
+      query: '',
+      headers: {},
+      body: '',
+    })
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body).ok).toBe(true)
+    // `.make()` returns the very instance registered in the app container.
+    expect(resolved).toBe(greeter)
+  })
+
+  it('leaves ctx.containerResolver undefined when the kernel has no container (mock server)', async () => {
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+    let seen: unknown = 'unset'
+    router.get('/no-container', async (ctx) => {
+      seen = ctx.containerResolver
+      ctx.response.json({})
+    })
+    const kernel = createHttpKernel({ router, middleware })
+    await kernel({ method: 'GET', path: '/no-container', query: '', headers: {}, body: '' })
+    expect(seen).toBeUndefined()
   })
 
   it('returns 404 for unmatched route', async () => {

@@ -7,6 +7,7 @@
  * @implements FR21
  */
 
+import type { ServiceToken } from '../container/types.js'
 import type { Emitter } from '../events/Emitter.js'
 import type { RouteUrlResolver } from './RedirectBuilder.js'
 import { RedirectBuilder } from './RedirectBuilder.js'
@@ -42,6 +43,24 @@ export interface Authorizer {
   denies(ability: string, ...args: unknown[]): Promise<boolean>
   /** Resolves on allow; throws an authorization failure (status 403) on deny. */
   authorize(ability: string, ...args: unknown[]): Promise<void>
+}
+
+/**
+ * Per-request IoC resolver exposed on the context (Adonis idiom:
+ * `ctx.containerResolver.make(Service)`). Lets agnostic middleware resolve
+ * framework-registered services from the context it is HANDED, instead of
+ * importing the host app singleton (`@c9up/ream/services/app`) — which would
+ * couple the middleware's package to `@c9up/ream` at runtime.
+ *
+ * Ream populates it from the application {@link Container}, which already
+ * satisfies this shape via `make<T>()`. It is the app container today (Ream has
+ * no per-request child resolver / `bindValue` scoping yet, unlike AdonisJS);
+ * exposing it under the Adonis name with `.make()` keeps the public contract
+ * aligned so a future scoped resolver is a non-breaking swap.
+ */
+export interface ContainerResolver {
+  /** Resolve/construct a service by token (class, string, or symbol). */
+  make<T>(token: ServiceToken): T
 }
 
 export interface RouteInfo {
@@ -103,6 +122,15 @@ export class HttpContext {
    */
   bouncer?: Authorizer
 
+  /**
+   * Per-request IoC resolver (Adonis idiom: `ctx.containerResolver.make(...)`).
+   * Populated by `HttpKernel` from the application container. Undefined only
+   * when the context was built without one (e.g. a mock in a unit test).
+   * Agnostic middleware resolves host services through this, never by importing
+   * `@c9up/ream`. See {@link ContainerResolver}.
+   */
+  readonly containerResolver?: ContainerResolver
+
   /** Route URL resolver for redirect().toRoute(). */
   #routeUrlResolver?: RouteUrlResolver
 
@@ -111,10 +139,12 @@ export class HttpContext {
     rawRequest: RawRequest,
     params: Record<string, string>,
     route: RouteInfo,
+    containerResolver?: ContainerResolver,
   ) {
     this.id = id
     this.params = params
     this.route = route
+    this.containerResolver = containerResolver
     this.request = new Request(rawRequest, params)
     this.response = new Response()
     this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
