@@ -289,12 +289,31 @@ impl HyperServer {
         }
     }
 
-    /// Shut down the server.
+    /// Shut down the server and release the handles that keep the host's event
+    /// loop alive.
+    ///
+    /// `listen()` registers the JS callback as a `ThreadsafeFunction` (which
+    /// holds a libuv ref so `ream start` stays alive). Three `Arc` clones of the
+    /// request handler capture it: this struct's `self.handler`, the inner
+    /// `ReamServer.handler`, and the accept-loop task's clone. ALL three must
+    /// drop for napi-rs to release the tsfn on `Drop` (refcount → 0). The old
+    /// `close()` only signalled shutdown, leaving every clone alive — so an
+    /// in-process host (test harness) leaked the handle and never drained.
     #[napi]
     pub async fn close(&self) -> napi::Result<()> {
-        let mut srv = self.server.lock().await;
-        if let Some(ref mut s) = *srv {
-            s.close();
+        {
+            let mut srv = self.server.lock().await;
+            if let Some(mut s) = srv.take() {
+                // Signal the accept loop AND await its end (drops its handler
+                // clone); `s` then drops here, releasing ReamServer's clone.
+                s.shutdown().await;
+            }
+        }
+        // Drop the original handler held on this struct → the last Arc clone
+        // goes, the captured ThreadsafeFunction's refcount hits zero, and
+        // napi-rs releases its libuv handle on Drop.
+        if let Ok(mut guard) = self.handler.lock() {
+            *guard = None;
         }
         // Shared runtime is static — not dropped on close (reused by other crates)
         Ok(())

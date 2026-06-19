@@ -42,6 +42,12 @@ pub struct ReamServer {
     security_filter: Option<Arc<dyn crate::SecurityFilter>>,
     response_filter: Option<ResponseFilter>,
     shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Accept-loop task handle. Held so `shutdown()` can AWAIT the loop's end —
+    /// the loop owns a clone of the request handler, which (in the NAPI layer)
+    /// captures the JS `ThreadsafeFunction`. Dropping the loop is what lets that
+    /// tsfn's refcount fall to zero; without awaiting it here, an in-process
+    /// host (test harness) keeps a live libuv handle and never drains.
+    accept_handle: Option<tokio::task::JoinHandle<()>>,
     actual_port: Arc<Mutex<u16>>,
     /// CIDR ranges (or bare IPs) of proxies whose `X-Forwarded-For` is honoured.
     /// Empty = strict fail-closed (proxy headers ignored entirely; only the
@@ -65,6 +71,7 @@ impl ReamServer {
             security_filter: None,
             response_filter: None,
             shutdown_tx: None,
+            accept_handle: None,
             actual_port: Arc::new(Mutex::new(0)),
             trusted_proxies: Arc::new(Vec::new()),
             rate_limiter: None,
@@ -152,7 +159,7 @@ impl ReamServer {
 
         let actual_port = self.actual_port.clone();
 
-        tokio::spawn(async move {
+        self.accept_handle = Some(tokio::spawn(async move {
             let mut shutdown_rx = shutdown_rx;
 
             loop {
@@ -263,15 +270,32 @@ impl ReamServer {
                     }
                 }
             }
-        });
+        }));
 
         Ok(())
     }
 
-    /// Gracefully shut down the server.
+    /// Gracefully shut down the server (fire-and-forget). Signals the accept
+    /// loop to stop but does NOT await it — kept for tests / callers that don't
+    /// need a deterministic teardown. Prefer `shutdown()` for in-process hosts.
     pub fn close(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+    }
+
+    /// Graceful async shutdown: signal the accept loop AND await its end, so the
+    /// loop's clone of the request handler is dropped before this returns. In
+    /// the NAPI layer the handler captures the JS `ThreadsafeFunction`; pairing
+    /// this with clearing the NAPI-side handler reference drops the tsfn's
+    /// refcount to zero, letting napi-rs release the libuv handle so an
+    /// in-process host (e.g. a test harness) can drain its event loop.
+    pub async fn shutdown(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.accept_handle.take() {
+            let _ = handle.await;
         }
     }
 }
