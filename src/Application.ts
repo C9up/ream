@@ -13,6 +13,8 @@
  * @implements FR17, FR20
  */
 
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
 import type { AppContext, ProviderContract } from './Provider.js'
@@ -21,6 +23,7 @@ import { callProviderPhase } from './Provider.js'
 export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
+  #appRoot?: URL
   private providers: ProviderContract[] = []
   private _booted = false
   private _bootingHooks: Array<() => Promise<void> | void> = []
@@ -30,6 +33,52 @@ export class Application implements AppContext {
   constructor() {
     this.container = new Container()
     this.config = new ConfigStore()
+  }
+
+  // ─── Paths ────────────────────────────────────────────────
+  // AdonisJS-style path helpers — resolve against the project root passed to
+  // the Ignitor (`new Ignitor(new URL('../', import.meta.url))`). App code uses
+  // these instead of recomputing `dirname(fileURLToPath(import.meta.url))` per
+  // file: `app.configPath('shield.ts')`, `app.migrationsPath()`, …
+
+  /** Set the project root. Called by the Ignitor from its constructor URL. */
+  setAppRoot(root: URL): void {
+    this.#appRoot = root
+  }
+
+  /** The project root directory URL, or `undefined` in inline/no-root mode. */
+  get appRoot(): URL | undefined {
+    return this.#appRoot
+  }
+
+  /** Absolute path to a file/dir inside the project root. */
+  makePath(...paths: string[]): string {
+    if (!this.#appRoot) {
+      throw new Error(
+        'Application.makePath: app root is not set — construct the Ignitor with `new Ignitor(new URL("../", import.meta.url))`.',
+      )
+    }
+    return join(fileURLToPath(this.#appRoot), ...paths)
+  }
+
+  /** Absolute path inside the `config/` directory. */
+  configPath(...paths: string[]): string {
+    return this.makePath('config', ...paths)
+  }
+
+  /** Absolute path inside the `database/migrations/` directory. */
+  migrationsPath(...paths: string[]): string {
+    return this.makePath('database', 'migrations', ...paths)
+  }
+
+  /** Absolute path inside the `tmp/` directory. */
+  tmpPath(...paths: string[]): string {
+    return this.makePath('tmp', ...paths)
+  }
+
+  /** Absolute path inside the `public/` directory. */
+  publicPath(...paths: string[]): string {
+    return this.makePath('public', ...paths)
   }
 
   // ─── Environment ──────────────────────────────────────────

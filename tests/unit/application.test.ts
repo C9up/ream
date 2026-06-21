@@ -1,12 +1,25 @@
 import 'reflect-metadata'
 import { describe, expect, it, vi } from 'vitest'
-import {
-  Application,
-  defineModuleConfig,
-  env,
-  Provider,
-  ConfigStore,
-} from '../../src/index.js'
+import { Application, ConfigStore, defineModuleConfig, env, Provider } from '../../src/index.js'
+
+describe('application > path helpers', () => {
+  it('resolves makePath/configPath/migrationsPath/tmpPath/publicPath against the app root', () => {
+    const app = new Application()
+    app.setAppRoot(new URL('file:///project/'))
+
+    expect(app.makePath('app', 'middleware.ts')).toBe('/project/app/middleware.ts')
+    expect(app.configPath('shield.ts')).toBe('/project/config/shield.ts')
+    expect(app.configPath()).toBe('/project/config')
+    expect(app.migrationsPath()).toBe('/project/database/migrations')
+    expect(app.tmpPath('logs', 'mail.txt')).toBe('/project/tmp/logs/mail.txt')
+    expect(app.publicPath('style.css')).toBe('/project/public/style.css')
+  })
+
+  it('throws a helpful error when the app root is not set', () => {
+    const app = new Application()
+    expect(() => app.makePath('x')).toThrow(/app root is not set/)
+  })
+})
 
 describe('application > provider lifecycle', () => {
   it('registers and boots providers in order', async () => {
