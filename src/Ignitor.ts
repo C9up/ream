@@ -161,6 +161,9 @@ export class Ignitor {
     if (this.appRoot) {
       const root = this.appRoot
       this.app.container.singleton('appRoot', () => root)
+      // Also expose it on the Application for the AdonisJS-style path helpers
+      // (`app.makePath`, `app.configPath`, `app.migrationsPath`, …).
+      this.app.setAppRoot(root)
     }
 
     // Set service singletons so route/kernel files can import them
