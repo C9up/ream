@@ -12,6 +12,14 @@ export { Application } from './Application.js'
 export { ConfigStore, defineModuleConfig, env } from './ConfigLoader.js'
 export { Container } from './container/Container.js'
 export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './container/types.js'
+export { Env, EnvValidationException } from './env/Env.js'
+export { loadEnvFiles } from './env/loadEnvFiles.js'
+export {
+  EnvVarError,
+  type RequiredNode,
+  type SchemaNode,
+  type StringOptions,
+} from './env/schema.js'
 
 // ─── HTTP (new — AdonisJS-compatible) ───────────────────────
 
