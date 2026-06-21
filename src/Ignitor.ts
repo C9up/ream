@@ -13,12 +13,10 @@
  * @implements FR17, FR20, FR23
  */
 
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { parseEnv } from 'node:util'
 import { Application } from './Application.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
+import { loadEnvFiles } from './env/loadEnvFiles.js'
 import { ReamError } from './errors/ReamError.js'
 import type { Emitter } from './events/Emitter.js'
 import { startHotReload } from './HotReload.js'
@@ -302,28 +300,7 @@ export class Ignitor {
    */
   #loadEnvironmentFiles(): void {
     if (!this.appRoot) return
-    const nodeEnv = process.env.NODE_ENV
-    // Most-specific first; with "existing wins", earlier files take precedence.
-    const files = [
-      nodeEnv ? `.env.${nodeEnv}.local` : null,
-      this.environment === 'test' ? null : '.env.local',
-      nodeEnv ? `.env.${nodeEnv}` : null,
-      '.env',
-    ].filter((name): name is string => name !== null)
-
-    for (const name of files) {
-      let contents: string
-      try {
-        contents = readFileSync(fileURLToPath(new URL(name, this.appRoot)), 'utf8')
-      } catch {
-        continue // file absent — nothing to load
-      }
-      for (const [key, value] of Object.entries(parseEnv(contents))) {
-        if (typeof value === 'string' && process.env[key] === undefined) {
-          process.env[key] = value
-        }
-      }
-    }
+    loadEnvFiles(this.appRoot, { skipEnvLocal: this.environment === 'test' })
   }
 
   private async phaseRegister(): Promise<void> {

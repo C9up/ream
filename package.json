@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
