@@ -54,6 +54,63 @@ describe('helix > RequestBuilder', () => {
     expect(init.body.toString('utf8')).toBe('a=1&b=two%20words')
   })
 
+  it('field() emits multipart/form-data with the text field part', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    const builder = new RequestBuilder(sender, 'POST', '/u')
+    await builder.field('title', 'Hello World').send()
+
+    const init = sender.mock.calls[0][2]
+    const ct = init.headers['content-type']
+    expect(ct).toMatch(/^multipart\/form-data; boundary=----ReamRequestBuilder/)
+    const boundary = ct.split('boundary=')[1]
+    const body = init.body.toString('utf8')
+    expect(body).toContain(
+      `--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nHello World\r\n`,
+    )
+    expect(body.endsWith(`--${boundary}--\r\n`)).toBe(true)
+  })
+
+  it('file() encodes a binary part with filename + content-type; field() interleaves', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
+    const builder = new RequestBuilder(sender, 'POST', '/avatar')
+    await builder
+      .file('avatar', png, { filename: 'a.png', contentType: 'image/png' })
+      .field('description', 'my pic')
+      .send()
+
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['content-type']).toMatch(/^multipart\/form-data/)
+    const text = init.body.toString('binary')
+    expect(text).toContain('Content-Disposition: form-data; name="avatar"; filename="a.png"')
+    expect(text).toContain('Content-Type: image/png')
+    expect(text).toContain('Content-Disposition: form-data; name="description"')
+    expect(text).toContain('my pic')
+    // Raw bytes (incl. embedded CRLF) survive the encoding intact.
+    expect(init.body.includes(png)).toBe(true)
+  })
+
+  it('file() defaults filename to the field name and content-type to octet-stream', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    const builder = new RequestBuilder(sender, 'POST', '/u')
+    await builder.file('doc', 'hello').send()
+
+    const text = sender.mock.calls[0][2].body.toString('utf8')
+    expect(text).toContain('name="doc"; filename="doc"')
+    expect(text).toContain('Content-Type: application/octet-stream')
+    expect(text).toContain('\r\n\r\nhello\r\n')
+  })
+
+  it('multipart parts override a previously-set json body', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    const builder = new RequestBuilder(sender, 'POST', '/u')
+    await builder.json({ a: 1 }).field('b', '2').send()
+
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['content-type']).toMatch(/^multipart\/form-data/)
+    expect(init.body.toString('utf8')).not.toContain('{"a":1}')
+  })
+
   it('cookies() serialises to Cookie header', async () => {
     const sender = vi.fn(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'GET', '/p')
