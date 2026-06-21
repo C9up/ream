@@ -51,12 +51,26 @@ export type HttpSender = (
   },
 ) => Promise<TestResponse>
 
+/** Options for a multipart file part — mirrors Adonis/japa's `.file()` options. */
+export interface FilePart {
+  /** Filename advertised in the part's `Content-Disposition`. Defaults to the field name. */
+  filename?: string
+  /** MIME type of the part. Defaults to `application/octet-stream`. */
+  contentType?: string
+}
+
+/** One encoded multipart/form-data part — a text field or an uploaded file. */
+type MultipartPart =
+  | { kind: 'field'; name: string; value: string }
+  | { kind: 'file'; name: string; filename: string; contentType: string; content: Buffer }
+
 export class RequestBuilder {
   #sender: HttpSender
   #method: HttpMethod
   #path: string
   #headers: Record<string, string> = {}
   #body: Buffer = Buffer.alloc(0)
+  #multipart: MultipartPart[] = []
   #cookies: Record<string, string> = {}
   #authStrategy: AuthStrategy | null
   #pendingAuth: AuthSubject | null = null
@@ -104,6 +118,34 @@ export class RequestBuilder {
     )
     this.#body = Buffer.from(pairs.join('&'), 'utf8')
     this.#headers['content-type'] = 'application/x-www-form-urlencoded'
+    return this
+  }
+
+  /**
+   * Add a `multipart/form-data` text field — mirrors Adonis/japa's `.field()`.
+   * Calling `.field()` or `.file()` switches the body to multipart (use
+   * `.form()` for `application/x-www-form-urlencoded`). The boundary +
+   * `Content-Type` header are produced at send time.
+   */
+  field(name: string, value: string): this {
+    this.#multipart.push({ kind: 'field', name, value })
+    return this
+  }
+
+  /**
+   * Attach a file as a `multipart/form-data` part — mirrors Adonis/japa's
+   * `.file(field, contents, { filename, contentType })`. `contents` is a
+   * Buffer (binary) or a string (encoded as utf8). Server-side
+   * `request.file(field, …)` reads the resulting part.
+   */
+  file(field: string, contents: Buffer | string, options: FilePart = {}): this {
+    this.#multipart.push({
+      kind: 'file',
+      name: field,
+      filename: options.filename ?? field,
+      contentType: options.contentType ?? 'application/octet-stream',
+      content: typeof contents === 'string' ? Buffer.from(contents, 'utf8') : contents,
+    })
     return this
   }
 
@@ -231,6 +273,14 @@ export class RequestBuilder {
       }
     }
 
+    // Multipart parts (.field()/.file()) take precedence over any body set by
+    // json()/form()/body(); encode them with a fresh boundary at send time.
+    if (this.#multipart.length > 0) {
+      const boundary = `----ReamRequestBuilder${crypto.randomUUID().replace(/-/g, '')}`
+      this.#body = encodeMultipart(this.#multipart, boundary)
+      this.#headers['content-type'] = `multipart/form-data; boundary=${boundary}`
+    }
+
     // Serialise cookies into a single `Cookie:` header.
     const cookieEntries = Object.entries(this.#cookies)
     if (cookieEntries.length > 0) {
@@ -246,6 +296,42 @@ export class RequestBuilder {
 
 function capBody(s: string, max = 512): string {
   return s.length <= max ? s : `${s.slice(0, max)}...[truncated]`
+}
+
+/** Strip CR/LF and escape quotes so a name/filename can't break the headers. */
+function sanitizeHeaderParam(value: string): string {
+  return value.replace(/[\r\n]/g, '').replace(/"/g, '%22')
+}
+
+/** Encode multipart/form-data parts (RFC 7578) into a single body Buffer. */
+function encodeMultipart(parts: MultipartPart[], boundary: string): Buffer {
+  const CRLF = '\r\n'
+  const chunks: Buffer[] = []
+  for (const part of parts) {
+    if (part.kind === 'field') {
+      chunks.push(
+        Buffer.from(
+          `--${boundary}${CRLF}` +
+            `Content-Disposition: form-data; name="${sanitizeHeaderParam(part.name)}"${CRLF}${CRLF}` +
+            `${part.value}${CRLF}`,
+          'utf8',
+        ),
+      )
+    } else {
+      chunks.push(
+        Buffer.from(
+          `--${boundary}${CRLF}` +
+            `Content-Disposition: form-data; name="${sanitizeHeaderParam(part.name)}"; filename="${sanitizeHeaderParam(part.filename)}"${CRLF}` +
+            `Content-Type: ${part.contentType}${CRLF}${CRLF}`,
+          'utf8',
+        ),
+        part.content,
+        Buffer.from(CRLF, 'utf8'),
+      )
+    }
+  }
+  chunks.push(Buffer.from(`--${boundary}--${CRLF}`, 'utf8'))
+  return Buffer.concat(chunks)
 }
 
 /** Narrowing guard — a non-null, non-array object usable as a string map. */
