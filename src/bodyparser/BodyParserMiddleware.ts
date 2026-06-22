@@ -120,6 +120,10 @@ export default class BodyParserMiddleware {
       if (payload) {
         if (this.#rejectMultipart(ctx, payload.files, payload.fields)) return
         const { fields, files } = hydrateMultipartPayload(payload)
+        // Fingerprint each file's real type from its magic bytes BEFORE handlers
+        // run, so `request.file(field, { extnames })` validates against the
+        // detected type (not the attacker-controlled filename/header).
+        await Promise.all(files.map((file) => file.detectType()))
         ctx.request.setParsedBody(fields)
         ctx.request.setFiles(files)
       }

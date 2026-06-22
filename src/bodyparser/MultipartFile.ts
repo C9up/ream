@@ -18,10 +18,11 @@ export class MultipartFile {
   /** Original filename from the client. */
   readonly clientName: string
 
-  /** File extension (without dot). */
-  readonly extname: string
-
-  /** MIME type from the Content-Type header. */
+  /**
+   * MIME type from the Content-Type header. ATTACKER-CONTROLLED — never trust it
+   * for security decisions or as a response Content-Type. Prefer
+   * {@link detectedType}, which is fingerprinted from the file's magic bytes.
+   */
   readonly type: string
 
   /** File size in bytes. */
@@ -39,6 +40,12 @@ export class MultipartFile {
   /** Whether the file has been moved. */
   #moved = false
 
+  /** Extension derived from the (attacker-controlled) client filename. */
+  #clientExtname: string
+
+  /** Magic-byte fingerprint — set by {@link detectType}; absent for content `file-type` can't detect (text: txt/csv/svg/json). */
+  #detected?: { ext: string; mime: string }
+
   constructor(options: {
     fieldName: string
     clientName: string
@@ -51,7 +58,37 @@ export class MultipartFile {
     this.content = options.content
     this.size = options.content.length
     const segments = options.clientName.split('.')
-    this.extname = segments.length > 1 ? (segments.at(-1) ?? '').toLowerCase() : ''
+    this.#clientExtname = segments.length > 1 ? (segments.at(-1) ?? '').toLowerCase() : ''
+  }
+
+  /**
+   * Fingerprint the real file type from its magic bytes (via `file-type`), so
+   * validation + storage don't trust the attacker-controlled filename/header.
+   * Mirrors AdonisJS, which detects binary types this way. Call once after
+   * construction (the BodyParser middleware does this for every uploaded file).
+   * Content `file-type` can't fingerprint (text formats) leaves the client
+   * extension in force — same fallback AdonisJS uses.
+   */
+  async detectType(): Promise<void> {
+    const { fileTypeFromBuffer } = await import('file-type')
+    const result = await fileTypeFromBuffer(this.content)
+    if (result) this.#detected = { ext: result.ext, mime: result.mime }
+  }
+
+  /**
+   * Magic-byte-detected MIME type — TRUSTWORTHY (content-derived). `undefined`
+   * for text formats `file-type` can't fingerprint. Use this, not {@link type}.
+   */
+  get detectedType(): string | undefined {
+    return this.#detected?.mime
+  }
+
+  /**
+   * File extension without the dot — the magic-byte-detected one when available
+   * (defeats a renamed binary), else the client filename's extension.
+   */
+  get extname(): string {
+    return this.#detected?.ext ?? this.#clientExtname
   }
 
   /** Validate file against size and extension rules. */
@@ -63,6 +100,8 @@ export class MultipartFile {
       }
     }
     if (options.extnames && options.extnames.length > 0) {
+      // `this.extname` is the magic-byte-detected extension when available, so a
+      // binary renamed `evil.png` is validated by its real type, not its name.
       if (!options.extnames.includes(this.extname)) {
         this.errors.push(
           `Extension '${this.extname}' not allowed. Allowed: ${options.extnames.join(', ')}`,

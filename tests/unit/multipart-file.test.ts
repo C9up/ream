@@ -12,6 +12,52 @@ async function drainStream(readable: NodeJS.ReadableStream): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
+describe('MultipartFile.detectType() — magic-byte content detection', () => {
+  // Minimal valid PNG: 8-byte signature + IHDR chunk.
+  const PNG = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from([0x00, 0x00, 0x00, 0x0d]),
+    Buffer.from('IHDR', 'ascii'),
+    Buffer.from([0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00]),
+  ])
+
+  it('detects the real type of a binary renamed to a benign extension', async () => {
+    const file = new MultipartFile({
+      fieldName: 'doc',
+      clientName: 'evil.txt', // lies — content is a PNG
+      type: 'text/plain', // attacker-controlled header — also a lie
+      content: PNG,
+    })
+    await file.detectType()
+
+    expect(file.detectedType).toBe('image/png')
+    expect(file.extname).toBe('png') // detected, not the client 'txt'
+    expect(file.validate({ extnames: ['png'] })).toBe(true)
+
+    const spoof = new MultipartFile({
+      fieldName: 'doc',
+      clientName: 'evil.txt',
+      type: 'text/plain',
+      content: PNG,
+    })
+    await spoof.detectType()
+    expect(spoof.validate({ extnames: ['txt'] })).toBe(false) // real type is png, not txt
+  })
+
+  it('falls back to the client extension for content file-type cannot fingerprint (text)', async () => {
+    const file = new MultipartFile({
+      fieldName: 'note',
+      clientName: 'note.txt',
+      type: 'text/plain',
+      content: Buffer.from('just some plain text', 'utf8'),
+    })
+    await file.detectType()
+
+    expect(file.detectedType).toBeUndefined()
+    expect(file.extname).toBe('txt') // client fallback
+  })
+})
+
 describe('MultipartFile.stream()', () => {
   it('returns a readable that re-emits the buffer bytes', async () => {
     const content = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe])

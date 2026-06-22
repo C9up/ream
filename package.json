@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
@@ -113,6 +113,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "file-type": "^22.0.1",
     "reflect-metadata": "^0.2"
   },
   "devDependencies": {
