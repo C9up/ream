@@ -216,6 +216,49 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     ])
   })
 
+  it('honors a handler error carrying a numeric code (domain errors, not -32603)', async () => {
+    const container = new Container()
+    const { provider, posted } = mount(container, (rpc) => {
+      rpc.method('task.find', () => {
+        throw Object.assign(new Error('Task not found'), {
+          code: -32004,
+          data: { id: 'abc' },
+        })
+      })
+    })
+    await provider.boot()
+    const out = await call(posted[0], {
+      jsonrpc: '2.0',
+      method: 'task.find',
+      params: {},
+      id: 1,
+    })
+    expect(out).toEqual([
+      {
+        jsonrpc: '2.0',
+        error: { code: -32004, message: 'Task not found', data: { id: 'abc' } },
+        id: 1,
+      },
+    ])
+  })
+
+  it('still maps a plain (codeless) handler throw to -32603', async () => {
+    const container = new Container()
+    const { provider, posted } = mount(container, (rpc) => {
+      rpc.method('task.boom', () => {
+        throw new Error('kaboom')
+      })
+    })
+    await provider.boot()
+    const out = await call(posted[0], {
+      jsonrpc: '2.0',
+      method: 'task.boom',
+      params: {},
+      id: 2,
+    })
+    expect(out).toEqual([{ jsonrpc: '2.0', error: { code: -32603, message: 'kaboom' }, id: 2 }])
+  })
+
   it('runs a declared RPC validator and rejects invalid params with -32602', async () => {
     const container = new Container()
     container.singleton('validator:createUser', () => ({
