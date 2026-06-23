@@ -76,6 +76,20 @@ interface RpcErrorResponse {
   id: unknown
 }
 
+/**
+ * Unwrap the `{ _body: [...] }` envelope `request.body()` puts around a
+ * top-level JSON array (it only treats plain objects as the body verbatim). A
+ * JSON-RPC batch arrives this way; a single request is a plain object and is
+ * returned unchanged.
+ */
+function unwrapBatchBody(value: unknown): unknown {
+  if (typeof value === 'object' && value !== null && '_body' in value) {
+    const inner = value._body
+    if (Array.isArray(inner)) return inner
+  }
+  return value
+}
+
 /** Build a JSON-RPC 2.0 error envelope. */
 function rpcError(code: number, message: string, id: unknown, data?: unknown): RpcErrorResponse {
   return {
@@ -225,7 +239,10 @@ export class RpcRouter {
 
   /** Handle an incoming JSON-RPC request. */
   async handle(ctx: HttpContext): Promise<void> {
-    const body = ctx.request.body()
+    // `request.body()` wraps a top-level JSON array — a JSON-RPC batch — as its
+    // non-object envelope `{ _body: [...] }`. Unwrap it so batch detection works;
+    // a single request is a plain object and passes through untouched.
+    const body = unwrapBatchBody(ctx.request.body())
 
     // Batch support (max 50 to prevent DoS)
     if (Array.isArray(body)) {
