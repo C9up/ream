@@ -90,6 +90,13 @@ function unwrapBatchBody(value: unknown): unknown {
   return value
 }
 
+/** A handler error shaped like a JSON-RPC error — it carries a numeric `code`. */
+function isRpcShapedError(
+  err: unknown,
+): err is { code: number; message?: unknown; data?: unknown } {
+  return typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'number'
+}
+
 /** Build a JSON-RPC 2.0 error envelope. */
 function rpcError(code: number, message: string, id: unknown, data?: unknown): RpcErrorResponse {
   return {
@@ -345,7 +352,14 @@ export class RpcRouter {
       const result = await def.handler(ctx, effectiveParams)
       return { jsonrpc: '2.0', result, id }
     } catch (err) {
-      // Don't leak internal error details to caller
+      // Honor a JSON-RPC-shaped error thrown by a handler (one carrying a numeric
+      // `code`), so handlers can return domain errors — -32004 not-found, -32009
+      // conflict, etc. — instead of every throw collapsing to -32603.
+      if (isRpcShapedError(err)) {
+        const message = typeof err.message === 'string' ? err.message : 'RPC error'
+        return rpcError(err.code, message, id, err.data)
+      }
+      // Otherwise don't leak internal error details to the caller.
       const isDev = process.env.NODE_ENV !== 'production'
       const message = isDev && err instanceof Error ? err.message : 'Internal error'
       return rpcError(-32603, message, id)

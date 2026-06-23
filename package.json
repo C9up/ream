@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
@@ -66,6 +66,14 @@
     "./events/provider": {
       "types": "./src/events/EventsProvider.ts",
       "import": "./src/events/EventsProvider.ts"
+    },
+    "./rpc/provider": {
+      "types": "./src/rpc/RpcProvider.ts",
+      "import": "./src/rpc/RpcProvider.ts"
+    },
+    "./rpc/router": {
+      "types": "./src/rpc/RpcRouter.ts",
+      "import": "./src/rpc/RpcRouter.ts"
     },
     "./events/config": {
       "types": "./src/events/config.ts",
@@ -168,6 +176,14 @@
       "./events/provider": {
         "types": "./dist/events/EventsProvider.d.ts",
         "import": "./dist/events/EventsProvider.js"
+      },
+      "./rpc/provider": {
+        "types": "./dist/rpc/RpcProvider.d.ts",
+        "import": "./dist/rpc/RpcProvider.js"
+      },
+      "./rpc/router": {
+        "types": "./dist/rpc/RpcRouter.d.ts",
+        "import": "./dist/rpc/RpcRouter.js"
       },
       "./events/config": {
         "types": "./dist/events/config.d.ts",
