@@ -194,6 +194,28 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     expect(out).toEqual([{ jsonrpc: '2.0', result: 'pong', id: 1 }])
   })
 
+  it('processes a batch wrapped by request.body() as { _body: [...] }', async () => {
+    const container = new Container()
+    const { provider, posted } = mount(container, (rpc) => {
+      rpc.method('demo.echo', (_ctx, params) => params)
+    })
+    await provider.boot()
+    // A top-level JSON array (JSON-RPC batch) reaches the handler wrapped in the
+    // `{ _body: [...] }` envelope `request.body()` puts around non-objects.
+    const out = await call(posted[0], {
+      _body: [
+        { jsonrpc: '2.0', method: 'demo.echo', params: { x: 1 }, id: 0 },
+        { jsonrpc: '2.0', method: 'demo.echo', params: { y: 2 }, id: 1 },
+      ],
+    })
+    expect(out).toEqual([
+      [
+        { jsonrpc: '2.0', result: { x: 1 }, id: 0 },
+        { jsonrpc: '2.0', result: { y: 2 }, id: 1 },
+      ],
+    ])
+  })
+
   it('runs a declared RPC validator and rejects invalid params with -32602', async () => {
     const container = new Container()
     container.singleton('validator:createUser', () => ({
