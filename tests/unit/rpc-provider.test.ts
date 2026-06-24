@@ -69,6 +69,33 @@ describe('RpcProvider > endpoint mount', () => {
     expect(posted).toEqual(['/rpc'])
   })
 
+  it('applies config.rpc.guards to the mounted /rpc route', async () => {
+    const container = new Container()
+    const guardsApplied: string[] = []
+    container.singleton('router', () => ({
+      post(_path: string, _handler: unknown) {
+        return {
+          guard(...g: string[]) {
+            guardsApplied.push(...g)
+            return this
+          },
+        }
+      },
+    }))
+    const appCtx = {
+      container,
+      config: {
+        get: (key: string) => (key === 'rpc' ? { guards: ['jwt'] } : undefined),
+        set: () => {},
+      },
+    }
+    const provider = new RpcProvider(appCtx)
+    provider.register()
+    await provider.boot()
+    // warden reads these route guards → authenticates /rpc at the edge.
+    expect(guardsApplied).toEqual(['jwt'])
+  })
+
   it('dispatches a registered method end-to-end through the mounted handler', async () => {
     const container = new Container()
     const posted: Array<(ctx: unknown) => Promise<void>> = []

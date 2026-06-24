@@ -30,6 +30,14 @@ export interface RpcProviderOptions {
 export interface RpcConfig {
   /** HTTP path the JSON-RPC endpoint is mounted at. Default `/rpc`. */
   path?: string
+  /**
+   * Guards applied to the `/rpc` route itself (e.g. `['jwt']`), so warden
+   * authenticates the endpoint at the edge and populates `ctx.auth` for every
+   * call — which per-method `.guard()` / `authorizeRpc()` then read. Without
+   * this, the inline-mounted route carries no guard metadata, so warden treats
+   * it as public and never populates `ctx.auth` (every guarded method 401s).
+   */
+  guards?: string[]
 }
 
 export class RpcProvider extends Provider {
@@ -57,10 +65,22 @@ export class RpcProvider extends Provider {
   }
 
   override async boot(): Promise<void> {
-    const path = this.app.config.get<RpcConfig>('rpc')?.path ?? '/rpc'
+    const config = this.app.config.get<RpcConfig>('rpc')
+    const path = config?.path ?? '/rpc'
     const router = this.app.container.make<Router>('router')
     // RpcRouter.handle() reads the registered methods at request time, so the
     // mount can happen before apps finish registering methods.
-    router.post(path, (ctx: HttpContext) => this.rpc.handle(ctx))
+    const route = router.post(path, (ctx: HttpContext) => this.rpc.handle(ctx))
+    // Apply route-level guards (e.g. ['jwt']) so warden authenticates the
+    // endpoint at the edge and populates ctx.auth — the inline route has no
+    // decorator metadata otherwise.
+    const guards = config?.guards ?? []
+    if (guards.length > 0) route.guard(...guards)
   }
 }
+
+// Also expose as the default export so reamrc's provider loader can do
+// `() => import('@c9up/ream/rpc/provider')` (which resolves to `{ default }`),
+// matching EventsProvider. The named `export class RpcProvider` above stays for
+// `import { RpcProvider }`.
+export default RpcProvider

@@ -72,3 +72,6 @@ export class GraphQLProvider extends Provider {
     router.post(engine.path, (ctx) => engine.handle(ctx))
   }
 }
+
+// Default export so reamrc's provider loader can `() => import('@c9up/ream/<feature>/provider')` (resolves to { default }), matching events/rpc. Named export above stays.
+export default GraphQLProvider
