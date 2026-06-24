@@ -599,8 +599,12 @@ export class Router {
 
   // ─── URL generation ───────────────────────────────────────
 
-  /** Generate a URL from a named route. */
-  makeUrl(name: string, params?: Record<string, string>): string {
+  /**
+   * Generate a URL from a named route — the canonical URL builder (AdonisJS v7
+   * `urlFor` parity). Fills `:param` placeholders, strips unprovided optional
+   * segments, and throws on an unknown name or a missing required param.
+   */
+  urlFor(name: string, params?: Record<string, string>): string {
     if (this.#indexDirty) this.#buildIndex()
     const route = this.#nameIndex.get(name)
     if (!route) {
@@ -633,6 +637,30 @@ export class Router {
       )
     }
     return url
+  }
+
+  /**
+   * @deprecated Use {@link urlFor} — AdonisJS v7 renamed `makeUrl` → `urlFor`.
+   * Retained as a thin alias so existing callers keep working.
+   */
+  makeUrl(name: string, params?: Record<string, string>): string {
+    return this.urlFor(name, params)
+  }
+
+  /**
+   * Map of every NAMED route's `name` → path pattern, e.g.
+   * `{ 'users.show': '/users/:id' }`. Serialize this into a page so a
+   * browser-side `urlFor(name, params)` can build URLs without shipping the full
+   * route table — only named routes are exposed; unnamed routes stay private to
+   * the server. Powers the aurora client URL helper.
+   */
+  namedManifest(): Record<string, string> {
+    if (this.#indexDirty) this.#buildIndex()
+    const manifest: Record<string, string> = {}
+    for (const [name, route] of this.#nameIndex) {
+      manifest[name] = route.path
+    }
+    return manifest
   }
 
   // ─── Accessors ────────────────────────────────────────────

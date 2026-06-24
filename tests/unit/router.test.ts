@@ -211,6 +211,49 @@ describe('router > makeUrl', () => {
   })
 })
 
+describe('router > urlFor (AdonisJS v7 naming)', () => {
+  it('generates a URL from a named route', () => {
+    const router = new Router()
+    router.get('/users/:id', async () => {}).as('users.show')
+    expect(router.urlFor('users.show', { id: '42' })).toBe('/users/42')
+  })
+
+  it('throws on a missing required param', () => {
+    const router = new Router()
+    router.get('/users/:id', async () => {}).as('users.show')
+    expect(() => router.urlFor('users.show')).toThrow(/missing params.*:id/)
+  })
+
+  it('makeUrl is a thin (deprecated) alias of urlFor', () => {
+    const router = new Router()
+    router.get('/p/:id', async () => {}).as('p.show')
+    expect(router.makeUrl('p.show', { id: '7' })).toBe(router.urlFor('p.show', { id: '7' }))
+  })
+})
+
+describe('router > namedManifest', () => {
+  it('maps every NAMED route name → path pattern', () => {
+    const router = new Router()
+    router.get('/users/:id', async () => {}).as('users.show')
+    router.get('/about', async () => {}).as('about')
+    router.get('/health', async () => {}) // unnamed — must NOT appear
+    expect(router.namedManifest()).toEqual({
+      'users.show': '/users/:id',
+      about: '/about',
+    })
+  })
+
+  it('reflects group name prefixes', () => {
+    const router = new Router()
+    router
+      .group(() => {
+        router.get('/posts/:id', async () => {}).as('show')
+      })
+      .as('posts')
+    expect(router.namedManifest()).toEqual({ 'posts.show': '/posts/:id' })
+  })
+})
+
 describe('middleware > pipeline', () => {
   it('executes in onion order', async () => {
     const registry = new MiddlewareRegistry()

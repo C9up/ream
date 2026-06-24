@@ -144,7 +144,7 @@ export function createHttpKernel(
       routeInfo,
       config.container,
     )
-    ctx.setRouteUrlResolver((name, params) => config.router.makeUrl(name, params))
+    ctx.setRouteUrlResolver((name, params) => config.router.urlFor(name, params))
     ctx.events = resolveEvents()
     // Core lifecycle event: a request entered the kernel. Fire-and-forget through
     // the bus when events are wired (`?.` → zero cost when no provider). The
