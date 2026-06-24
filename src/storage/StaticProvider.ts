@@ -38,3 +38,6 @@ export class StaticProvider extends Provider {
     server.use([(ctx, next) => middleware.handle(ctx, next)])
   }
 }
+
+// Default export so reamrc's provider loader can `() => import('@c9up/ream/storage/provider')` (resolves to { default }), matching events/rpc. Named export above stays.
+export default StaticProvider

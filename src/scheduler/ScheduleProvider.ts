@@ -185,3 +185,6 @@ export class ScheduleProvider extends Provider {
     this.scheduler.stop()
   }
 }
+
+// Default export so reamrc's provider loader can `() => import('@c9up/ream/<feature>/provider')` (resolves to { default }), matching events/rpc. Named export above stays.
+export default ScheduleProvider

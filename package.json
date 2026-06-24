@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
@@ -74,6 +74,22 @@
     "./rpc/router": {
       "types": "./src/rpc/RpcRouter.ts",
       "import": "./src/rpc/RpcRouter.ts"
+    },
+    "./graphql/provider": {
+      "types": "./src/graphql/GraphQLProvider.ts",
+      "import": "./src/graphql/GraphQLProvider.ts"
+    },
+    "./openapi/provider": {
+      "types": "./src/openapi/OpenApiProvider.ts",
+      "import": "./src/openapi/OpenApiProvider.ts"
+    },
+    "./scheduler/provider": {
+      "types": "./src/scheduler/ScheduleProvider.ts",
+      "import": "./src/scheduler/ScheduleProvider.ts"
+    },
+    "./storage/provider": {
+      "types": "./src/storage/StaticProvider.ts",
+      "import": "./src/storage/StaticProvider.ts"
     },
     "./events/config": {
       "types": "./src/events/config.ts",
@@ -184,6 +200,22 @@
       "./rpc/router": {
         "types": "./dist/rpc/RpcRouter.d.ts",
         "import": "./dist/rpc/RpcRouter.js"
+      },
+      "./graphql/provider": {
+        "types": "./dist/graphql/GraphQLProvider.d.ts",
+        "import": "./dist/graphql/GraphQLProvider.js"
+      },
+      "./openapi/provider": {
+        "types": "./dist/openapi/OpenApiProvider.d.ts",
+        "import": "./dist/openapi/OpenApiProvider.js"
+      },
+      "./scheduler/provider": {
+        "types": "./dist/scheduler/ScheduleProvider.d.ts",
+        "import": "./dist/scheduler/ScheduleProvider.js"
+      },
+      "./storage/provider": {
+        "types": "./dist/storage/StaticProvider.d.ts",
+        "import": "./dist/storage/StaticProvider.js"
       },
       "./events/config": {
         "types": "./dist/events/config.d.ts",

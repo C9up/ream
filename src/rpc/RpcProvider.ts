@@ -64,3 +64,9 @@ export class RpcProvider extends Provider {
     router.post(path, (ctx: HttpContext) => this.rpc.handle(ctx))
   }
 }
+
+// Also expose as the default export so reamrc's provider loader can do
+// `() => import('@c9up/ream/rpc/provider')` (which resolves to `{ default }`),
+// matching EventsProvider. The named `export class RpcProvider` above stays for
+// `import { RpcProvider }`.
+export default RpcProvider
