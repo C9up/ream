@@ -57,10 +57,10 @@ export { MultipartFile } from './bodyparser/MultipartFile.js'
 
 // ─── JSON-RPC ───────────────────────────────────────────────
 
-export type { RpcConfig, RpcProviderOptions } from './rpc/RpcProvider.js'
-export { RpcProvider } from './rpc/RpcProvider.js'
-export type { RpcHandler, RpcMethodDefinition } from './rpc/RpcRouter.js'
-export { RpcMethodBuilder, RpcRouter } from './rpc/RpcRouter.js'
+// JSON-RPC is opt-in and pulls the optional @c9up/comet peer, so it is NOT
+// re-exported from the core barrel — import it from the subpaths instead:
+//   '@c9up/ream/rpc/provider' → RpcProvider, RpcConfig, RpcProviderOptions
+//   '@c9up/ream/rpc/router'   → RpcRouter, RpcMethodBuilder, RpcHandler, RpcMethodDefinition
 
 // ─── GraphQL ────────────────────────────────────────────────
 

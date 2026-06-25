@@ -1,8 +1,10 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import type { AppContext } from '../../src/index.js'
-import { Container, ReamError, RpcProvider, RpcRouter } from '../../src/index.js'
+import { Container, ReamError } from '../../src/index.js'
 import { MiddlewareRegistry } from '../../src/middleware/Pipeline.js'
+import { RpcProvider } from '../../src/rpc/RpcProvider.js'
+import { RpcRouter } from '../../src/rpc/RpcRouter.js'
 
 function buildApp(container: Container): AppContext {
   const config = { get: () => undefined, set: () => {} }

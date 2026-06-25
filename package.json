@@ -137,12 +137,20 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@c9up/comet": "workspace:*",
     "file-type": "^22.0.1",
     "reflect-metadata": "^0.2"
   },
+  "peerDependencies": {
+    "@c9up/comet": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@c9up/comet": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
+    "@c9up/comet": "^0.1.0",
     "@types/node": "^22.19.15",
     "typescript": "^6.0.2",
     "vitest": "^4.1.6"
