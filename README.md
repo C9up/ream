@@ -57,6 +57,7 @@ universe through the container, never via a static import.
 | [@c9up/rover](https://github.com/C9up/rover) | Mail transport (SMTP, log, pluggable) |
 | [@c9up/nova](https://github.com/C9up/nova) | Web Push notifications (VAPID) |
 | [@c9up/relay](https://github.com/C9up/relay) | Realtime transport (SSE + WebSocket) |
+| [@c9up/comet](https://github.com/C9up/comet) | JSON-RPC 2.0 protocol + isomorphic client |
 | [@c9up/aurora](https://github.com/C9up/aurora) | Reactive UI runtime (SSR + hydration) |
 | [@c9up/photon](https://github.com/C9up/photon) | Frontend rendering engine |
 | [@c9up/inker](https://github.com/C9up/inker) | Server-side templating |

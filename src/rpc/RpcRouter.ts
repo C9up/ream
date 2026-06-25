@@ -11,6 +11,13 @@
  * @implements MISS-27
  */
 
+import {
+  buildSuccess,
+  isNotification,
+  isRpcShapedError,
+  parseRequest as parseRpcRequest,
+  buildError as rpcError,
+} from '@c9up/comet'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
 import { compose } from '../middleware/Pipeline.js'
@@ -70,12 +77,6 @@ export class RpcMethodBuilder {
   }
 }
 
-interface RpcErrorResponse {
-  jsonrpc: '2.0'
-  error: { code: number; message: string; data?: unknown }
-  id: unknown
-}
-
 /**
  * Unwrap the `{ _body: [...] }` envelope `request.body()` puts around a
  * top-level JSON array (it only treats plain objects as the body verbatim). A
@@ -88,62 +89,6 @@ function unwrapBatchBody(value: unknown): unknown {
     if (Array.isArray(inner)) return inner
   }
   return value
-}
-
-/** A handler error shaped like a JSON-RPC error — it carries a numeric `code`. */
-function isRpcShapedError(
-  err: unknown,
-): err is { code: number; message?: unknown; data?: unknown } {
-  return typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'number'
-}
-
-/** Build a JSON-RPC 2.0 error envelope. */
-function rpcError(code: number, message: string, id: unknown, data?: unknown): RpcErrorResponse {
-  return {
-    jsonrpc: '2.0',
-    error: data === undefined ? { code, message } : { code, message, data },
-    id,
-  }
-}
-
-type ParsedRpcRequest =
-  | { ok: true; method: string; params: unknown; id: unknown }
-  | { ok: false; response: RpcErrorResponse }
-
-/** Validate the JSON-RPC envelope and extract method/params/id. */
-function parseRpcRequest(request: unknown): ParsedRpcRequest {
-  if (!request || typeof request !== 'object') {
-    return { ok: false, response: rpcError(-32600, 'Invalid Request', null) }
-  }
-  // request is narrowed to a non-null object by the typeof check above.
-  const jsonrpc =
-    'jsonrpc' in request && typeof request.jsonrpc === 'string' ? request.jsonrpc : undefined
-  const method =
-    'method' in request && typeof request.method === 'string' ? request.method : undefined
-  const params = 'params' in request ? request.params : undefined
-  const id = 'id' in request ? request.id : undefined
-  if (jsonrpc !== '2.0' || !method) {
-    return { ok: false, response: rpcError(-32600, 'Invalid Request', id ?? null) }
-  }
-  return { ok: true, method, params, id }
-}
-
-/**
- * A JSON-RPC notification is a well-formed request with NO `id` member. The spec
- * (§4.1) says the server MUST NOT reply to one — it still runs for side-effects.
- * A malformed object (no method / wrong version) is NOT a notification: it gets
- * an `id:null` error response since the server can't tell the client's intent.
- */
-function isNotification(request: unknown): boolean {
-  return (
-    !!request &&
-    typeof request === 'object' &&
-    'jsonrpc' in request &&
-    request.jsonrpc === '2.0' &&
-    'method' in request &&
-    typeof request.method === 'string' &&
-    !('id' in request)
-  )
 }
 
 /**
@@ -254,11 +199,7 @@ export class RpcRouter {
     // Batch support (max 50 to prevent DoS)
     if (Array.isArray(body)) {
       if (body.length > 50) {
-        ctx.response.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Batch too large (max 50)' },
-          id: null,
-        })
+        ctx.response.status(400).json(rpcError(-32600, 'Batch too large (max 50)', null))
         return
       }
       // Note: batch items share the same ctx (auth state). Each is processed sequentially.
@@ -350,7 +291,7 @@ export class RpcRouter {
       }
 
       const result = await def.handler(ctx, effectiveParams)
-      return { jsonrpc: '2.0', result, id }
+      return buildSuccess(result, id)
     } catch (err) {
       // Honor a JSON-RPC-shaped error thrown by a handler (one carrying a numeric
       // `code`), so handlers can return domain errors — -32004 not-found, -32009

@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
@@ -137,6 +137,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@c9up/comet": "workspace:*",
     "file-type": "^22.0.1",
     "reflect-metadata": "^0.2"
   },
