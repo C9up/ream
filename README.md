@@ -8,7 +8,7 @@ Rust-powered Node.js application framework. Convention over configuration with n
 
 - **IoC Container** — `@Service()`, `@Inject()`, auto-resolution, scopes
 - **Lifecycle** — register → boot → start → ready → shutdown
-- **Router** — fluent chaining, groups, params, guards, versioning
+- **Router** — fluent chaining, groups, params, guards, versioning, named routes + `urlFor()` URL builder (`namedManifest()` exposes them to the client)
 - **Middleware pipeline** — onion pattern, global + named, guard enforcement
 - **HTTP server** — Rust Hyper via NAPI
 - **Event bus** — in-process emitter with optional Redis store (`@c9up/ream/events`)
