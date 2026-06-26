@@ -245,9 +245,12 @@ export function createHttpKernel(
         await cached.chain(innerCtx, async () => {})
       }
 
-      // Compose: server middleware wraps everything (onion)
+      // Compose: server middleware wraps everything (onion). Run inside the
+      // HttpContext ALS so HttpContext.get()/getOrFail() reach this request
+      // anywhere down the call stack (AdonisJS parity) — transparent to the
+      // pipeline itself.
       const fullPipeline = compose([...serverMw, coreHandler])
-      await fullPipeline(ctx, async () => {})
+      await HttpContext.run(ctx, () => fullPipeline(ctx, async () => {}))
 
       ctx.events?.emit('http:response', {
         id: correlationId,

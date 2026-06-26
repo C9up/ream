@@ -7,6 +7,7 @@
  * @implements FR21
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ServiceToken } from '../container/types.js'
 import type { Emitter } from '../events/Emitter.js'
 import type { RouteUrlResolver } from './RedirectBuilder.js'
@@ -63,6 +64,56 @@ export interface ContainerResolver {
   make<T>(token: ServiceToken): T
 }
 
+/**
+ * Per-request logger contract (AdonisJS `ctx.logger`). Structural so Ream stays
+ * agnostic of the concrete logger — `@c9up/spectrum` satisfies it. Message-first
+ * (matches spectrum's ergonomic shape).
+ */
+export interface ContextLogger {
+  trace(message: string, data?: Record<string, unknown>): void
+  debug(message: string, data?: Record<string, unknown>): void
+  info(message: string, data?: Record<string, unknown>): void
+  warn(message: string, data?: Record<string, unknown>): void
+  error(message: string, data?: Record<string, unknown>): void
+  fatal(message: string, data?: Record<string, unknown>): void
+}
+
+/** A logger that can spawn a request-scoped child (e.g. spectrum's `child()`). */
+interface ChildLoggerSource extends ContextLogger {
+  child?(options: { correlationId?: string; module?: string }): ContextLogger
+}
+
+/** Console fallback used when no `'logger'` is registered in the container. */
+function consoleLogger(correlationId: string): ContextLogger {
+  const write = (level: string, message: string, data?: Record<string, unknown>): void => {
+    const tail = data ? ` ${JSON.stringify(data)}` : ''
+    process.stdout.write(`[${level}] (${correlationId}) ${message}${tail}\n`)
+  }
+  return {
+    trace: (m, d) => write('trace', m, d),
+    debug: (m, d) => write('debug', m, d),
+    info: (m, d) => write('info', m, d),
+    warn: (m, d) => write('warn', m, d),
+    error: (m, d) => write('error', m, d),
+    fatal: (m, d) => write('fatal', m, d),
+  }
+}
+
+/** Resolve a request-scoped logger from the container, or fall back to console. */
+function resolveRequestLogger(
+  resolver: ContainerResolver | undefined,
+  correlationId: string,
+): ContextLogger {
+  let base: ChildLoggerSource | undefined
+  try {
+    base = resolver?.make<ChildLoggerSource>('logger')
+  } catch {
+    base = undefined
+  }
+  if (!base) return consoleLogger(correlationId)
+  return typeof base.child === 'function' ? base.child({ correlationId }) : base
+}
+
 export interface RouteInfo {
   pattern: string
   name?: string
@@ -79,7 +130,36 @@ export interface RouteInfo {
   action?: string
 }
 
+/** Ambient per-request context store (AdonisJS `HttpContext` ALS accessor). */
+const httpContextStorage = new AsyncLocalStorage<HttpContext>()
+
 export class HttpContext {
+  /**
+   * @internal Run `fn` with `ctx` as the ambient HttpContext, so code deep in
+   * the call stack can reach it via {@link HttpContext.get}/{@link getOrFail}
+   * without threading `ctx` through every signature. HttpKernel wraps the
+   * request pipeline in this.
+   */
+  static run<T>(ctx: HttpContext, fn: () => T): T {
+    return httpContextStorage.run(ctx, fn)
+  }
+
+  /** The ambient HttpContext, or `undefined` outside a request (AdonisJS `HttpContext.get()`). */
+  static get(): HttpContext | undefined {
+    return httpContextStorage.getStore()
+  }
+
+  /** The ambient HttpContext, or throw outside a request (AdonisJS `HttpContext.getOrFail()`). */
+  static getOrFail(): HttpContext {
+    const ctx = httpContextStorage.getStore()
+    if (!ctx) {
+      throw new Error(
+        '[E_HTTP_CONTEXT_NOT_FOUND] HttpContext.getOrFail() called outside an HTTP request — no ambient context. Pass ctx explicitly, or only call this within the request lifecycle.',
+      )
+    }
+    return ctx
+  }
+
   /** Unique request/correlation ID. */
   readonly id: string
 
@@ -131,8 +211,23 @@ export class HttpContext {
    */
   readonly containerResolver?: ContainerResolver
 
+  /** Lazily-built per-request logger (see {@link logger}). */
+  #logger?: ContextLogger
+
   /** Route URL resolver for redirect().toRoute(). */
   #routeUrlResolver?: RouteUrlResolver
+
+  /**
+   * Per-request logger (AdonisJS `ctx.logger`). Resolves the container `'logger'`
+   * (e.g. `@c9up/spectrum`) child-scoped to this request's `id`, or falls back to
+   * a console logger when none is registered. Built once, on first access.
+   */
+  get logger(): ContextLogger {
+    if (!this.#logger) {
+      this.#logger = resolveRequestLogger(this.containerResolver, this.id)
+    }
+    return this.#logger
+  }
 
   constructor(
     id: string,
