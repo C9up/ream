@@ -15,6 +15,15 @@ on:
 permissions:
   contents: read
 
+# Cargo network hardening — applies to every job/step. crates.io downloads over
+# HTTP/2 intermittently die on GitHub runners with "[16] Error in the HTTP2
+# framing layer"; force HTTP/1.1, retry more, and fetch git deps via the git CLI
+# (more robust than libgit2 for the C9up/* git dependencies).
+env:
+  CARGO_HTTP_MULTIPLEXING: 'false'
+  CARGO_NET_RETRY: '5'
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
