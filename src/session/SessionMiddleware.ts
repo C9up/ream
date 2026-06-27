@@ -65,6 +65,7 @@ export default class SessionMiddleware {
       sessionId = sessionId ?? generateSessionId()
       const session = new Session(sessionId, data)
       ctx.store.set('session', session)
+    ctx.session = session
 
       await next()
 
@@ -103,6 +104,7 @@ export default class SessionMiddleware {
     const data = await this.#driver.read(sessionId)
     const session = new Session(sessionId, data)
     ctx.store.set('session', session)
+    ctx.session = session
 
     await next()
 

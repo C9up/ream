@@ -15,6 +15,7 @@ import { RedirectBuilder } from './RedirectBuilder.js'
 import type { RawRequest } from './Request.js'
 import { Request } from './Request.js'
 import { Response } from './Response.js'
+import type { Session } from '../session/Session.js'
 
 export interface AuthState {
   authenticated: boolean
@@ -187,6 +188,14 @@ export class HttpContext {
 
   /** Per-request key-value store (for middleware to pass data downstream). */
   readonly store: Map<string, unknown> = new Map()
+
+  /**
+   * The request session, when `SessionMiddleware` is registered (AdonisJS
+   * `ctx.session` parity). Top-level so consumers — and Warden's session
+   * strategy — read `ctx.session` directly rather than fishing it out of
+   * `store`. Undefined when no session middleware ran.
+   */
+  session?: Session
 
   /**
    * The event bus emitter, when the app registered `EventsProvider`. Lets a
