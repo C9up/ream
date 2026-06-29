@@ -128,6 +128,17 @@ impl StreamRegistry {
         map.remove(stream_id).is_some()
     }
 
+    /// Drop every registered stream's sender at once. Each active SSE/streamed
+    /// body sees EOF and finishes — called on server shutdown so the connection
+    /// tasks holding those bodies can end (and release their handler clones).
+    /// Returns how many entries were dropped.
+    pub async fn drain(&self) -> usize {
+        let mut map = self.inner.lock().await;
+        let n = map.len();
+        map.clear();
+        n
+    }
+
     /// Wait until the **receiver** half of `stream_id` is dropped — that
     /// is, until hyper has finished sending the body or the client has
     /// disconnected. Returns immediately if the id is unknown (so a JS
@@ -217,6 +228,20 @@ mod tests {
         let _rx = reg.take_receiver("s1").await.expect("receiver");
         assert!(reg.close("s1").await);
         assert!(!reg.send_chunk("s1", Bytes::from_static(b"x")).await);
+    }
+
+    #[tokio::test]
+    async fn drain_drops_all_senders() {
+        let reg = StreamRegistry::new();
+        reg.register("a".to_string()).await;
+        reg.register("b".to_string()).await;
+        let _rx_a = reg.take_receiver("a").await.expect("receiver");
+
+        assert_eq!(reg.drain().await, 2);
+
+        // Both gone — pushes fail, nothing left to serve.
+        assert!(!reg.send_chunk("a", Bytes::from_static(b"x")).await);
+        assert!(!reg.send_chunk("b", Bytes::from_static(b"x")).await);
     }
 
     #[tokio::test]

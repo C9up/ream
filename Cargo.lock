@@ -1346,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "ream-http"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "base64",
  "bytes",

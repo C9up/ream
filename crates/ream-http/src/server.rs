@@ -19,7 +19,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, watch, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
 
 /// Unified body type for hyper responses: either a fully buffered payload
@@ -48,6 +48,13 @@ pub struct ReamServer {
     /// tsfn's refcount fall to zero; without awaiting it here, an in-process
     /// host (test harness) keeps a live libuv handle and never drains.
     accept_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Broadcasts a wind-down signal to every in-flight connection task on
+    /// shutdown. Idle keep-alive connections close, in-flight requests finish,
+    /// and SSE bodies (EOF'd via the registry drain) complete — so the detached
+    /// connection tasks end, drop their handler clones, and release the
+    /// libuv/tsfn handle that otherwise keeps a Node host's event loop alive
+    /// (the watcher then sees the child exit instead of force-killing it).
+    conn_shutdown_tx: Option<watch::Sender<bool>>,
     actual_port: Arc<Mutex<u16>>,
     /// CIDR ranges (or bare IPs) of proxies whose `X-Forwarded-For` is honoured.
     /// Empty = strict fail-closed (proxy headers ignored entirely; only the
@@ -72,6 +79,7 @@ impl ReamServer {
             response_filter: None,
             shutdown_tx: None,
             accept_handle: None,
+            conn_shutdown_tx: None,
             actual_port: Arc::new(Mutex::new(0)),
             trusted_proxies: Arc::new(Vec::new()),
             rate_limiter: None,
@@ -157,6 +165,9 @@ impl ReamServer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         self.shutdown_tx = Some(shutdown_tx);
 
+        let (conn_shutdown_tx, conn_shutdown_rx) = watch::channel(false);
+        self.conn_shutdown_tx = Some(conn_shutdown_tx);
+
         let actual_port = self.actual_port.clone();
 
         self.accept_handle = Some(tokio::spawn(async move {
@@ -176,6 +187,7 @@ impl ReamServer {
                                 let registry = stream_registry.clone();
 
                                 let res_filter = response_filter.clone();
+                                let mut conn_shutdown = conn_shutdown_rx.clone();
                                 tokio::spawn(async move {
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let handler = handler.clone();
@@ -249,11 +261,25 @@ impl ReamServer {
                                     // Auto-detect HTTP/1.1 vs HTTP/2 via ALPN
                                     // (HTTP/2 requires TLS with ALPN negotiation;
                                     // plain TCP falls back to HTTP/1.1 which is correct).
-                                    if let Err(_e) = AutoBuilder::new(TokioExecutor::new())
-                                        .serve_connection(io, service)
-                                        .await
-                                    {
-                                        // Connection error — client disconnected, etc.
+                                    let builder = AutoBuilder::new(TokioExecutor::new());
+                                    let conn = builder.serve_connection(io, service);
+                                    tokio::pin!(conn);
+                                    tokio::select! {
+                                        res = conn.as_mut() => {
+                                            if let Err(_e) = res {
+                                                // Connection error — client disconnected, etc.
+                                            }
+                                        }
+                                        _ = conn_shutdown.changed() => {
+                                            // Server is shutting down: ask the connection to
+                                            // wind down (finish any in-flight request, stop
+                                            // reading new ones), then await its end. SSE bodies
+                                            // were EOF'd by the registry drain, so they finish
+                                            // here too — the task ends and drops its handler
+                                            // clone, releasing the tsfn that pins Node's loop.
+                                            conn.as_mut().graceful_shutdown();
+                                            let _ = conn.as_mut().await;
+                                        }
                                     }
                                 });
                             }
@@ -282,6 +308,9 @@ impl ReamServer {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
+        if let Some(tx) = self.conn_shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
     }
 
     /// Graceful async shutdown: signal the accept loop AND await its end, so the
@@ -291,9 +320,17 @@ impl ReamServer {
     /// refcount to zero, letting napi-rs release the libuv handle so an
     /// in-process host (e.g. a test harness) can drain its event loop.
     pub async fn shutdown(&mut self) {
+        // Stop accepting new connections.
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
+        // EOF every live SSE/streamed body so its connection can finish...
+        self.stream_registry.drain().await;
+        // ...then tell all in-flight connections to wind down.
+        if let Some(tx) = self.conn_shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+        // Await the accept loop's end (drops its handler clone).
         if let Some(handle) = self.accept_handle.take() {
             let _ = handle.await;
         }
@@ -585,6 +622,41 @@ mod tests {
         let port = server.actual_port().await;
         assert!(port > 0);
         server.close();
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_idle_keep_alive_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut server = ReamServer::new(0);
+        server.on_request(Arc::new(|_req| {
+            Box::pin(async { ReamResponse::text(200, "ok") })
+        }));
+        server.listen().await.unwrap();
+        let port = server.actual_port().await;
+
+        // Open a keep-alive connection and complete one request, leaving the
+        // socket idle — the connection task is now parked in serve_connection
+        // waiting for the next request (the case that pins Node's event loop).
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream
+            .write_all(b"GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 1024];
+        let n = stream.read(&mut buf).await.unwrap();
+        assert!(n > 0, "should get a response");
+
+        // Shutting down must close the idle keep-alive connection rather than
+        // leave it dangling. Before the conn-cancel fix, shutdown() only stopped
+        // the accept loop and this socket stayed open forever.
+        server.shutdown().await;
+
+        // Server side closed the socket → the next read returns EOF (0 bytes).
+        let n2 = stream.read(&mut buf).await.unwrap();
+        assert_eq!(n2, 0, "server must close idle keep-alive on shutdown");
     }
 
     #[tokio::test]

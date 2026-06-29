@@ -71,7 +71,7 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
       }
     }
     const { factory } = mockFactory()
-    const app = await new Ignitor({ port: 3000, serverFactory: factory })
+    const app = await new Ignitor({ port: 3000, serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .provider((a) => new LP(a))
       .start()
@@ -108,7 +108,7 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
 
   it('bin/server.ts pattern', async () => {
     const { factory, get } = mockFactory()
-    await new Ignitor({ port: 0, serverFactory: factory })
+    await new Ignitor({ port: 0, serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) =>
         r.get('/hello', async (ctx) => {
@@ -131,7 +131,7 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
         this.app.container.resolve<Emitter>('events').on('app:ready', (d) => received.push(d))
       }
     }
-    await new Ignitor({ port: 3000, serverFactory: factory })
+    await new Ignitor({ port: 3000, serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .provider((a) => new EventsProvider(a))
       .provider((a) => new Capture(a))
@@ -144,7 +144,7 @@ describe('ignitor > HTTP serving', () => {
   it('middleware + handler', async () => {
     const { factory, get } = mockFactory()
     const log: string[] = []
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .use(async (_c, next) => {
         log.push('mw')
@@ -162,14 +162,14 @@ describe('ignitor > HTTP serving', () => {
 
   it('404 on unmatched', async () => {
     const { factory, get } = mockFactory()
-    await new Ignitor({ serverFactory: factory }).httpServer().start()
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false }).httpServer().start()
     expect((await get().request('GET', '/x')).status).toBe(404)
   })
 
   it('500 on error + onError callback', async () => {
     const { factory, get } = mockFactory()
     const errs: ErrorEvent[] = []
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) =>
         r.get('/err', async () => {
@@ -184,7 +184,7 @@ describe('ignitor > HTTP serving', () => {
 
   it('params extracted', async () => {
     const { factory, get } = mockFactory()
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) =>
         r.get('/o/:id', async (ctx) => {
@@ -197,7 +197,7 @@ describe('ignitor > HTTP serving', () => {
 
   it('groups with prefix', async () => {
     const { factory, get } = mockFactory()
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) =>
         r.group({ prefix: '/api' }, (a) =>
@@ -212,7 +212,7 @@ describe('ignitor > HTTP serving', () => {
 
   it('response.json() sets content-type', async () => {
     const { factory, get } = mockFactory()
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) =>
         r.get('/json', async (ctx) => {
@@ -228,7 +228,7 @@ describe('ignitor > HTTP serving', () => {
 
   it('response.status().json() sets custom status', async () => {
     const { factory, get } = mockFactory()
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) =>
         r.post('/create', async (ctx) => {
@@ -284,12 +284,33 @@ describe('ignitor > controller resolution', () => {
       }
     }
     const { factory, get } = mockFactory()
-    await new Ignitor({ serverFactory: factory })
+    await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
       .routes((r) => r.get('/greet', [GreetController, 'hello']))
       .start()
     const res = await get().request('GET', '/greet')
     expect(res.status).toBe(200)
     expect(JSON.parse(res.body)).toEqual({ greeting: 'Hello from controller!' })
+  })
+})
+
+describe('ignitor > graceful shutdown wiring', () => {
+  it('installs SIGTERM/SIGINT handlers in web mode by default and stop() removes them', async () => {
+    const { factory } = mockFactory()
+    const before = process.listenerCount('SIGTERM') + process.listenerCount('SIGINT')
+    const app = await new Ignitor({ serverFactory: factory }).httpServer().start()
+    expect(process.listenerCount('SIGTERM') + process.listenerCount('SIGINT')).toBe(before + 2)
+    await app.stop()
+    expect(process.listenerCount('SIGTERM') + process.listenerCount('SIGINT')).toBe(before)
+  })
+
+  it('does not install handlers when gracefulShutdown is false', async () => {
+    const { factory } = mockFactory()
+    const before = process.listenerCount('SIGTERM') + process.listenerCount('SIGINT')
+    const app = await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
+      .httpServer()
+      .start()
+    expect(process.listenerCount('SIGTERM') + process.listenerCount('SIGINT')).toBe(before)
+    await app.stop()
   })
 })

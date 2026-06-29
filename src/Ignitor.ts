@@ -19,6 +19,8 @@ import { ErrorBoundary } from './ErrorBoundary.js'
 import { loadEnvFiles } from './env/loadEnvFiles.js'
 import { ReamError } from './errors/ReamError.js'
 import type { Emitter } from './events/Emitter.js'
+import type { ShutdownHandle } from './GracefulShutdown.js'
+import { installGracefulShutdown } from './GracefulShutdown.js'
 import { startHotReload } from './HotReload.js'
 import type { HttpKernelRequest, HttpKernelResponse } from './HttpKernel.js'
 import { createHttpKernel } from './HttpKernel.js'
@@ -97,6 +99,16 @@ export interface IgnitorConfig {
   serverFactory?: (port: number) => HyperServerLike
   importer?: (filePath: string) => Promise<unknown>
   watchDirs?: string[]
+  /**
+   * Install SIGTERM/SIGINT handlers that drain the server on shutdown
+   * (close the port, abort live SSE connections, shut providers down) instead
+   * of letting the process be force-killed with in-flight work dropped. This is
+   * what lets `ream dev` restart cleanly and an orchestrator's rolling deploy
+   * finish in-flight requests. Web mode only. Default: `true`. Set `false` to
+   * opt out (embedding hosts that manage their own signals, or test harnesses
+   * that boot many Ignitors in one process).
+   */
+  gracefulShutdown?: boolean
 }
 
 /**
@@ -119,6 +131,7 @@ export class Ignitor {
   private errorListeners: Array<(event: ErrorEvent) => void> = []
   private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
   private hotReloadCleanup?: () => void
+  #shutdownHandle?: ShutdownHandle
 
   // Inline configuration (for simple use or testing)
   private inlineRoutes?: (router: Router) => void
@@ -445,6 +458,22 @@ export class Ignitor {
         this._httpServer.configureTrustedProxies([...trustedProxies])
       }
       await this._httpServer.listen()
+
+      // Wire OS-signal graceful shutdown. Without it the process never closes
+      // the HTTP server on SIGTERM/SIGINT, so live keep-alive / SSE sockets keep
+      // the event loop alive — a `ream dev` restart or Ctrl+C ends in a watcher
+      // force-kill, and an orchestrator's rolling deploy drops in-flight work.
+      // onShutdown = this.stop(), which closes the port (aborting connections),
+      // shuts providers down (DB pools), and releases the locators.
+      if (this.config.gracefulShutdown !== false) {
+        this.#shutdownHandle = installGracefulShutdown({
+          onShutdown: () => this.stop(),
+          logger: {
+            info: (message) => this.#emitSystemInfo('GracefulShutdown', message, 'info'),
+            error: (message) => this.#emitSystemInfo('GracefulShutdown', message, 'error'),
+          },
+        })
+      }
     } else if (this.environment === 'web' && !this.config.serverFactory) {
       throw new ReamError(
         'IGNITOR_NO_SERVER_FACTORY',
@@ -593,6 +622,13 @@ export class Ignitor {
       }
     }
 
+    // Remove the SIGTERM/SIGINT listeners first. On the signal path this is a
+    // no-op (the handlers already fired); on a programmatic stop() it prevents
+    // a leaked listener per Ignitor.
+    await attempt(() => {
+      this.#shutdownHandle?.cleanup()
+      this.#shutdownHandle = undefined
+    })
     await attempt(() => {
       if (this.hotReloadCleanup) this.hotReloadCleanup()
     })
@@ -669,6 +705,21 @@ export class Ignitor {
         /* Don't let listeners crash */
       }
     }
+  }
+
+  /**
+   * Surface an informational/diagnostic message through the same channel as
+   * HotReload — error listeners see it, nothing crashes. Used for the graceful
+   * shutdown logger so drain progress / timeouts are observable.
+   */
+  #emitSystemInfo(source: string, message: string, kind: 'info' | 'error'): void {
+    this.handleError({
+      type: kind === 'error' ? 'system.error' : 'system.info',
+      source,
+      message,
+      severity: kind === 'error' ? 'critical' : 'info',
+      timestamp: new Date().toISOString(),
+    } as ErrorEvent)
   }
 }
 
