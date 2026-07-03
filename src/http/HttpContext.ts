@@ -10,12 +10,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ServiceToken } from '../container/types.js'
 import type { Emitter } from '../events/Emitter.js'
+import type { Session } from '../session/Session.js'
 import type { RouteUrlResolver } from './RedirectBuilder.js'
 import { RedirectBuilder } from './RedirectBuilder.js'
 import type { RawRequest } from './Request.js'
 import { Request } from './Request.js'
 import { Response } from './Response.js'
-import type { Session } from '../session/Session.js'
 
 export interface AuthState {
   authenticated: boolean
@@ -60,7 +60,11 @@ export interface Authorizer {
  * exposing it under the Adonis name with `.make()` keeps the public contract
  * aligned so a future scoped resolver is a non-breaking swap.
  */
-export interface ContainerResolver {
+// File-local: the app container's minimal resolver shape. Not exported — the
+// public resolver contract is the events `ContainerResolver`; each subsystem
+// declares its own structurally-compatible interface to stay decoupled (same
+// pattern as warden/blackhole middleware), so nothing cross-imports it.
+interface ContainerResolver {
   /** Resolve/construct a service by token (class, string, or symbol). */
   make<T>(token: ServiceToken): T
 }
