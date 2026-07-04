@@ -255,6 +255,9 @@ export class HttpContext {
     this.containerResolver = containerResolver
     this.request = new Request(rawRequest, params)
     this.response = new Response()
+    // Give the response read access to the request (AdonisJS wires them too) —
+    // needed by `response.fresh()` for conditional-GET / ETag revalidation.
+    this.response.setRequest(this.request)
     this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
 
     // Wire redirect builder with request context

@@ -133,6 +133,34 @@ export class E_HTTP_EXCEPTION extends Exception {
   }
 }
 
+/**
+ * Thrown by `response.abort()` / `response.abortIf()` (AdonisJS parity). Carries
+ * an arbitrary body that {@link handle} renders as-is — a string verbatim,
+ * anything else as JSON.
+ */
+export class E_HTTP_REQUEST_ABORTED extends Exception {
+  static override status = 400
+  static override code = 'E_HTTP_REQUEST_ABORTED'
+
+  readonly body: unknown
+
+  constructor(body: unknown, status = 400) {
+    super(typeof body === 'string' ? body : 'Request aborted', {
+      status,
+      code: 'E_HTTP_REQUEST_ABORTED',
+    })
+    this.body = body
+  }
+
+  override handle(_error: this, ctx: HttpContext): void {
+    if (typeof this.body === 'string') {
+      ctx.response.status(this.status).send(this.body)
+    } else {
+      ctx.response.status(this.status).json(this.body)
+    }
+  }
+}
+
 // ─── ExceptionHandler ─────────────────────────────────────
 
 /**

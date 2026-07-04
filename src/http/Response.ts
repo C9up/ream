@@ -7,7 +7,11 @@
  * @implements FR21
  */
 
+import { readFileSync } from 'node:fs'
+import { basename } from 'node:path'
+import etag from 'etag'
 import { contentType } from 'mime-types'
+import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
 import type { RedirectBuilder } from './RedirectBuilder.js'
 import {
   openSseStream,
@@ -57,6 +61,7 @@ export class Response {
   #redirectBuilderFactory?: () => RedirectBuilder
   #streamBackend?: StreamBackend
   #streamId?: string
+  #request?: { method(): string; header(key: string): string | undefined }
 
   /**
    * CSP nonce for this request (AdonisJS idiom: `response.nonce`). Seeded by
@@ -511,6 +516,98 @@ export class Response {
   }
 
   /** @internal Set the redirect builder factory (injected by HttpContext). */
+  /** Give the response access to the request (wired by HttpContext) — used by `fresh()`. */
+  setRequest(request: { method(): string; header(key: string): string | undefined }): void {
+    this.#request = request
+  }
+
+  /** Set a strong (or weak) `ETag` for the given body (AdonisJS parity, `etag` pkg). */
+  setEtag(body: string | Buffer, weak = false): this {
+    this.header('Etag', etag(body, { weak }))
+    return this
+  }
+
+  /**
+   * Whether the client's cached copy is still fresh (AdonisJS `fresh`) — a
+   * cacheable method (GET/HEAD) with a 2xx/304 status whose `If-None-Match`
+   * matches this response's `ETag`. Lets a handler answer `304 Not Modified`.
+   */
+  fresh(): boolean {
+    const method = this.#request?.method()
+    if (method && method !== 'GET' && method !== 'HEAD') return false
+    const status = this.#status
+    if (!((status >= 200 && status < 300) || status === 304)) return false
+    const noneMatch = this.#request?.header('if-none-match')
+    const currentEtag = this.getHeader('etag')
+    if (!noneMatch || !currentEtag) return false
+    if (noneMatch.trim() === '*') return true
+    return noneMatch.split(',').some((tag) => {
+      const t = tag.trim()
+      return t === currentEtag || t === `W/${currentEtag}` || `W/${t}` === currentEtag
+    })
+  }
+
+  /**
+   * Abort the request with a body + status (AdonisJS parity) — throws
+   * `E_HTTP_REQUEST_ABORTED`, which the exception handler renders (a string body
+   * verbatim, anything else as JSON).
+   */
+  abort(body: unknown, status = 400): never {
+    throw new E_HTTP_REQUEST_ABORTED(body, status)
+  }
+
+  /** Abort only when `condition` is truthy (AdonisJS `abortIf`). */
+  abortIf(
+    condition: unknown,
+    body: unknown,
+    status = 400,
+  ): asserts condition is undefined | null | false {
+    if (condition) this.abort(body, status)
+  }
+
+  /**
+   * Send a file to the client (AdonisJS `download`) — reads the file, infers the
+   * content-type from its extension, and sends it as a binary body. On a read
+   * error, `errorCallback` may map it to `[message, status?]`, else a 404.
+   */
+  download(
+    filePath: string,
+    generateEtag = false,
+    errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
+  ): void {
+    let content: Buffer
+    try {
+      content = readFileSync(filePath)
+    } catch (error) {
+      if (errorCallback) {
+        const [message, status] = errorCallback(error as NodeJS.ErrnoException)
+        this.status(status ?? 404).send(message)
+        return
+      }
+      this.status(404).send('Not Found')
+      return
+    }
+    const ct = contentType(basename(filePath))
+    if (ct) this.#headers['content-type'] = ct
+    if (generateEtag) this.setEtag(content)
+    this.sendBuffer(content)
+  }
+
+  /**
+   * Force a file download with a `Content-Disposition` header (AdonisJS
+   * `attachment`). Defaults the filename to the file's basename.
+   */
+  attachment(
+    filePath: string,
+    name?: string,
+    disposition = 'attachment',
+    generateEtag = false,
+  ): void {
+    const filename = name ?? basename(filePath)
+    this.header('Content-Disposition', `${disposition}; filename="${filename}"`)
+    this.download(filePath, generateEtag)
+  }
+
   setRedirectFactory(factory: () => RedirectBuilder): void {
     this.#redirectBuilderFactory = factory
   }

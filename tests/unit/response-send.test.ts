@@ -1,4 +1,8 @@
+import { rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { E_HTTP_REQUEST_ABORTED } from '../../src/http/Exception.js'
 import { Response } from '../../src/http/Response.js'
 
 describe('ream > Response.send() / json() — AdonisJS parity', () => {
@@ -149,5 +153,85 @@ describe('ream > Response header/cookie/jsonp helpers (AdonisJS parity)', () => 
     // parens/slashes stripped — no script injection through the callback name.
     expect(evil.getBody()).not.toContain('alert(1)')
     expect(evil.getBody()).toContain('alert1')
+  })
+})
+
+describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
+  it('setEtag sets a strong or weak ETag', () => {
+    const strong = new Response()
+    strong.setEtag('hello')
+    expect(strong.getHeader('etag')).toMatch(/^"[^"]+"$/)
+
+    const weak = new Response()
+    weak.setEtag('hello', true)
+    expect(weak.getHeader('etag')).toMatch(/^W\/"/)
+  })
+
+  it('fresh() is true only for a cacheable request whose If-None-Match matches', () => {
+    const r = new Response()
+    r.setEtag('body')
+    const tag = r.getHeader('etag') ?? ''
+
+    r.setRequest({ method: () => 'GET', header: () => tag })
+    expect(r.fresh()).toBe(true)
+
+    r.setRequest({ method: () => 'GET', header: () => '"other"' })
+    expect(r.fresh()).toBe(false)
+
+    r.setRequest({ method: () => 'POST', header: () => tag })
+    expect(r.fresh()).toBe(false)
+  })
+
+  it('abort throws E_HTTP_REQUEST_ABORTED carrying the body + status', () => {
+    expect(() => new Response().abort('nope', 400)).toThrow(E_HTTP_REQUEST_ABORTED)
+    let caught: unknown
+    try {
+      new Response().abort({ error: 'x' }, 422)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(E_HTTP_REQUEST_ABORTED)
+    if (caught instanceof E_HTTP_REQUEST_ABORTED) {
+      expect(caught.status).toBe(422)
+      expect(caught.body).toEqual({ error: 'x' })
+    }
+  })
+
+  it('abortIf only aborts when the condition is truthy', () => {
+    expect(() => new Response().abortIf(true, 'x')).toThrow(E_HTTP_REQUEST_ABORTED)
+    expect(() => new Response().abortIf(false, 'x')).not.toThrow()
+    expect(() => new Response().abortIf(0, 'x')).not.toThrow()
+  })
+
+  it('download sends a file as a binary body with the right content-type', () => {
+    const file = join(tmpdir(), 'ream-download-test.txt')
+    writeFileSync(file, 'hello file')
+    try {
+      const r = new Response()
+      r.download(file)
+      expect(r.getHeader('content-type')).toBe('text/plain; charset=utf-8')
+      expect(r.getHeader('x-ream-body-encoding')).toBe('base64')
+      expect(Buffer.from(r.getBody(), 'base64').toString()).toBe('hello file')
+    } finally {
+      rmSync(file)
+    }
+  })
+
+  it('attachment adds a Content-Disposition header', () => {
+    const file = join(tmpdir(), 'ream-attach-test.txt')
+    writeFileSync(file, 'x')
+    try {
+      const r = new Response()
+      r.attachment(file, 'invoice.txt')
+      expect(r.getHeader('content-disposition')).toBe('attachment; filename="invoice.txt"')
+    } finally {
+      rmSync(file)
+    }
+  })
+
+  it('download of a missing file falls back to 404', () => {
+    const r = new Response()
+    r.download('/no/such/file-xyz.txt')
+    expect(r.getStatus()).toBe(404)
   })
 })
