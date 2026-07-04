@@ -9,14 +9,17 @@ import 'reflect-metadata'
 // ─── Core ───────────────────────────────────────────────────
 
 export { Application } from './Application.js'
-export { ConfigStore, defineModuleConfig, env } from './ConfigLoader.js'
+export { ConfigStore, configProvider, defineModuleConfig, env } from './ConfigLoader.js'
 export { Container } from './container/Container.js'
 export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './container/types.js'
 export { Env, EnvValidationException } from './env/Env.js'
 export { loadEnvFiles } from './env/loadEnvFiles.js'
+export { Secret } from './env/Secret.js'
 export {
   EnvVarError,
+  type OptionalCondition,
   type RequiredNode,
+  type SchemaFnOptions,
   type SchemaNode,
   type StringOptions,
 } from './env/schema.js'
@@ -24,6 +27,7 @@ export {
 // ─── HTTP (new — AdonisJS-compatible) ───────────────────────
 
 export {
+  createError,
   E_FORBIDDEN,
   E_HTTP_EXCEPTION,
   E_ROUTE_NOT_FOUND,
@@ -31,7 +35,12 @@ export {
   E_UNAUTHORIZED,
   E_VALIDATION_ERROR,
   Exception,
+  type ExceptionClass,
+  type ExceptionConstructor,
   ExceptionHandler,
+  InvalidArgumentsException,
+  RuntimeException,
+  type StatusPageRenderer,
 } from './http/Exception.js'
 export type { Authorizer, AuthState, RouteInfo } from './http/HttpContext.js'
 export { HttpContext } from './http/HttpContext.js'
@@ -39,6 +48,7 @@ export { RedirectBuilder } from './http/RedirectBuilder.js'
 export type { RawRequest } from './http/Request.js'
 export { Request } from './http/Request.js'
 export { Response } from './http/Response.js'
+export { type GetterFn, Macroable, type MacroFn } from './utils/Macroable.js'
 
 // ─── Session ────────────────────────────────────────────────
 

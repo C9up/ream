@@ -174,6 +174,18 @@ export function createHttpKernel(
         let cached = pipelineCache.get(match.route)
 
         if (!cached) {
+          // Promote a lazy/string controller to a concrete controller tuple on
+          // first request (imported once, then reused). Done before handler +
+          // guard-metadata resolution so @Guard/@Role/@inject flow through the
+          // normal controller path below.
+          if (match.route.lazyController && !match.route.controller) {
+            const mod = await match.route.lazyController.loader()
+            match.route.controller = {
+              target: mod.default,
+              method: match.route.lazyController.method,
+            }
+          }
+
           // Resolve handler (once per route)
           let routeHandler: (typeof match.route)['handler']
           if (match.route.controller) {

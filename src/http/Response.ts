@@ -12,6 +12,7 @@ import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
 import type { CookieSigner } from '../security/CookieSigner.js'
+import { Macroable } from '../utils/Macroable.js'
 import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
 import type { RedirectBuilder } from './RedirectBuilder.js'
 import {
@@ -61,7 +62,7 @@ export interface CookieOptions {
   sameSite?: 'lax' | 'strict' | 'none'
 }
 
-export class Response {
+export class Response extends Macroable {
   #status = 200
   #headers: Record<string, string> = {}
   #cookies: string[] = []

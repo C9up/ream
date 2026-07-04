@@ -11,7 +11,9 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ServiceToken } from '../container/types.js'
 import type { Emitter } from '../events/Emitter.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
+import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Session } from '../session/Session.js'
+import { Macroable } from '../utils/Macroable.js'
 import type { RouteUrlResolver } from './RedirectBuilder.js'
 import { RedirectBuilder } from './RedirectBuilder.js'
 import type { RawRequest } from './Request.js'
@@ -139,7 +141,7 @@ export interface RouteInfo {
 /** Ambient per-request context store (AdonisJS `HttpContext` ALS accessor). */
 const httpContextStorage = new AsyncLocalStorage<HttpContext>()
 
-export class HttpContext {
+export class HttpContext extends Macroable {
   /**
    * @internal Run `fn` with `ctx` as the ambient HttpContext, so code deep in
    * the call stack can reach it via {@link HttpContext.get}/{@link getOrFail}
@@ -164,6 +166,15 @@ export class HttpContext {
       )
     }
     return ctx
+  }
+
+  /**
+   * Run `fn` with the ambient HttpContext temporarily cleared (AdonisJS
+   * `HttpContext.runOutsideContext`) — e.g. to detach background work so it
+   * doesn't inherit and pin the request's context.
+   */
+  static runOutsideContext<T>(fn: () => T): T {
+    return httpContextStorage.exit(fn)
   }
 
   /** Unique request/correlation ID. */
@@ -243,6 +254,16 @@ export class HttpContext {
     return this.#logger
   }
 
+  /** Subdomains of the request host (AdonisJS `ctx.subdomains`). */
+  get subdomains(): string[] {
+    return this.request.subdomains()
+  }
+
+  /** Stable identifier for the matched route (`METHOD-pattern`) — AdonisJS `ctx.routeKey`. */
+  get routeKey(): string {
+    return `${this.request.method()}-${this.route.pattern}`
+  }
+
   constructor(
     id: string,
     rawRequest: RawRequest,
@@ -250,6 +271,7 @@ export class HttpContext {
     route: RouteInfo,
     containerResolver?: ContainerResolver,
   ) {
+    super()
     this.id = id
     this.params = params
     this.route = route
@@ -259,6 +281,10 @@ export class HttpContext {
     // Give the response read access to the request (AdonisJS wires them too) —
     // needed by `response.fresh()` for conditional-GET / ETag revalidation.
     this.response.setRequest(this.request)
+    // And the reverse, so `request.fresh()`/`stale()` delegate to it, plus the
+    // matched-route info for `request.matchesRoute()`.
+    this.request.setResponse(this.response)
+    this.request.setRouteInfo({ name: route.name, pattern: route.pattern })
     // Hand the APP_KEY-backed encryption service (when registered) to request +
     // response so cookie()/encryptedCookie()/request.cookie() can sign & verify.
     try {
@@ -269,6 +295,12 @@ export class HttpContext {
       }
     } catch {
       // No encryption service registered (no APP_KEY) — cookies stay plain.
+    }
+    try {
+      const signedUrl = containerResolver?.make<SignedUrl>('signedUrl')
+      if (signedUrl) this.request.setSignedUrl(signedUrl)
+    } catch {
+      // No signed-URL service (no APP_KEY) — hasValidSignature() returns false.
     }
     this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
 

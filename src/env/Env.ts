@@ -1,3 +1,9 @@
+import {
+  defineIdentifier,
+  defineIdentifierIfMissing,
+  type IdentifierResolver,
+  removeIdentifier,
+} from './interpolate.js'
 import { loadEnvFiles } from './loadEnvFiles.js'
 import { type SchemaNode, schema } from './schema.js'
 
@@ -45,6 +51,21 @@ export class Env<Values extends Record<string, unknown>> {
   /** The validation schema surface — `Env.schema.string()`, `.number()`, … */
   static readonly schema = schema
 
+  /** Register an interpolation identifier (AdonisJS `Env.defineIdentifier`). */
+  static defineIdentifier(name: string, resolver: IdentifierResolver): void {
+    defineIdentifier(name, resolver)
+  }
+
+  /** Register an identifier only if the name is free (AdonisJS `defineIdentifierIfMissing`). */
+  static defineIdentifierIfMissing(name: string, resolver: IdentifierResolver): void {
+    defineIdentifierIfMissing(name, resolver)
+  }
+
+  /** Remove a registered interpolation identifier (AdonisJS `Env.removeIdentifier`). */
+  static removeIdentifier(name: string): void {
+    removeIdentifier(name)
+  }
+
   readonly #values: Values
 
   private constructor(values: Values) {
@@ -80,12 +101,35 @@ export class Env<Values extends Record<string, unknown>> {
     return new Env(collected as EnvRecord<S>)
   }
 
-  /** Read a validated variable. Required keys are always present; optional keys may be `undefined`. */
+  /**
+   * Read a variable. Validated keys are typed; for any other key the raw
+   * `process.env` value is returned as a fallback (AdonisJS `env.get`
+   * semantics). Required keys are always present; optional keys may be
+   * `undefined`. The second argument is the default when nothing is found.
+   */
   get<K extends keyof Values>(key: K): Values[K]
   get<K extends keyof Values>(key: K, fallback: Values[K]): Values[K]
-  get<K extends keyof Values>(key: K, fallback?: Values[K]): Values[K] {
-    const value = this.#values[key]
-    if (value === undefined && fallback !== undefined) return fallback
-    return value
+  get(key: string): string | undefined
+  get(key: string, fallback: string): string
+  get(key: string, fallback?: unknown): unknown {
+    const cached = this.#values[key]
+    if (cached !== undefined) return cached
+    // Fallback to raw process.env for keys outside the validated schema.
+    const fromEnv = process.env[key]
+    if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+    return fallback
+  }
+
+  /**
+   * Set/override a variable at runtime (AdonisJS `env.set`). Updates the cache
+   * AND `process.env`. The value is NOT re-validated — pass the correct type.
+   */
+  set<K extends keyof Values>(key: K, value: Values[K]): void
+  set(key: string, value: string): void
+  set(key: string, value: unknown): void {
+    // Reflect.set writes to the generic-typed cache without a cast (a direct
+    // `this.#values[key] = value` is rejected: a generic type is read-only-indexed).
+    Reflect.set(this.#values, key, value)
+    process.env[key] = String(value)
   }
 }

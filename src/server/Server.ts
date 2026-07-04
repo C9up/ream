@@ -12,11 +12,12 @@ import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { Router } from '../router/Router.js'
 
 /**
- * A middleware class with a handle method.
- * This is the pattern used by AdonisJS middleware.
+ * A middleware class with a handle method. The optional third argument carries
+ * per-route configuration passed through a named-middleware factory (AdonisJS
+ * `handle(ctx, next, args)`).
  */
 export interface MiddlewareClass {
-  handle(ctx: HttpContext, next: () => Promise<void>): Promise<void> | void
+  handle(ctx: HttpContext, next: () => Promise<void>, args?: unknown): Promise<void> | void
 }
 
 /** Lazy import returning a module with a default export. */
@@ -109,7 +110,11 @@ export class Server {
 
 /**
  * Convert a MiddlewareEntry (lazy import or function) into a MiddlewareFunction.
- * Lazy imports are resolved on first call and cached.
+ * The imported class is cached on first call; the INSTANCE is resolved through
+ * the request's IoC container so `@inject()` constructor dependencies are wired
+ * (AdonisJS resolves middleware via the container — a plain `new Class()` gives
+ * every injected dependency `undefined`). Falls back to `new Class()` only when
+ * no container is present (mock contexts in unit tests).
  */
 export function resolveMiddlewareEntry(entry: MiddlewareEntry): MiddlewareFunction {
   // Direct middleware function (2 params: ctx, next)
@@ -117,16 +122,50 @@ export function resolveMiddlewareEntry(entry: MiddlewareEntry): MiddlewareFuncti
     return entry
   }
 
-  // Lazy import of a middleware class — resolve + cache on first invocation
-  // After isMiddlewareFunction returns false, entry is narrowed to LazyImport<MiddlewareClassConstructor>
+  // Lazy import of a middleware class — cache the CLASS on first invocation,
+  // then resolve the instance per request through the container (DI). The
+  // container's own singleton bindings still cache instances where desired.
   const lazyImport = entry
-  let cached: MiddlewareClass | undefined
+  let cachedClass: MiddlewareClassConstructor | undefined
   return async (ctx: HttpContext, next: () => Promise<void>) => {
-    if (!cached) {
+    if (!cachedClass) {
       const mod = await lazyImport()
-      cached = new mod.default()
+      cachedClass = mod.default
     }
-    await cached.handle(ctx, next)
+    const instance = ctx.containerResolver
+      ? ctx.containerResolver.make<MiddlewareClass>(cachedClass)
+      : new cachedClass()
+    await instance.handle(ctx, next)
+  }
+}
+
+/**
+ * Turn a middleware entry into a FACTORY `(args?) => MiddlewareFunction`
+ * (AdonisJS named-middleware factories). The returned function bakes `args` in
+ * and forwards them to the class's `handle(ctx, next, args)`. A plain function
+ * middleware ignores `args` (it has no third parameter). Class resolution +
+ * caching mirror {@link resolveMiddlewareEntry} (imported once, instance via DI).
+ */
+export function resolveParametrizedMiddlewareEntry(
+  entry: MiddlewareEntry,
+): (args?: unknown) => MiddlewareFunction {
+  if (isMiddlewareFunction(entry)) {
+    return () => entry
+  }
+
+  const lazyImport = entry
+  let cachedClass: MiddlewareClassConstructor | undefined
+  return (args?: unknown): MiddlewareFunction => {
+    return async (ctx: HttpContext, next: () => Promise<void>) => {
+      if (!cachedClass) {
+        const mod = await lazyImport()
+        cachedClass = mod.default
+      }
+      const instance = ctx.containerResolver
+        ? ctx.containerResolver.make<MiddlewareClass>(cachedClass)
+        : new cachedClass()
+      await instance.handle(ctx, next, args)
+    }
   }
 }
 

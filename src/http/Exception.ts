@@ -6,6 +6,8 @@
  * - Built-in E_* exceptions
  */
 
+import { format } from 'node:util'
+import { Macroable } from '../utils/Macroable.js'
 import type { HttpContext } from './HttpContext.js'
 
 /**
@@ -29,9 +31,13 @@ import type { HttpContext } from './HttpContext.js'
 export class Exception extends Error {
   static status = 500
   static code = 'E_UNKNOWN'
+  /** Optional static remediation hint, copied onto instances (AdonisJS `Exception.help`). */
+  static help?: string
 
   status: number
   code: string
+  /** Human-readable remediation hint surfaced in debug output (AdonisJS `error.help`). */
+  help?: string
 
   constructor(message: string, options?: { status?: number; code?: string }) {
     super(message)
@@ -40,6 +46,7 @@ export class Exception extends Error {
     const ctor = this.constructor as any as typeof Exception
     this.status = options?.status ?? ctor.status
     this.code = options?.code ?? ctor.code
+    if (ctor.help !== undefined) this.help = ctor.help
   }
 
   /** Override to self-handle the exception (convert to HTTP response). */
@@ -47,6 +54,42 @@ export class Exception extends Error {
 
   /** Override to report the exception (logging, monitoring). Never send HTTP from here. */
   report?(error: this, ctx: HttpContext): Promise<void> | void
+}
+
+/** A concrete Exception subclass produced by {@link createError}. */
+export interface ExceptionConstructor {
+  new (...args: unknown[]): Exception
+  status: number
+  code: string
+}
+
+/**
+ * Build a reusable Exception subclass in one line (AdonisJS `createError`).
+ * `message` may contain `util.format` placeholders (`%s`, `%d`) filled by the
+ * constructor args:
+ *
+ *   const E_RESOURCE_MISSING = createError('Resource %s not found', 'E_RESOURCE_MISSING', 404)
+ *   throw new E_RESOURCE_MISSING('user-42')   // → "Resource user-42 not found"
+ */
+export function createError(message: string, code: string, status = 500): ExceptionConstructor {
+  return class extends Exception {
+    static override status = status
+    static override code = code
+    constructor(...args: unknown[]) {
+      super(format(message, ...args), { status, code })
+    }
+  }
+}
+
+/** A generic 500 runtime error (AdonisJS `RuntimeException`). */
+export class RuntimeException extends Exception {
+  static override status = 500
+  static override code = 'E_RUNTIME_EXCEPTION'
+}
+
+/** Raised when a function receives invalid arguments (AdonisJS `InvalidArgumentsException`). */
+export class InvalidArgumentsException extends RuntimeException {
+  static override code = 'E_INVALID_ARGUMENTS'
 }
 
 // ─── Built-in exceptions ──────────────────────────────────
@@ -178,54 +221,131 @@ export class E_HTTP_REQUEST_ABORTED extends Exception {
  * 2. Else → this.handle() → content negotiation (JSON or HTML)
  * 3. Then → this.report() → logging/monitoring
  */
-export class ExceptionHandler {
+/** Renders an HTML error page for a status (AdonisJS `StatusPageRenderer`). */
+export type StatusPageRenderer = (error: unknown, ctx: HttpContext) => Promise<string> | string
+
+/** A constructor usable in `instanceof` for {@link ExceptionHandler.ignoreExceptions}. */
+export type ExceptionClass = new (...args: never[]) => Error
+
+/** Reporting log level, keyed to `console` (AdonisJS levels: error/warn/info). */
+type LogLevel = 'error' | 'warn' | 'info'
+
+export class ExceptionHandler extends Macroable {
   protected debug: boolean
+  /** Render `statusPages` (browser HTML). Defaults to production only (AdonisJS). */
+  protected renderStatusPages: boolean = process.env.NODE_ENV === 'production'
+  /** Status → HTML renderer, keys may be single codes or `'500..599'` ranges. */
+  protected statusPages: Record<string, StatusPageRenderer> = {}
+  /** Master reporting switch (AdonisJS `reportErrors`). */
+  protected reportErrors = true
   protected ignoreStatuses: number[] = [400, 401, 404, 422]
   protected ignoreCodes: string[] = []
+  /** Exception classes never reported (AdonisJS `ignoreExceptions`). */
+  protected ignoreExceptions: ExceptionClass[] = []
+
+  #expandedStatusPages?: Record<number, StatusPageRenderer>
 
   constructor(debug = false) {
+    super()
     this.debug = debug
+  }
+
+  /** Whether debug detail is exposed for this request (AdonisJS — override per-ctx). */
+  protected isDebuggingEnabled(_ctx: HttpContext): boolean {
+    return this.debug
+  }
+
+  /** Log level for an error by status: 5xx→error, 4xx→warn, else info (AdonisJS). */
+  protected getErrorLogLevel(status: number): LogLevel {
+    if (status >= 500) return 'error'
+    if (status >= 400) return 'warn'
+    return 'info'
+  }
+
+  /** Whether an error should be reported — honours every ignore list (AdonisJS `shouldReport`). */
+  protected shouldReport(error: unknown): boolean {
+    if (!this.reportErrors) return false
+    const { status, code } = extractErrorMeta(error)
+    if (this.ignoreStatuses.includes(status)) return false
+    if (this.ignoreCodes.includes(code)) return false
+    if (this.ignoreExceptions.some((exception) => error instanceof exception)) return false
+    return true
+  }
+
+  /** Expand `statusPages` range keys (`'500..599'`) into a per-code lookup (cached). */
+  #expandStatusPages(): Record<number, StatusPageRenderer> {
+    if (!this.#expandedStatusPages) {
+      const expanded: Record<number, StatusPageRenderer> = {}
+      for (const range of Object.keys(this.statusPages)) {
+        Object.assign(expanded, parseStatusRange(range, this.statusPages[range]))
+      }
+      this.#expandedStatusPages = expanded
+    }
+    return this.#expandedStatusPages
   }
 
   /** Convert an exception to an HTTP response. */
   async handle(error: unknown, ctx: HttpContext): Promise<void> {
-    // Self-handled exceptions take over entirely.
-    if (error instanceof Exception && typeof error.handle === 'function') {
+    // Self-handled errors take over entirely (duck-typed, per AdonisJS — any
+    // thrown value exposing a `handle()` method, not just `Exception` instances).
+    if (isSelfHandling(error)) {
       await error.handle(error, ctx)
       return
     }
 
-    const { status, code } = extractErrorMeta(error)
-    const message = this.#errorMessage(error)
-    if (wantsJson(ctx)) {
-      this.#sendJsonError(ctx, status, code, message, error)
-    } else {
-      this.#sendHtmlError(ctx, status, message)
+    // Negotiation. DEVIATION (named): ream lists `json` FIRST, so a request
+    // with no/`*/*` Accept defaults to JSON (API-first). AdonisJS lists `html`
+    // first (full-stack default). Explicit `text/html` / `vnd.api+json` are
+    // honoured identically.
+    switch (ctx.request.accepts(['json', 'html', 'application/vnd.api+json'])) {
+      case 'application/vnd.api+json':
+        this.#sendJsonApiError(error, ctx)
+        return
+      case 'html':
+        await this.#sendHtmlError(error, ctx)
+        return
+      default:
+        this.#sendJsonError(error, ctx)
     }
   }
 
   /** Pick the user-facing message — full detail only in debug mode. */
-  #errorMessage(error: unknown): string {
-    if (this.debug && error instanceof Error) return error.message
+  #errorMessage(error: unknown, ctx: HttpContext): string {
+    if (this.isDebuggingEnabled(ctx) && error instanceof Error) return error.message
     if (error instanceof Exception) return error.message
     return 'An internal error occurred'
   }
 
-  #sendJsonError(
-    ctx: HttpContext,
-    status: number,
-    code: string,
-    message: string,
-    error: unknown,
-  ): void {
-    const errorPayload: Record<string, unknown> = { code, message }
-    if (this.debug && error instanceof Error && error.stack) {
-      errorPayload.stack = error.stack
+  #sendJsonError(error: unknown, ctx: HttpContext): void {
+    const { status, code } = extractErrorMeta(error)
+    const payload: Record<string, unknown> = { code, message: this.#errorMessage(error, ctx) }
+    if (error instanceof Exception && error.help) payload.help = error.help
+    if (this.isDebuggingEnabled(ctx) && error instanceof Error && error.stack) {
+      payload.stack = error.stack
     }
-    ctx.response.status(status).json({ error: errorPayload })
+    ctx.response.status(status).json({ error: payload })
   }
 
-  #sendHtmlError(ctx: HttpContext, status: number, message: string): void {
+  #sendJsonApiError(error: unknown, ctx: HttpContext): void {
+    const { status, code } = extractErrorMeta(error)
+    ctx.response
+      .status(status)
+      .type('application/vnd.api+json')
+      .json({ errors: [{ title: this.#errorMessage(error, ctx), code, status: String(status) }] })
+  }
+
+  async #sendHtmlError(error: unknown, ctx: HttpContext): Promise<void> {
+    const { status } = extractErrorMeta(error)
+    // A registered status page wins (production browser error pages).
+    if (this.renderStatusPages) {
+      const renderer = this.#expandStatusPages()[status]
+      if (renderer) {
+        const html = await renderer(error, ctx)
+        ctx.response.status(status).type('text/html; charset=utf-8').send(html)
+        return
+      }
+    }
+    const message = this.#errorMessage(error, ctx)
     ctx.response
       .status(status)
       .type('text/html; charset=utf-8')
@@ -237,23 +357,22 @@ export class ExceptionHandler {
 
   /** Log/report an exception. Override for custom monitoring. */
   async report(error: unknown, ctx: HttpContext): Promise<void> {
-    if (error instanceof Exception) {
-      if (this.ignoreStatuses.includes(error.status)) return
-      if (this.ignoreCodes.includes(error.code)) return
-    }
+    if (!this.shouldReport(error)) return
 
-    // Self-reported exceptions
-    if (error instanceof Exception && typeof error.report === 'function') {
+    // Self-reported exceptions handle their own reporting.
+    if (isSelfReporting(error)) {
       await error.report(error, ctx)
       return
     }
 
-    // Default: log to stderr
+    // Default: log at the status-appropriate level.
+    const { status } = extractErrorMeta(error)
+    const level = this.getErrorLogLevel(status)
     const context = this.context(ctx)
     if (error instanceof Error) {
-      console.error(`[${new Date().toISOString()}] ${error.message}`, context, error.stack)
+      console[level](`[${new Date().toISOString()}] ${error.message}`, context, error.stack)
     } else {
-      console.error(`[${new Date().toISOString()}] Unknown error:`, error, context)
+      console[level](`[${new Date().toISOString()}] Unknown error:`, error, context)
     }
   }
 
@@ -282,13 +401,43 @@ function extractErrorMeta(error: unknown): { status: number; code: string } {
   return { status, code }
 }
 
-/** Content negotiation: JSON unless the client explicitly prefers HTML. */
-function wantsJson(ctx: HttpContext): boolean {
+/** True when a thrown value self-handles via a `handle()` method (AdonisJS duck-type). */
+function isSelfHandling(
+  error: unknown,
+): error is { handle: (error: unknown, ctx: HttpContext) => Promise<void> | void } {
   return (
-    ctx.request.accepts(['json', 'html']) === 'json' ||
-    (ctx.request.header('accept')?.includes('application/json') ?? false) ||
-    !ctx.request.header('accept')?.includes('text/html')
+    error !== null &&
+    typeof error === 'object' &&
+    'handle' in error &&
+    typeof error.handle === 'function'
   )
+}
+
+/** True when a thrown value self-reports via a `report()` method. */
+function isSelfReporting(
+  error: unknown,
+): error is { report: (error: unknown, ctx: HttpContext) => Promise<void> | void } {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'report' in error &&
+    typeof error.report === 'function'
+  )
+}
+
+/** Expand a status-page key into a per-code map: `'500..599'` → {500,…,599}, `'404'` → {404}. */
+function parseStatusRange(
+  range: string,
+  renderer: StatusPageRenderer,
+): Record<number, StatusPageRenderer> {
+  const parts = range.split('..')
+  const min = Number(parts[0])
+  const max = Number(parts[1])
+  if (parts.length === 1 && !Number.isNaN(min)) return { [min]: renderer }
+  if (Number.isNaN(min) || Number.isNaN(max)) return {}
+  const result: Record<number, StatusPageRenderer> = {}
+  for (let status = min; status <= max; status += 1) result[status] = renderer
+  return result
 }
 
 function escapeHtml(str: string): string {

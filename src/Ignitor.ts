@@ -31,6 +31,7 @@ import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 import { Router } from './router/Router.js'
 import { CookieSigner } from './security/CookieSigner.js'
+import { SignedUrl } from './security/SignedUrl.js'
 import { Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearRouter, setRouter } from './services/router.js'
@@ -193,6 +194,11 @@ export class Ignitor {
       }
       const signer = new CookieSigner(appKey)
       this.app.container.singleton('encryption', () => signer)
+      // Signed-URL helper (same APP_KEY): the router signs via makeSignedUrl,
+      // HttpContext hands it to the request so hasValidSignature() can verify.
+      const signedUrl = new SignedUrl({ secret: appKey })
+      this.app.container.singleton('signedUrl', () => signedUrl)
+      this.router.setSignedUrl(signedUrl)
     }
 
     // Set service singletons so route/kernel files can import them

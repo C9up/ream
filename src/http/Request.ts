@@ -8,7 +8,10 @@
  */
 
 import type { CookieSigner } from '../security/CookieSigner.js'
+import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
+import { Macroable } from '../utils/Macroable.js'
+import { getPath, omitPaths, pickPaths } from '../utils/objectPath.js'
 
 export interface RawRequest {
   method: string
@@ -26,6 +29,12 @@ export interface RawRequest {
    * `ip()` accessor falls back to legacy header parsing.
    */
   ip?: string
+  /**
+   * Connection scheme as seen by the server (`http`/`https`), when the Rust
+   * layer ships it. Defaults to `http` in `protocol()` when absent; the
+   * `X-Forwarded-Proto` header only overrides it when trust-proxy is enabled.
+   */
+  scheme?: 'http' | 'https'
   /**
    * Pre-parsed `multipart/form-data` payload — the HyperServer parses bodies
    * server-side via `multer` and ships fields/files in this typed shape.
@@ -49,13 +58,19 @@ export interface RawRequest {
   cookies?: Dict
 }
 
-export class Request {
+export class Request extends Macroable {
   #raw: RawRequest
   #params: Dict
   #cookieSigner?: CookieSigner
+  #signedUrl?: SignedUrl
+  #allowMethodSpoofing = false
+  #trustProxy = false
+  #routeInfo?: { name?: string; pattern: string }
+  #response?: { fresh(): boolean }
   #parsedBody: Dict<unknown> | undefined
   #parsedQs: Dict<unknown> | undefined
   #merged: Dict<unknown> | undefined
+  #original: Dict<unknown> | undefined
   #files: Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> = new Map()
   #validated: unknown
 
@@ -67,15 +82,70 @@ export class Request {
   csrfToken?: string
 
   constructor(raw: RawRequest, params: Dict = {}) {
+    super()
     this.#raw = raw
     this.#params = params
   }
 
   // ─── HTTP accessors ───────────────────────────────────────
 
-  /** HTTP method (GET, POST, etc.). */
+  /**
+   * The HTTP method, honouring `_method` form spoofing when enabled (AdonisJS
+   * `method`). With spoofing enabled and a real POST, the `_method` field
+   * (`PUT`/`PATCH`/`DELETE`) overrides — the classic HTML-form workaround.
+   * Spoofing is OFF by default (opt in via {@link setMethodSpoofing}); routing
+   * always uses {@link intended}.
+   */
   method(): string {
+    if (this.#allowMethodSpoofing && this.intended().toUpperCase() === 'POST') {
+      const spoofed = this.input('_method', this.intended())
+      if (typeof spoofed === 'string' && spoofed) return spoofed.toUpperCase()
+    }
+    return this.intended()
+  }
+
+  /** The real HTTP method, ignoring any `_method` spoofing (AdonisJS `intended`). */
+  intended(): string {
     return this.#raw.method
+  }
+
+  /** @internal Give the request access to its response — wired by HttpContext (for `fresh()`). */
+  setResponse(response: { fresh(): boolean }): void {
+    this.#response = response
+  }
+
+  /** @internal Record the matched route — wired by HttpContext (for `matchesRoute()`). */
+  setRouteInfo(info: { name?: string; pattern: string }): void {
+    this.#routeInfo = info
+  }
+
+  /**
+   * Whether the client's cached copy is still fresh (AdonisJS `fresh`) —
+   * delegates to the response's `ETag`/`If-None-Match` revalidation check, so a
+   * handler can answer `304 Not Modified`. False before the response is wired.
+   */
+  fresh(): boolean {
+    return this.#response?.fresh() ?? false
+  }
+
+  /** The negation of {@link fresh} (AdonisJS `stale`). */
+  stale(): boolean {
+    return !this.fresh()
+  }
+
+  /** True when the matched route's name or pattern equals `identifier` (AdonisJS `matchesRoute`). */
+  matchesRoute(identifier: string): boolean {
+    if (!this.#routeInfo) return false
+    return this.#routeInfo.name === identifier || this.#routeInfo.pattern === identifier
+  }
+
+  /**
+   * Enable/disable `_method` form spoofing (AdonisJS gates this behind the
+   * `allowMethodSpoofing` config; ream exposes it as an explicit opt-in, off by
+   * default, so an attacker can never silently rewrite a POST into a DELETE).
+   */
+  setMethodSpoofing(enabled: boolean): void {
+    this.#allowMethodSpoofing = enabled
   }
 
   /** Request URL (path + query string). */
@@ -113,6 +183,88 @@ export class Request {
   }
 
   /**
+   * Enable/disable trusting proxy headers (`X-Forwarded-Proto`/`-Host`/`-For`)
+   * for `protocol()`/`host()`/`ips()`. OFF by default — turning it on when the
+   * app is NOT behind a trusted proxy lets clients spoof their scheme/host/IP,
+   * so it's an explicit opt-in (same stance as {@link setMethodSpoofing}).
+   */
+  setTrustProxy(enabled: boolean): void {
+    this.#trustProxy = enabled
+  }
+
+  /**
+   * The request host including port (AdonisJS `host`). Honours
+   * `X-Forwarded-Host` ONLY when trust-proxy is enabled; otherwise the `Host`
+   * header. Returns null when neither is present.
+   */
+  host(): string | null {
+    if (this.#trustProxy) {
+      const forwarded = this.#raw.headers['x-forwarded-host']
+      if (forwarded) return forwarded.split(',')[0].trim()
+    }
+    return this.#raw.headers.host ?? null
+  }
+
+  /**
+   * The request protocol — `http` or `https` (AdonisJS `protocol`). Honours
+   * `X-Forwarded-Proto` only under trust-proxy; otherwise the connection scheme
+   * the Rust layer reported (defaulting to `http`).
+   */
+  protocol(): string {
+    if (this.#trustProxy) {
+      const forwarded = this.#raw.headers['x-forwarded-proto']
+      if (forwarded) return forwarded.split(',')[0].trim().toLowerCase()
+    }
+    return this.#raw.scheme ?? 'http'
+  }
+
+  /** True when the request protocol is `https` (AdonisJS `secure`). */
+  secure(): boolean {
+    return this.protocol() === 'https'
+  }
+
+  /**
+   * The client IP chain (AdonisJS `ips`). Under trust-proxy, the parsed
+   * `X-Forwarded-For` list (left-most = original client); otherwise just the
+   * single resolved {@link ip}.
+   */
+  ips(): string[] {
+    if (this.#trustProxy) {
+      const forwarded = this.#raw.headers['x-forwarded-for']
+      if (forwarded) {
+        return forwarded
+          .split(',')
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+      }
+    }
+    return [this.ip()]
+  }
+
+  /** The request hostname without port (AdonisJS `hostname`), or null. */
+  hostname(): string | null {
+    const host = this.host()
+    if (host === null) return null
+    // Strip the port. IPv6 literals are bracketed (`[::1]:3000`) — keep the brackets' contents.
+    if (host.startsWith('[')) return host.slice(0, host.indexOf(']') + 1) || host
+    const colon = host.indexOf(':')
+    return colon === -1 ? host : host.slice(0, colon)
+  }
+
+  /**
+   * Subdomains of the hostname (AdonisJS `subdomains`). `offset` drops the
+   * registrable domain (default 2 → `example.com`); a leading `www` is removed.
+   * Empty for an IP host or a host with no subdomain.
+   */
+  subdomains(offset = 2): string[] {
+    const hostname = this.hostname()
+    if (hostname === null || isIpLiteral(hostname)) return []
+    const parts = hostname.split('.').reverse().slice(offset)
+    if (parts.length > 0 && parts[parts.length - 1] === 'www') parts.pop()
+    return parts
+  }
+
+  /**
    * Return all cookies sent on this request as a name → value map. The
    * HyperServer parses the `Cookie:` header once via the `cookie` crate
    * (RFC 6265) and ships the result on `RawRequest.cookies`. Test fixtures
@@ -146,29 +298,47 @@ export class Request {
   }
 
   /**
-   * Signed cookie value, verified with APP_KEY (AdonisJS default). Returns null
-   * when absent OR when the signature is invalid (tampered / not signed).
+   * Signed cookie value, verified with APP_KEY (AdonisJS default). Returns
+   * `defaultValue` (or null) when absent OR when the signature is invalid
+   * (tampered / not signed).
    */
-  cookie(name: string): string | null {
+  cookie(name: string, defaultValue?: string): string | null {
     const raw = this.plainCookie(name)
-    if (raw === null) return null
-    return this.#cookieSigner ? this.#cookieSigner.unsign(raw) : raw
+    const value = raw === null ? null : this.#cookieSigner ? this.#cookieSigner.unsign(raw) : raw
+    return value ?? defaultValue ?? null
   }
 
-  /** Raw (unsigned) cookie value (AdonisJS `plainCookie`), or null when absent. */
-  plainCookie(name: string): string | null {
+  /** Raw (unsigned) cookie value (AdonisJS `plainCookie`), or `defaultValue`/null when absent. */
+  plainCookie(name: string, defaultValue?: string): string | null {
     const cookies = this.#raw.cookies ?? this.cookies()
-    return cookies[name] ?? null
+    return cookies[name] ?? defaultValue ?? null
   }
 
   /**
    * Encrypted cookie value, decrypted with APP_KEY (AdonisJS `encryptedCookie`).
-   * Returns null when absent, undecryptable, or no encryption service.
+   * Returns `defaultValue` (or null) when absent, undecryptable, or no
+   * encryption service.
    */
-  encryptedCookie(name: string): string | null {
+  encryptedCookie(name: string, defaultValue?: string): string | null {
     const raw = this.plainCookie(name)
-    if (raw === null || !this.#cookieSigner) return null
-    return this.#cookieSigner.decrypt(raw)
+    const value = raw === null || !this.#cookieSigner ? null : this.#cookieSigner.decrypt(raw)
+    return value ?? defaultValue ?? null
+  }
+
+  /** @internal Inject the APP_KEY-backed signed-URL helper — wired by HttpContext. */
+  setSignedUrl(signedUrl: SignedUrl): void {
+    this.#signedUrl = signedUrl
+  }
+
+  /**
+   * Verify the request's signed-URL `signature` (AdonisJS `hasValidSignature`).
+   * Delegates to the {@link SignedUrl} helper, which recomputes the HMAC over
+   * the current path + query, rejects an expired `expires`, and checks the
+   * `purpose`. Returns false without an APP_KEY-backed signer.
+   */
+  hasValidSignature(purpose?: string): boolean {
+    if (!this.#signedUrl) return false
+    return this.#signedUrl.verify(this.url(), purpose)
   }
 
   /** Get the raw body as a string (decoded from base64 if binary). */
@@ -189,9 +359,9 @@ export class Request {
 
   // ─── Headers ──────────────────────────────────────────────
 
-  /** Get a single request header (case-insensitive). */
-  header(key: string): string | undefined {
-    return this.#raw.headers[key.toLowerCase()]
+  /** Get a single request header (case-insensitive), or `defaultValue` when absent. */
+  header(key: string, defaultValue?: string): string | undefined {
+    return this.#raw.headers[key.toLowerCase()] ?? defaultValue
   }
 
   /** Get all request headers. */
@@ -231,15 +401,15 @@ export class Request {
 
   // ─── Merged input (body + qs) ─────────────────────────────
 
-  /** Get a single input value from body or query string. */
+  /**
+   * Get a single input value from body or query string, by AdonisJS
+   * dot-notation (`input('user.address.city')`). Returns `defaultValue` when
+   * the path is absent (parity with `lodash.get`, reimplemented dependency-free).
+   */
   input<T = unknown>(key: string, defaultValue?: T): T {
-    const merged = this.all()
-    if (key in merged) {
-      // biome-ignore lint/suspicious/noExplicitAny: generic accessor — caller brands the value type via T
-      return merged[key] as any as T
-    }
-    // biome-ignore lint/suspicious/noExplicitAny: generic default — caller brands the value type via T
-    return defaultValue as any as T
+    // Untyped request data: the caller declares the shape it expects (same
+    // contract as AdonisJS `request.input<T>`, whose return is loose `any`).
+    return getPath(this.all(), key, defaultValue) as T
   }
 
   /** Get all input (query string merged with body). */
@@ -247,31 +417,48 @@ export class Request {
     if (!this.#merged) {
       this.#ensureParsedBody()
       this.#merged = { ...this.qs(), ...this.#parsedBody }
+      // Snapshot the first-seen input as the immutable "original" (flash old-input).
+      if (this.#original === undefined) this.#original = { ...this.#merged }
     }
     return { ...this.#merged }
   }
 
-  /** Cherry-pick specific keys from input. */
-  only<K extends string>(keys: K[]): Partial<Record<K, unknown>> {
-    const merged = this.all()
-    const result: Partial<Record<K, unknown>> = {}
-    for (const key of keys) {
-      if (key in merged) {
-        result[key] = merged[key]
-      }
-    }
-    return result
+  /**
+   * The original request input, captured once and never mutated (AdonisJS
+   * `request.original`) — the basis for flash "old input" on validation errors.
+   */
+  original(): Dict<unknown> {
+    this.all() // ensure the snapshot is captured
+    return { ...(this.#original ?? {}) }
   }
 
-  /** Get all input except specific keys. */
+  /**
+   * Cherry-pick specific keys from input, honouring dot-notation for nested
+   * branches (`only(['user.id'])` → `{ user: { id } }`) — AdonisJS `only`
+   * (`lodash.pick`). Absent paths are skipped.
+   */
+  only(keys: string[]): Dict<unknown> {
+    return pickPaths(this.all(), keys)
+  }
+
+  /**
+   * Get all input except specific keys, honouring dot-notation for nested
+   * branches — AdonisJS `except` (`lodash.omit`). Never mutates the input.
+   */
   except(keys: string[]): Dict<unknown> {
-    const merged = this.all()
-    const keySet = new Set(keys)
-    const result: Dict<unknown> = {}
-    for (const [k, v] of Object.entries(merged)) {
-      if (!keySet.has(k)) result[k] = v
-    }
-    return result
+    return omitPaths(this.all(), keys)
+  }
+
+  /**
+   * True when the request carries a body — a `content-length` above zero or a
+   * `transfer-encoding` header (AdonisJS `request.hasBody`). Lets a handler
+   * branch on "was anything sent" without parsing.
+   */
+  hasBody(): boolean {
+    const transferEncoding = this.#raw.headers['transfer-encoding']
+    if (transferEncoding && transferEncoding.length > 0) return true
+    const contentLength = Number.parseInt(this.#raw.headers['content-length'] ?? '', 10)
+    return Number.isFinite(contentLength) && contentLength > 0
   }
 
   // ─── Content negotiation ──────────────────────────────────
@@ -452,6 +639,12 @@ export class Request {
  */
 function isPlainObject(value: unknown): value is Dict<unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** True for an IPv4 dotted-quad or a (bracketed) IPv6 literal — hosts with no subdomains. */
+function isIpLiteral(host: string): boolean {
+  if (host.startsWith('[') || host.includes('::')) return true
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(host)
 }
 
 /**

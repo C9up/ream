@@ -13,6 +13,8 @@
  * value as `undefined`.
  */
 
+import { Secret } from './Secret.js'
+
 /** A single failed-variable validation — collected by `Env.create`. */
 export class EnvVarError extends Error {
   constructor(message: string) {
@@ -26,14 +28,27 @@ export interface SchemaNode<T> {
   validate(name: string, value: string | undefined): T
 }
 
-/** A required node that can be turned optional — `.optional()` widens `T` to `T | undefined`. */
+/** Condition deciding whether a variable is optional (AdonisJS `optionalWhen`). */
+export type OptionalCondition = boolean | ((name: string, value: string | undefined) => boolean)
+
+/**
+ * A required node that can be turned optional — `.optional()` widens `T` to
+ * `T | undefined`; `.optionalWhen(cond)` does so only when `cond` holds.
+ */
 export interface RequiredNode<T> extends SchemaNode<T> {
   optional(): SchemaNode<T | undefined>
+  optionalWhen(condition: OptionalCondition): SchemaNode<T | undefined>
 }
 
-export interface StringOptions {
+/** Options common to every schema function (AdonisJS `SchemaFnOptions`). */
+export interface SchemaFnOptions {
+  /** Custom error message, replacing the default when validation fails. */
+  message?: string
+}
+
+export interface StringOptions extends SchemaFnOptions {
   /** Validate the string against a known format. */
-  format?: 'host' | 'url' | 'email'
+  format?: 'host' | 'url' | 'email' | 'uuid'
   /** For `format: 'url'` — require a TLD (default true). */
   tld?: boolean
   /** For `format: 'url'` — require a protocol (default true). */
@@ -45,24 +60,30 @@ const FALSE_VALUES = new Set(['false', '0'])
 
 /**
  * Build a node from a `parse` that only ever sees a present, non-empty string.
- * Required `validate` throws on absent/empty; `.optional()` returns `undefined`.
+ * Required `validate` throws on absent/empty (using `message` when given);
+ * `.optional()` returns `undefined`; `.optionalWhen(cond)` is optional only
+ * when the condition holds.
  */
-function makeNode<T>(parse: (name: string, raw: string) => T): RequiredNode<T> {
+function makeNode<T>(parse: (name: string, raw: string) => T, message?: string): RequiredNode<T> {
+  const required = (name: string, value: string | undefined): T => {
+    if (value === undefined || value === '') {
+      throw new EnvVarError(message ?? `Missing required environment variable "${name}"`)
+    }
+    return parse(name, value)
+  }
+  const optional = (name: string, value: string | undefined): T | undefined => {
+    if (value === undefined || value === '') return undefined
+    return parse(name, value)
+  }
   return {
-    validate(name, value) {
-      if (value === undefined || value === '') {
-        throw new EnvVarError(`Missing required environment variable "${name}"`)
-      }
-      return parse(name, value)
-    },
-    optional() {
-      return {
-        validate(name, value) {
-          if (value === undefined || value === '') return undefined
-          return parse(name, value)
-        },
-      }
-    },
+    validate: required,
+    optional: () => ({ validate: optional }),
+    optionalWhen: (condition) => ({
+      validate(name, value) {
+        const skip = typeof condition === 'function' ? condition(name, value) : condition
+        return skip ? optional(name, value) : required(name, value)
+      },
+    }),
   }
 }
 
@@ -93,6 +114,10 @@ function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 function checkFormat(name: string, value: string, options?: StringOptions): void {
   if (!options?.format) return
   const ok =
@@ -100,10 +125,13 @@ function checkFormat(name: string, value: string, options?: StringOptions): void
       ? isHost(value)
       : options.format === 'url'
         ? isUrl(value, options)
-        : isEmail(value)
+        : options.format === 'uuid'
+          ? isUuid(value)
+          : isEmail(value)
   if (!ok) {
     throw new EnvVarError(
-      `Environment variable "${name}" must be a valid ${options.format}, got "${value}"`,
+      options.message ??
+        `Environment variable "${name}" must be a valid ${options.format}, got "${value}"`,
     )
   }
 }
@@ -115,44 +143,89 @@ function stringParse(options?: StringOptions): (name: string, raw: string) => st
   }
 }
 
-/** `string(opts?)` is callable AND exposes `.optional(opts?)` — both Adonis forms. */
+/**
+ * `string(opts?)` is callable AND exposes `.optional(opts?)` / `.optionalWhen()`
+ * shortcuts — all AdonisJS forms.
+ */
 const string: ((options?: StringOptions) => RequiredNode<string>) & {
   optional(options?: StringOptions): SchemaNode<string | undefined>
-} = Object.assign((options?: StringOptions) => makeNode(stringParse(options)), {
-  optional: (options?: StringOptions) => makeNode(stringParse(options)).optional(),
+  optionalWhen(
+    condition: OptionalCondition,
+    options?: StringOptions,
+  ): SchemaNode<string | undefined>
+} = Object.assign((options?: StringOptions) => makeNode(stringParse(options), options?.message), {
+  optional: (options?: StringOptions) =>
+    makeNode(stringParse(options), options?.message).optional(),
+  optionalWhen: (condition: OptionalCondition, options?: StringOptions) =>
+    makeNode(stringParse(options), options?.message).optionalWhen(condition),
 })
 
-function number(): RequiredNode<number> {
-  return makeNode((name, raw) => {
+function numberParse(options?: SchemaFnOptions): (name: string, raw: string) => number {
+  return (name, raw) => {
     const parsed = Number(raw)
     if (Number.isNaN(parsed)) {
-      throw new EnvVarError(`Environment variable "${name}" must be a number, got "${raw}"`)
+      throw new EnvVarError(
+        options?.message ?? `Environment variable "${name}" must be a number, got "${raw}"`,
+      )
     }
     return parsed
-  })
+  }
 }
 
-function boolean(): RequiredNode<boolean> {
-  return makeNode((name, raw) => {
+function number(options?: SchemaFnOptions): RequiredNode<number> {
+  return makeNode(numberParse(options), options?.message)
+}
+
+function booleanParse(options?: SchemaFnOptions): (name: string, raw: string) => boolean {
+  return (name, raw) => {
     if (TRUE_VALUES.has(raw)) return true
     if (FALSE_VALUES.has(raw)) return false
     throw new EnvVarError(
-      `Environment variable "${name}" must be a boolean (true/false/1/0), got "${raw}"`,
+      options?.message ??
+        `Environment variable "${name}" must be a boolean (true/false/1/0), got "${raw}"`,
     )
-  })
+  }
 }
 
-function enumNode<V extends readonly string[]>(values: V): RequiredNode<V[number]> {
+function boolean(options?: SchemaFnOptions): RequiredNode<boolean> {
+  return makeNode(booleanParse(options), options?.message)
+}
+
+function enumNode<V extends readonly string[]>(
+  values: V,
+  options?: SchemaFnOptions,
+): RequiredNode<V[number]> {
   return makeNode((name, raw) => {
     const match = values.find((candidate) => candidate === raw)
     if (match === undefined) {
       throw new EnvVarError(
-        `Environment variable "${name}" must be one of [${values.join(', ')}], got "${raw}"`,
+        options?.message ??
+          `Environment variable "${name}" must be one of [${values.join(', ')}], got "${raw}"`,
       )
     }
     return match
-  })
+  }, options?.message)
 }
+
+/**
+ * `secret(opts?)` wraps the value in a {@link Secret} so it never leaks through
+ * logs/JSON (AdonisJS `Env.schema.secret`). Read it with `.release()`.
+ */
+const secret: ((options?: SchemaFnOptions) => RequiredNode<Secret<string>>) & {
+  optional(options?: SchemaFnOptions): SchemaNode<Secret<string> | undefined>
+  optionalWhen(
+    condition: OptionalCondition,
+    options?: SchemaFnOptions,
+  ): SchemaNode<Secret<string> | undefined>
+} = Object.assign(
+  (options?: SchemaFnOptions) => makeNode((_name, raw) => new Secret(raw), options?.message),
+  {
+    optional: (options?: SchemaFnOptions) =>
+      makeNode((_name, raw) => new Secret(raw), options?.message).optional(),
+    optionalWhen: (condition: OptionalCondition, options?: SchemaFnOptions) =>
+      makeNode((_name, raw) => new Secret(raw), options?.message).optionalWhen(condition),
+  },
+)
 
 /** The `Env.schema` surface. */
 export const schema = {
@@ -160,4 +233,5 @@ export const schema = {
   number,
   boolean,
   enum: enumNode,
+  secret,
 }

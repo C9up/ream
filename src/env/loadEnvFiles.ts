@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
+import { interpolate } from './interpolate.js'
 
 /**
  * Load `.env` files into `process.env` — the shared primitive behind both the
@@ -31,10 +32,17 @@ export function loadEnvFiles(appRoot: URL, options: { skipEnvLocal?: boolean } =
     } catch {
       continue // file absent — nothing to load
     }
-    for (const [key, value] of Object.entries(parseEnv(contents))) {
-      if (typeof value === 'string' && process.env[key] === undefined) {
-        process.env[key] = value
-      }
+    const parsed = parseEnv(contents)
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== 'string' || process.env[key] !== undefined) continue
+      // Interpolate `$VAR`/`${VAR}` against process.env then this file's own
+      // (already-loaded) values, and apply any `identifier:` resolver.
+      process.env[key] = interpolate(value, (name) => {
+        const fromProcess = process.env[name]
+        if (fromProcess !== undefined) return fromProcess
+        const fromFile = parsed[name]
+        return typeof fromFile === 'string' ? fromFile : undefined
+      })
     }
   }
 }
