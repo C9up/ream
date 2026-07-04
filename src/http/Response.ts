@@ -114,6 +114,37 @@ export class Response {
   }
 
   /**
+   * Set a header only if it has not been set yet (AdonisJS `safeHeader`) —
+   * the idiom for defaulting a header from middleware without clobbering a
+   * value a downstream handler already chose.
+   */
+  safeHeader(key: string, value: string): this {
+    if (!this.getHeader(key)) this.header(key, value)
+    return this
+  }
+
+  /** Append field(s) to the `Vary` header, de-duplicated (AdonisJS parity). */
+  vary(field: string | string[]): this {
+    const fields = Array.isArray(field) ? field : [field]
+    const current = this.getHeader('vary')
+    const existing = current
+      ? current
+          .split(',')
+          .map((f) => f.trim())
+          .filter(Boolean)
+      : []
+    for (const f of fields) if (!existing.includes(f)) existing.push(f)
+    this.header('Vary', existing.join(', '))
+    return this
+  }
+
+  /** Set the `Location` header without issuing a redirect (AdonisJS parity). */
+  location(url: string): this {
+    this.header('Location', url)
+    return this
+  }
+
+  /**
    * Set the Content-Type header. Chainable. AdonisJS parity
    * (`response.type(type, charset?)`): `type` may be a full MIME type OR a file
    * extension — `type('txt')` → `text/plain; charset=utf-8`, `type('json')` →
@@ -139,6 +170,27 @@ export class Response {
   json(data: unknown): void {
     this.#headers['content-type'] = 'application/json'
     this.#body = safeStringify(data)
+    this.#finished = true
+  }
+
+  /**
+   * Send a JSONP response (AdonisJS parity) — wraps the JSON body in a
+   * `callbackName(...)` call served as `text/javascript`. The callback name is
+   * sanitised to identifier-safe characters and U+2028 / U+2029 are escaped
+   * (valid in JSON, but break JS), so neither the callback nor the payload can
+   * inject script.
+   */
+  jsonp(body: unknown, callbackName = 'callback'): void {
+    // Sanitise the callback name to identifier-safe characters — the JSONP XSS
+    // guard (an attacker-controlled callback must not inject script).
+    const safeCallback = callbackName.replace(/[^\w$.]/g, '')
+    // Escape U+2028 / U+2029 — valid inside JSON strings but line terminators in
+    // JS, so they'd break the wrapped payload in a <script> context (Adonis parity).
+    const json = safeStringify(body).replace(/[\u2028\u2029]/g, (c) =>
+      c === '\u2028' ? '\\u2028' : '\\u2029',
+    )
+    this.#headers['content-type'] = 'text/javascript; charset=utf-8'
+    this.#body = `/**/ typeof ${safeCallback} === 'function' && ${safeCallback}(${json});`
     this.#finished = true
   }
 
@@ -196,6 +248,254 @@ export class Response {
     this.#status = 204
     this.#body = ''
     this.#finished = true
+  }
+
+  // ─── Descriptive status methods (AdonisJS parity) ────────
+  // Each sets the status then sends the (optional) body — mirrors
+  // `@adonisjs/http-server` Response (e.g. `response.notFound(body)`).
+
+  /** 100 Continue. */
+  continue(): void {
+    this.status(100)
+  }
+
+  /** 101 Switching Protocols. */
+  switchingProtocols(): void {
+    this.status(101)
+  }
+
+  /** 200 ok. */
+  ok(body?: unknown): void {
+    this.status(200)
+    this.send(body)
+  }
+
+  /** 201 created. */
+  created(body?: unknown): void {
+    this.status(201)
+    this.send(body)
+  }
+
+  /** 202 accepted. */
+  accepted(body?: unknown): void {
+    this.status(202)
+    this.send(body)
+  }
+
+  /** 203 nonAuthoritativeInformation. */
+  nonAuthoritativeInformation(body?: unknown): void {
+    this.status(203)
+    this.send(body)
+  }
+
+  /** 205 resetContent. */
+  resetContent(body?: unknown): void {
+    this.status(205)
+    this.send(body)
+  }
+
+  /** 206 partialContent. */
+  partialContent(body?: unknown): void {
+    this.status(206)
+    this.send(body)
+  }
+
+  /** 300 multipleChoices. */
+  multipleChoices(body?: unknown): void {
+    this.status(300)
+    this.send(body)
+  }
+
+  /** 301 movedPermanently. */
+  movedPermanently(body?: unknown): void {
+    this.status(301)
+    this.send(body)
+  }
+
+  /** 302 movedTemporarily. */
+  movedTemporarily(body?: unknown): void {
+    this.status(302)
+    this.send(body)
+  }
+
+  /** 303 seeOther. */
+  seeOther(body?: unknown): void {
+    this.status(303)
+    this.send(body)
+  }
+
+  /** 304 notModified. */
+  notModified(body?: unknown): void {
+    this.status(304)
+    this.send(body)
+  }
+
+  /** 305 useProxy. */
+  useProxy(body?: unknown): void {
+    this.status(305)
+    this.send(body)
+  }
+
+  /** 307 temporaryRedirect. */
+  temporaryRedirect(body?: unknown): void {
+    this.status(307)
+    this.send(body)
+  }
+
+  /** 400 badRequest. */
+  badRequest(body?: unknown): void {
+    this.status(400)
+    this.send(body)
+  }
+
+  /** 401 unauthorized. */
+  unauthorized(body?: unknown): void {
+    this.status(401)
+    this.send(body)
+  }
+
+  /** 402 paymentRequired. */
+  paymentRequired(body?: unknown): void {
+    this.status(402)
+    this.send(body)
+  }
+
+  /** 403 forbidden. */
+  forbidden(body?: unknown): void {
+    this.status(403)
+    this.send(body)
+  }
+
+  /** 404 notFound. */
+  notFound(body?: unknown): void {
+    this.status(404)
+    this.send(body)
+  }
+
+  /** 405 methodNotAllowed. */
+  methodNotAllowed(body?: unknown): void {
+    this.status(405)
+    this.send(body)
+  }
+
+  /** 406 notAcceptable. */
+  notAcceptable(body?: unknown): void {
+    this.status(406)
+    this.send(body)
+  }
+
+  /** 407 proxyAuthenticationRequired. */
+  proxyAuthenticationRequired(body?: unknown): void {
+    this.status(407)
+    this.send(body)
+  }
+
+  /** 408 requestTimeout. */
+  requestTimeout(body?: unknown): void {
+    this.status(408)
+    this.send(body)
+  }
+
+  /** 409 conflict. */
+  conflict(body?: unknown): void {
+    this.status(409)
+    this.send(body)
+  }
+
+  /** 410 gone. */
+  gone(body?: unknown): void {
+    this.status(410)
+    this.send(body)
+  }
+
+  /** 411 lengthRequired. */
+  lengthRequired(body?: unknown): void {
+    this.status(411)
+    this.send(body)
+  }
+
+  /** 412 preconditionFailed. */
+  preconditionFailed(body?: unknown): void {
+    this.status(412)
+    this.send(body)
+  }
+
+  /** 413 requestEntityTooLarge. */
+  requestEntityTooLarge(body?: unknown): void {
+    this.status(413)
+    this.send(body)
+  }
+
+  /** 414 requestUriTooLong. */
+  requestUriTooLong(body?: unknown): void {
+    this.status(414)
+    this.send(body)
+  }
+
+  /** 415 unsupportedMediaType. */
+  unsupportedMediaType(body?: unknown): void {
+    this.status(415)
+    this.send(body)
+  }
+
+  /** 416 requestedRangeNotSatisfiable. */
+  requestedRangeNotSatisfiable(body?: unknown): void {
+    this.status(416)
+    this.send(body)
+  }
+
+  /** 417 expectationFailed. */
+  expectationFailed(body?: unknown): void {
+    this.status(417)
+    this.send(body)
+  }
+
+  /** 422 unprocessableEntity. */
+  unprocessableEntity(body?: unknown): void {
+    this.status(422)
+    this.send(body)
+  }
+
+  /** 429 tooManyRequests. */
+  tooManyRequests(body?: unknown): void {
+    this.status(429)
+    this.send(body)
+  }
+
+  /** 500 internalServerError. */
+  internalServerError(body?: unknown): void {
+    this.status(500)
+    this.send(body)
+  }
+
+  /** 501 notImplemented. */
+  notImplemented(body?: unknown): void {
+    this.status(501)
+    this.send(body)
+  }
+
+  /** 502 badGateway. */
+  badGateway(body?: unknown): void {
+    this.status(502)
+    this.send(body)
+  }
+
+  /** 503 serviceUnavailable. */
+  serviceUnavailable(body?: unknown): void {
+    this.status(503)
+    this.send(body)
+  }
+
+  /** 504 gatewayTimeout. */
+  gatewayTimeout(body?: unknown): void {
+    this.status(504)
+    this.send(body)
+  }
+
+  /** 505 httpVersionNotSupported. */
+  httpVersionNotSupported(body?: unknown): void {
+    this.status(505)
+    this.send(body)
   }
 
   // ─── Redirect ─────────────────────────────────────────────
@@ -307,6 +607,14 @@ export class Response {
     if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`)
     this.#cookies.push(parts.join('; '))
     return this
+  }
+
+  /**
+   * Expire a cookie immediately (AdonisJS `clearCookie`) — re-sends it with
+   * `Max-Age=0`, the RFC 6265 delete-now signal that `cookie()` honours.
+   */
+  clearCookie(name: string, options?: { path?: string }): this {
+    return this.cookie(name, '', { ...options, maxAge: 0 })
   }
 
   // ─── Internals (used by HttpKernel for NAPI serialization) ─
