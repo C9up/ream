@@ -29,6 +29,24 @@ function assertNoCRLF(name: string, value: string): void {
   }
 }
 
+/**
+ * JSON.stringify with AdonisJS-parity safety: `BigInt` values are emitted as
+ * strings (native `JSON.stringify` throws on them) and circular references are
+ * dropped instead of throwing — so `response.json()` / an object `send()` never
+ * blows up on a payload the raw serializer can't handle.
+ */
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>()
+  return JSON.stringify(value, (_key, val) => {
+    if (typeof val === 'bigint') return val.toString()
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) return undefined
+      seen.add(val)
+    }
+    return val
+  })
+}
+
 export class Response {
   #status = 200
   #headers: Record<string, string> = {}
@@ -108,7 +126,7 @@ export class Response {
   /** Send a JSON response. Sets content-type and stringifies. */
   json(data: unknown): void {
     this.#headers['content-type'] = 'application/json'
-    this.#body = JSON.stringify(data)
+    this.#body = safeStringify(data)
     this.#finished = true
   }
 
@@ -116,7 +134,12 @@ export class Response {
   send(data: unknown): void {
     if (typeof data === 'string') {
       if (!this.#headers['content-type']) {
-        this.#headers['content-type'] = 'text/html; charset=utf-8'
+        // AdonisJS parity: an HTML-looking string (opens with `<`) is served as
+        // `text/html`; a plain string as `text/plain` — not everything forced to
+        // HTML (which mislabels plain text and JSON/CSV/robots.txt bodies).
+        this.#headers['content-type'] = data.trimStart().startsWith('<')
+          ? 'text/html; charset=utf-8'
+          : 'text/plain; charset=utf-8'
       }
       this.#body = data
     } else if (Buffer.isBuffer(data)) {
@@ -127,7 +150,7 @@ export class Response {
       return
     } else if (typeof data === 'object' && data !== null) {
       this.#headers['content-type'] = 'application/json'
-      this.#body = JSON.stringify(data)
+      this.#body = safeStringify(data)
     } else if (data !== undefined && data !== null) {
       if (!this.#headers['content-type']) {
         this.#headers['content-type'] = 'text/plain'
