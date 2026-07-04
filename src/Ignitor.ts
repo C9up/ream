@@ -30,6 +30,7 @@ import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 import { Router } from './router/Router.js'
+import { CookieSigner } from './security/CookieSigner.js'
 import { Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearRouter, setRouter } from './services/router.js'
@@ -177,6 +178,21 @@ export class Ignitor {
       // Also expose it on the Application for the AdonisJS-style path helpers
       // (`app.makePath`, `app.configPath`, `app.migrationsPath`, …).
       this.app.setAppRoot(root)
+    }
+
+    // Encryption / cookie-signing service (AdonisJS `APP_KEY` idiom). Registered
+    // only when APP_KEY is set; HttpContext hands it to Response/Request so
+    // `cookie()` can sign, `encryptedCookie()` can encrypt and `request.cookie()`
+    // can verify. Without APP_KEY, cookies stay plain (unsigned).
+    const appKey = process.env.APP_KEY
+    if (appKey) {
+      if (appKey.length < 16) {
+        throw new Error(
+          'APP_KEY is too short — use at least a 16-character (ideally 32-byte) random key for cookie signing/encryption.',
+        )
+      }
+      const signer = new CookieSigner(appKey)
+      this.app.container.singleton('encryption', () => signer)
     }
 
     // Set service singletons so route/kernel files can import them

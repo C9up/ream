@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
+import type { CookieSigner } from '../security/CookieSigner.js'
 import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
 import type { RedirectBuilder } from './RedirectBuilder.js'
 import {
@@ -52,6 +53,14 @@ function safeStringify(value: unknown): string {
   })
 }
 
+export interface CookieOptions {
+  maxAge?: number
+  path?: string
+  httpOnly?: boolean
+  secure?: boolean
+  sameSite?: 'lax' | 'strict' | 'none'
+}
+
 export class Response {
   #status = 200
   #headers: Record<string, string> = {}
@@ -62,6 +71,7 @@ export class Response {
   #streamBackend?: StreamBackend
   #streamId?: string
   #request?: { method(): string; header(key: string): string | undefined }
+  #cookieSigner?: CookieSigner
 
   /**
    * CSP nonce for this request (AdonisJS idiom: `response.nonce`). Seeded by
@@ -521,6 +531,11 @@ export class Response {
     this.#request = request
   }
 
+  /** Inject the APP_KEY-backed cookie signer — wired by HttpContext. */
+  setCookieSigner(signer: CookieSigner): void {
+    this.#cookieSigner = signer
+  }
+
   /** Set a strong (or weak) `ETag` for the given body (AdonisJS parity, `etag` pkg). */
   setEtag(body: string | Buffer, weak = false): this {
     this.header('Etag', etag(body, { weak }))
@@ -663,18 +678,41 @@ export class Response {
 
   // ─── Cookies ──────────────────────────────────────────────
 
-  /** Set a response cookie. */
-  cookie(
-    name: string,
-    value: string,
-    options?: {
-      maxAge?: number
-      path?: string
-      httpOnly?: boolean
-      secure?: boolean
-      sameSite?: 'lax' | 'strict' | 'none'
-    },
-  ): this {
+  /**
+   * Set a SIGNED response cookie (AdonisJS default). The value is HMAC-signed
+   * with the app's `APP_KEY` (via the injected signer) so tampering is detected
+   * on read; `request.cookie()` verifies + unwraps it. Falls back to a plain
+   * cookie when no APP_KEY / encryption service is configured.
+   */
+  cookie(name: string, value: string, options?: CookieOptions): this {
+    const signed = this.#cookieSigner ? this.#cookieSigner.sign(value) : value
+    return this.#writeCookie(name, signed, options)
+  }
+
+  /**
+   * Set an UNSIGNED response cookie (AdonisJS `plainCookie`) — sent as-is. Use
+   * for values you already protect (encrypted session ids, CSRF tokens) or that
+   * a client-side script must read.
+   */
+  plainCookie(name: string, value: string, options?: CookieOptions): this {
+    return this.#writeCookie(name, value, options)
+  }
+
+  /**
+   * Set an ENCRYPTED response cookie (AdonisJS `encryptedCookie`) — AES-256-GCM
+   * encrypted with `APP_KEY`, unreadable + tamper-proof on the client. Requires
+   * a configured encryption service (APP_KEY).
+   */
+  encryptedCookie(name: string, value: string, options?: CookieOptions): this {
+    if (!this.#cookieSigner) {
+      throw new Error(
+        'encryptedCookie() requires APP_KEY — set it so the encryption service is registered.',
+      )
+    }
+    return this.#writeCookie(name, this.#cookieSigner.encrypt(value), options)
+  }
+
+  #writeCookie(name: string, value: string, options?: CookieOptions): this {
     // SameSite=None cookies REQUIRE the Secure attribute — modern browsers
     // (Chrome 80+, Firefox, Safari) silently reject the cookie otherwise, so
     // a missing Secure here turns OAuth callbacks / iframe sessions into a
@@ -685,17 +723,12 @@ export class Response {
       )
     }
     const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`]
-    // `maxAge: 0` is the RFC 6265 "delete-now" signal used by logout
-    // flows. A truthiness check would skip it and leave the cookie
-    // alive for the session — explicit `!== undefined` covers both
-    // 0 and negative values that browsers also treat as immediate
-    // expiry.
+    // `maxAge: 0` is the RFC 6265 "delete-now" signal used by logout flows. A
+    // truthiness check would skip it; explicit `!== undefined` covers 0 too.
     if (options?.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`)
     if (options?.path) {
-      // `Path` is concatenated raw (encodeURIComponent would mangle the `/`
-      // separators a path legitimately contains), so it needs the same
-      // CRLF/NUL guard as header()/append() — otherwise a controlled path
-      // injects into the `\n`-joined Set-Cookie header (response-splitting).
+      // `Path` is concatenated raw (encodeURIComponent would mangle `/`), so it
+      // needs the same CRLF/NUL guard as header() (response-splitting).
       assertNoCRLF(`Set-Cookie path for '${name}'`, options.path)
       parts.push(`Path=${options.path}`)
     }
@@ -711,7 +744,7 @@ export class Response {
    * `Max-Age=0`, the RFC 6265 delete-now signal that `cookie()` honours.
    */
   clearCookie(name: string, options?: { path?: string }): this {
-    return this.cookie(name, '', { ...options, maxAge: 0 })
+    return this.plainCookie(name, '', { ...options, maxAge: 0 })
   }
 
   // ─── Internals (used by HttpKernel for NAPI serialization) ─

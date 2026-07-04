@@ -17,10 +17,12 @@ interface FakeCtx {
   request: {
     header(name: string): string | undefined
     cookie(name: string): string | null
+    plainCookie(name: string): string | null
   }
   response: {
     cookies: string[]
     cookie(name: string, value: string, opts?: Record<string, unknown>): void
+    plainCookie(name: string, value: string, opts?: Record<string, unknown>): void
   }
   store: FakeStore
 }
@@ -42,10 +44,14 @@ function makeCtx(cookieHeader?: string): FakeCtx {
     request: {
       header: (name) => (name === 'cookie' ? cookieHeader : undefined),
       cookie: (name) => cookies[name] ?? null,
+      plainCookie: (name) => cookies[name] ?? null,
     },
     response: {
       cookies: [],
       cookie(name, value) {
+        this.cookies.push(`${name}=${value}`)
+      },
+      plainCookie(name, value) {
         this.cookies.push(`${name}=${value}`)
       },
     },

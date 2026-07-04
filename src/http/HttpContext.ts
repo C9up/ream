@@ -10,6 +10,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ServiceToken } from '../container/types.js'
 import type { Emitter } from '../events/Emitter.js'
+import type { CookieSigner } from '../security/CookieSigner.js'
 import type { Session } from '../session/Session.js'
 import type { RouteUrlResolver } from './RedirectBuilder.js'
 import { RedirectBuilder } from './RedirectBuilder.js'
@@ -258,6 +259,17 @@ export class HttpContext {
     // Give the response read access to the request (AdonisJS wires them too) —
     // needed by `response.fresh()` for conditional-GET / ETag revalidation.
     this.response.setRequest(this.request)
+    // Hand the APP_KEY-backed encryption service (when registered) to request +
+    // response so cookie()/encryptedCookie()/request.cookie() can sign & verify.
+    try {
+      const signer = containerResolver?.make<CookieSigner>('encryption')
+      if (signer) {
+        this.response.setCookieSigner(signer)
+        this.request.setCookieSigner(signer)
+      }
+    } catch {
+      // No encryption service registered (no APP_KEY) — cookies stay plain.
+    }
     this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
 
     // Wire redirect builder with request context

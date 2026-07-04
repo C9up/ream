@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { E_HTTP_REQUEST_ABORTED } from '../../src/http/Exception.js'
+import type { RawRequest } from '../../src/http/Request.js'
+import { Request } from '../../src/http/Request.js'
 import { Response } from '../../src/http/Response.js'
+import { CookieSigner } from '../../src/security/CookieSigner.js'
 
 describe('ream > Response.send() / json() — AdonisJS parity', () => {
   it('serves a plain string as text/plain and an HTML-looking string as text/html', () => {
@@ -233,5 +236,66 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
     const r = new Response()
     r.download('/no/such/file-xyz.txt')
     expect(r.getStatus()).toBe(404)
+  })
+})
+
+describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
+  const signer = new CookieSigner('test-app-key-32-bytes-long-xxxxxx')
+  const rawWithCookie = (name: string, value: string): RawRequest => ({
+    method: 'GET',
+    path: '/',
+    query: '',
+    headers: { cookie: `${name}=${value}` },
+    body: '',
+  })
+
+  it('cookie() signs by default; plainCookie() sends the raw value', () => {
+    const signed = new Response()
+    signed.setCookieSigner(signer)
+    signed.cookie('sid', 'abc')
+    const sc = signed.getHeaders()['set-cookie'] ?? ''
+    expect(sc).toContain('sid=')
+    expect(sc).not.toMatch(/sid=abc(;|$)/)
+
+    const plain = new Response()
+    plain.setCookieSigner(signer)
+    plain.plainCookie('sid', 'abc')
+    expect(plain.getHeaders()['set-cookie'] ?? '').toContain('sid=abc')
+  })
+
+  it('a signed cookie round-trips: response.cookie() → request.cookie()', () => {
+    const value = signer.sign('hello')
+    const req = new Request(rawWithCookie('token', value), {})
+    req.setCookieSigner(signer)
+    expect(req.cookie('token')).toBe('hello')
+    expect(req.plainCookie('token')).toBe(value)
+  })
+
+  it('request.cookie() returns null for a tampered signed cookie', () => {
+    const req = new Request(rawWithCookie('token', `${signer.sign('hello')}X`), {})
+    req.setCookieSigner(signer)
+    expect(req.cookie('token')).toBeNull()
+  })
+
+  it('encryptedCookie() encrypts on write and decrypts on read', () => {
+    const res = new Response()
+    res.setCookieSigner(signer)
+    res.encryptedCookie('secret', 'top')
+    const sc = res.getHeaders()['set-cookie'] ?? ''
+    expect(sc).not.toContain('top')
+    const enc = sc.split(';')[0].split('=').slice(1).join('=')
+    const req = new Request(rawWithCookie('secret', enc), {})
+    req.setCookieSigner(signer)
+    expect(req.encryptedCookie('secret')).toBe('top')
+  })
+
+  it('encryptedCookie() throws without an encryption service', () => {
+    expect(() => new Response().encryptedCookie('x', 'y')).toThrow(/APP_KEY/)
+  })
+
+  it('cookie() falls back to a plain cookie when no signer is configured', () => {
+    const r = new Response()
+    r.cookie('sid', 'abc')
+    expect(r.getHeaders()['set-cookie'] ?? '').toContain('sid=abc')
   })
 })

@@ -7,6 +7,7 @@
  * @implements FR21
  */
 
+import type { CookieSigner } from '../security/CookieSigner.js'
 import type { Dict } from '../types/helpers.js'
 
 export interface RawRequest {
@@ -51,6 +52,7 @@ export interface RawRequest {
 export class Request {
   #raw: RawRequest
   #params: Dict
+  #cookieSigner?: CookieSigner
   #parsedBody: Dict<unknown> | undefined
   #parsedQs: Dict<unknown> | undefined
   #merged: Dict<unknown> | undefined
@@ -138,10 +140,35 @@ export class Request {
     return result
   }
 
-  /** Pre-parsed cookie value by name, or `null` when absent. */
+  /** Inject the APP_KEY-backed cookie signer — wired by HttpContext. */
+  setCookieSigner(signer: CookieSigner): void {
+    this.#cookieSigner = signer
+  }
+
+  /**
+   * Signed cookie value, verified with APP_KEY (AdonisJS default). Returns null
+   * when absent OR when the signature is invalid (tampered / not signed).
+   */
   cookie(name: string): string | null {
+    const raw = this.plainCookie(name)
+    if (raw === null) return null
+    return this.#cookieSigner ? this.#cookieSigner.unsign(raw) : raw
+  }
+
+  /** Raw (unsigned) cookie value (AdonisJS `plainCookie`), or null when absent. */
+  plainCookie(name: string): string | null {
     const cookies = this.#raw.cookies ?? this.cookies()
     return cookies[name] ?? null
+  }
+
+  /**
+   * Encrypted cookie value, decrypted with APP_KEY (AdonisJS `encryptedCookie`).
+   * Returns null when absent, undecryptable, or no encryption service.
+   */
+  encryptedCookie(name: string): string | null {
+    const raw = this.plainCookie(name)
+    if (raw === null || !this.#cookieSigner) return null
+    return this.#cookieSigner.decrypt(raw)
   }
 
   /** Get the raw body as a string (decoded from base64 if binary). */

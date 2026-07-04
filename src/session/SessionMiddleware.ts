@@ -56,7 +56,7 @@ export default class SessionMiddleware {
     const isProduction = process.env.NODE_ENV === 'production'
 
     // Read session ID from cookie — pre-parsed by the Rust HyperServer.
-    let sessionId = ctx.request.cookie(cookieName)
+    let sessionId = ctx.request.plainCookie(cookieName)
     const hadIncomingCookie = sessionId !== null
 
     // Cookie driver: the cookie value IS the session data (encrypted)
@@ -65,7 +65,7 @@ export default class SessionMiddleware {
       sessionId = sessionId ?? generateSessionId()
       const session = new Session(sessionId, data)
       ctx.store.set('session', session)
-    ctx.session = session
+      ctx.session = session
 
       await next()
 
@@ -85,7 +85,7 @@ export default class SessionMiddleware {
               'Switch to a server-side driver (memory/redis) or reduce session data.\n',
           )
         }
-        ctx.response.cookie(cookieName, encoded, {
+        ctx.response.plainCookie(cookieName, encoded, {
           maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
           path: '/',
           httpOnly: true,
@@ -145,7 +145,7 @@ export default class SessionMiddleware {
     // defeats HTTP caching, and leaks a Set-Cookie to CDNs. This mirrors
     // the cookie-driver path above (which already omits `isNew`).
     if (session.isDirty() || regenerated || (rolling && hadIncomingCookie)) {
-      ctx.response.cookie(cookieName, session.sessionId, {
+      ctx.response.plainCookie(cookieName, session.sessionId, {
         maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
         path: '/',
         httpOnly: true,
