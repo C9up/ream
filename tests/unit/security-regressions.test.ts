@@ -86,7 +86,8 @@ describe('security regressions > CRLF header injection', () => {
     const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     expect(() => res.type('application/json')).not.toThrow()
-    expect(res.getHeaders()['content-type']).toBe('application/json')
+    // AdonisJS parity: mime-types resolution appends the default charset.
+    expect(res.getHeaders()['content-type']).toBe('application/json; charset=utf-8')
   })
 })
 

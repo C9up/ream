@@ -39,3 +39,34 @@ describe('ream > Response.send() / json() — AdonisJS parity', () => {
     expect(parsed.self).toBeUndefined()
   })
 })
+
+describe('ream > Response.type() — AdonisJS parity (mime-types)', () => {
+  it('resolves a file extension to a full content-type with charset', () => {
+    expect(new Response().type('txt').getHeader('content-type')).toBe('text/plain; charset=utf-8')
+    expect(new Response().type('json').getHeader('content-type')).toBe(
+      'application/json; charset=utf-8',
+    )
+  })
+
+  it('adds the default charset to a bare text MIME type', () => {
+    expect(new Response().type('text/html').getHeader('content-type')).toBe(
+      'text/html; charset=utf-8',
+    )
+  })
+
+  it('appends an explicit charset passed as the second argument', () => {
+    expect(new Response().type('application/json', 'utf-8').getHeader('content-type')).toBe(
+      'application/json; charset=utf-8',
+    )
+  })
+
+  it('leaves a binary MIME type without a charset', () => {
+    expect(new Response().type('image/png').getHeader('content-type')).toBe('image/png')
+  })
+
+  it('passes a full content-type (charset already inline) through unchanged', () => {
+    expect(new Response().type('text/plain; charset=utf-8').getHeader('content-type')).toBe(
+      'text/plain; charset=utf-8',
+    )
+  })
+})

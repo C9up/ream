@@ -7,6 +7,7 @@
  * @implements FR21
  */
 
+import { contentType } from 'mime-types'
 import type { RedirectBuilder } from './RedirectBuilder.js'
 import {
   openSseStream,
@@ -112,12 +113,23 @@ export class Response {
     return this
   }
 
-  /** Set the Content-Type header. Chainable. */
-  type(contentType: string): this {
-    // Same CRLF/NUL guard as header() — `type(userValue)` must not be a
+  /**
+   * Set the Content-Type header. Chainable. AdonisJS parity
+   * (`response.type(type, charset?)`): `type` may be a full MIME type OR a file
+   * extension — `type('txt')` → `text/plain; charset=utf-8`, `type('json')` →
+   * `application/json; charset=utf-8` — resolved via `mime-types` exactly like
+   * Adonis. An optional `charset` is appended before resolution.
+   */
+  type(type: string, charset?: string): this {
+    const input = charset ? `${type}; charset=${charset}` : type
+    // `contentType()` returns `false` for an unrecognised value — fall back to
+    // the raw input rather than writing `content-type: false`.
+    const resolved = contentType(input)
+    const value = resolved === false ? input : resolved
+    // Same CRLF/NUL guard as header() — a resolved type must never be a
     // response-splitting hole just because it writes a fixed header key.
-    assertNoCRLF('content-type', contentType)
-    this.#headers['content-type'] = contentType
+    assertNoCRLF('content-type', value)
+    this.#headers['content-type'] = value
     return this
   }
 
