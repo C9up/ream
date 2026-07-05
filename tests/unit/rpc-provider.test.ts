@@ -216,7 +216,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       posted[0],
       { jsonrpc: '2.0', method: 'admin.ping', params: {}, id: 1 },
       {
-        authenticated: true,
+        isAuthenticated: true,
         user: { roles: ['admin'] },
       },
     )

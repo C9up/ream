@@ -101,7 +101,7 @@ function checkRpcAuthorization(
   def: RpcMethodDefinition,
 ): { code: number; message: string } | undefined {
   const needsAuth = def.guards.length > 0 || def.roles.length > 0 || def.permissions.length > 0
-  if (needsAuth && !ctx.auth?.authenticated) {
+  if (needsAuth && !ctx.auth?.isAuthenticated) {
     return { code: -32003, message: 'Unauthorized' }
   }
   if (def.roles.length > 0) {
@@ -237,8 +237,8 @@ export class RpcRouter {
    * are unsupported — deny by throwing.)
    */
   async #runMiddleware(ctx: HttpContext, names: string[]): Promise<void> {
-    const registry = this.#container?.has("middleware")
-      ? await this.#container.resolve<MiddlewareRegistry>("middleware")
+    const registry = this.#container?.has('middleware')
+      ? await this.#container.resolve<MiddlewareRegistry>('middleware')
       : undefined
     if (!registry) {
       throw new Error(

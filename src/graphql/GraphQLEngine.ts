@@ -436,7 +436,7 @@ export class GraphQLEngine {
     const permissions = options.permissions ?? []
 
     const needsAuth = guards.length > 0 || roles.length > 0 || permissions.length > 0
-    if (needsAuth && !ctx.auth?.authenticated) {
+    if (needsAuth && !ctx.auth?.isAuthenticated) {
       return 'Unauthorized'
     }
 

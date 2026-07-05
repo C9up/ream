@@ -138,7 +138,7 @@ function createGuardMiddleware(
   return async (ctx, next) => {
     const needsAuth =
       guards.length > 0 || (roles && roles.length > 0) || (permissions && permissions.length > 0)
-    if (needsAuth && !ctx.auth.authenticated) {
+    if (needsAuth && !ctx.auth.isAuthenticated) {
       throw new E_UNAUTHORIZED()
     }
 

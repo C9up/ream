@@ -21,7 +21,12 @@ import { Request } from './Request.js'
 import { Response } from './Response.js'
 
 export interface AuthState {
-  authenticated: boolean
+  /**
+   * Whether the request carries an authenticated user (AdonisJS `auth.isAuthenticated`
+   * parity, renamed from `authenticated`). Always present — Ream defaults it to
+   * `false`; an auth provider (e.g. `@c9up/warden`'s Authenticator) sets it true.
+   */
+  isAuthenticated: boolean
   user?: {
     id: string
     email?: string
@@ -31,6 +36,19 @@ export interface AuthState {
   }
   roles?: string[]
   permissions?: string[]
+  /**
+   * Optional AdonisJS `Authenticator` surface — present when an auth provider
+   * (Warden) fills the slot with a per-request authenticator, absent for the
+   * bare `{ isAuthenticated: false }` default. Methods are OPTIONAL so Ream stays
+   * agnostic: a non-Warden host, or the default state, remains a valid AuthState.
+   */
+  authenticate?(): Promise<void>
+  check?(): Promise<boolean>
+  authenticateUsing?(guards?: string[], options?: { loginRoute?: string }): Promise<void>
+  getUserOrFail?(): AuthState['user']
+  use?(name: string): unknown
+  readonly authenticationAttempted?: boolean
+  readonly authenticatedViaGuard?: string
 }
 
 /**
@@ -192,7 +210,7 @@ export class HttpContext extends Macroable {
   readonly route: RouteInfo
 
   /** Authentication state — populated by auth middleware. */
-  auth: AuthState = { authenticated: false }
+  auth: AuthState = { isAuthenticated: false }
 
   /**
    * Request locale — the primary subtag of the first `Accept-Language` entry

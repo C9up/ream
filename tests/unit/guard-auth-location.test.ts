@@ -14,13 +14,18 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
   it('allows when the role is nested under user (the warden shape)', async () => {
     const reg = new MiddlewareRegistry()
     let ran = false
-    const chain = reg.buildChain([], [], async () => {
-      ran = true
-    }, { roles: ['admin'] })
+    const chain = reg.buildChain(
+      [],
+      [],
+      async () => {
+        ran = true
+      },
+      { roles: ['admin'] },
+    )
 
     const ctx = makeCtx()
-    // warden sets `ctx.auth = { authenticated, user: { roles } }` — NOT top-level.
-    ctx.auth = { authenticated: true, user: { id: 'u1', roles: ['admin'] } }
+    // warden sets `ctx.auth = { isAuthenticated, user: { roles } }` — NOT top-level.
+    ctx.auth = { isAuthenticated: true, user: { id: 'u1', roles: ['admin'] } }
     await chain(ctx, noop)
     expect(ran).toBe(true)
   })
@@ -28,12 +33,17 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
   it('allows when permissions are nested under user', async () => {
     const reg = new MiddlewareRegistry()
     let ran = false
-    const chain = reg.buildChain([], [], async () => {
-      ran = true
-    }, { permissions: ['tasks:write'] })
+    const chain = reg.buildChain(
+      [],
+      [],
+      async () => {
+        ran = true
+      },
+      { permissions: ['tasks:write'] },
+    )
 
     const ctx = makeCtx()
-    ctx.auth = { authenticated: true, user: { id: 'u1', permissions: ['tasks:write'] } }
+    ctx.auth = { isAuthenticated: true, user: { id: 'u1', permissions: ['tasks:write'] } }
     await chain(ctx, noop)
     expect(ran).toBe(true)
   })
@@ -41,12 +51,17 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
   it('still reads top-level roles (provider that sets ctx.auth.roles directly)', async () => {
     const reg = new MiddlewareRegistry()
     let ran = false
-    const chain = reg.buildChain([], [], async () => {
-      ran = true
-    }, { roles: ['admin'] })
+    const chain = reg.buildChain(
+      [],
+      [],
+      async () => {
+        ran = true
+      },
+      { roles: ['admin'] },
+    )
 
     const ctx = makeCtx()
-    ctx.auth = { authenticated: true, roles: ['admin'] }
+    ctx.auth = { isAuthenticated: true, roles: ['admin'] }
     await chain(ctx, noop)
     expect(ran).toBe(true)
   })
@@ -56,7 +71,7 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
     const chain = reg.buildChain([], [], noop, { roles: ['admin'] })
 
     const ctx = makeCtx()
-    ctx.auth = { authenticated: true, user: { id: 'u1', roles: ['member'] } }
+    ctx.auth = { isAuthenticated: true, user: { id: 'u1', roles: ['member'] } }
     await expect(chain(ctx, noop)).rejects.toThrow()
   })
 })
