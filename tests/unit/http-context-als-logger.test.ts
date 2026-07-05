@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { Container } from '../../src/container/Container.js'
 import { HttpContext } from '../../src/http/HttpContext.js'
 import type { RawRequest } from '../../src/http/Request.js'
 
@@ -37,7 +36,7 @@ describe('ream > HttpContext > logger', () => {
     expect(ctx.logger).toBe(ctx.logger)
   })
 
-  it('resolves and child-scopes a container "logger" to the request id', () => {
+  it('child-scopes the injected base logger to the request id', () => {
     const raw: RawRequest = { method: 'GET', path: '/', query: '', headers: {}, body: '' }
     const childCalls: Array<{ correlationId?: string }> = []
     const childLogger = { info() {}, error() {}, warn() {}, debug() {}, trace() {}, fatal() {} }
@@ -48,9 +47,10 @@ describe('ream > HttpContext > logger', () => {
         return childLogger
       },
     }
-    const container = new Container()
-    container.singleton('logger', () => baseLogger)
-    const ctx = new HttpContext('req-9', raw, {}, { pattern: '/', middleware: [] }, container)
+    // The base logger is resolved async by HttpKernel and injected via
+    // setBaseLogger — the getter then child-scopes it synchronously.
+    const ctx = new HttpContext('req-9', raw, {}, { pattern: '/', middleware: [] })
+    ctx.setBaseLogger(baseLogger)
     expect(ctx.logger).toBe(childLogger)
     expect(childCalls).toEqual([{ correlationId: 'req-9' }])
   })

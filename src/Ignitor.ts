@@ -517,9 +517,8 @@ export class Ignitor {
     // Core domain event: the app finished booting (all providers ready).
     // Emitted once through the bus when events are wired — zero hot-path cost.
     if (this.app.container.has('events')) {
-      this.app.container
-        .resolve<Emitter>('events')
-        .emit('app:ready', { environment: this.environment })
+      const bus = await this.app.container.resolve<Emitter>('events')
+      bus.emit('app:ready', { environment: this.environment })
     }
 
     // Dev-mode change watcher. IMPORTANT: this does NOT attempt an in-process

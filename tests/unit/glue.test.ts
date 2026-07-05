@@ -1,8 +1,8 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import {
-  clearServiceRegistry,
   Container,
+  clearServiceRegistry,
   createHttpKernel,
   MiddlewareRegistry,
   ReamError,
@@ -110,7 +110,7 @@ describe('HttpKernel > integration', () => {
 
     let resolved: { hello(): string } | undefined
     router.get('/svc', async (ctx) => {
-      resolved = ctx.containerResolver?.make<{ hello(): string }>('greeter')
+      resolved = await ctx.containerResolver?.make<{ hello(): string }>('greeter')
       ctx.response.json({ ok: resolved !== undefined })
     })
 

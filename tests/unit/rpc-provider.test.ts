@@ -25,23 +25,23 @@ function stubRouter(): { posted: string[]; router: { post(path: string): void } 
 }
 
 describe('RpcProvider > container binding', () => {
-  it('binds a shared RpcRouter under the `rpc` token', () => {
+  it('binds a shared RpcRouter under the `rpc` token', async () => {
     const container = new Container()
     const provider = new RpcProvider(buildApp(container))
     provider.register()
-    expect(container.resolve('rpc')).toBe(provider.rpc)
+    expect(await container.resolve('rpc')).toBe(provider.rpc)
     expect(provider.rpc).toBeInstanceOf(RpcRouter)
   })
 
   // Pinning test (epic-24 retro A1): the collision guard was silently dropped by
   // the 56.6 refactor and re-added on review — these lock it so a future refactor
   // cannot erase it unnoticed.
-  it('re-registering the same provider instance is idempotent (no throw)', () => {
+  it('re-registering the same provider instance is idempotent (no throw)', async () => {
     const container = new Container()
     const provider = new RpcProvider(buildApp(container))
     provider.register()
     expect(() => provider.register()).not.toThrow()
-    expect(container.resolve('rpc')).toBe(provider.rpc)
+    expect(await container.resolve('rpc')).toBe(provider.rpc)
   })
 
   it('throws RPC_PROVIDER_ALREADY_REGISTERED when a different provider claims the `rpc` token', () => {

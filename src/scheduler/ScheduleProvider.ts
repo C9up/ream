@@ -41,6 +41,7 @@ let activeProvider: ScheduleProvider | undefined
 export class ScheduleProvider extends Provider {
   readonly scheduler: Scheduler
   #booted = false
+  #registered = false
 
   constructor(app: AppContext, options: ScheduleProviderOptions = {}) {
     super(app)
@@ -65,20 +66,10 @@ export class ScheduleProvider extends Provider {
   override register(): void {
     const scheduler = this.scheduler
     const container = this.app.container
-    // Probe for an existing binding. The `make` / `resolve` API
-    // throws when unbound; use it to distinguish "same instance"
-    // from "another provider already claimed the token".
-    let existing: unknown
-    try {
-      existing = container.resolve('scheduler')
-    } catch {
-      existing = undefined
-    }
-    if (existing !== undefined) {
-      if (existing === scheduler) {
-        // Same provider re-running its register phase — no-op.
-        return
-      }
+    if (container.has('scheduler')) {
+      // Idempotent re-register: tracked with a flag rather than
+      // `container.resolve('scheduler')` because resolution is now async.
+      if (this.#registered) return
       throw new ReamError(
         'SCHEDULE_PROVIDER_ALREADY_REGISTERED',
         "Container token 'scheduler' is already bound to a different instance",
@@ -88,6 +79,7 @@ export class ScheduleProvider extends Provider {
       )
     }
     container.singleton('scheduler', () => scheduler)
+    this.#registered = true
   }
 
   override async boot(): Promise<void> {
@@ -130,7 +122,7 @@ export class ScheduleProvider extends Provider {
             this.scheduler.register(taskName, cronExpr, async () => {
               // Resolve from the container on every fire so transient
               // services get a fresh instance each run.
-              const instance = this.app.container.make<Record<string, unknown>>(target)
+              const instance = await this.app.container.make<Record<string, unknown>>(target)
               const method = instance[methodName]
               if (typeof method !== 'function') {
                 throw new ReamError(

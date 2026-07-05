@@ -126,7 +126,6 @@ export { SignedUrl } from './security/SignedUrl.js'
 
 // ─── Decorators ─────────────────────────────────────────────
 
-export { createLazyProxy, getLazyParams, Lazy } from './decorators/Lazy.js'
 export {
   clearServiceRegistry,
   getServiceMetadata,

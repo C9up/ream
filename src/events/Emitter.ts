@@ -35,7 +35,7 @@ type Listener<T = unknown> = ListenerFn<T> | ListenerConstructor<T>
 
 /** Resolver for instantiating listener classes with DI. */
 export interface ContainerResolver {
-  make<T>(target: new (...args: never[]) => T): T
+  make<T>(target: new (...args: never[]) => T): Promise<T>
 }
 
 export class Emitter {
@@ -135,7 +135,7 @@ export class Emitter {
         if (isListenerClass(listener)) {
           // Listener class — resolve via container for @inject() support
           const instance = this.resolver
-            ? this.resolver.make(listener as ListenerConstructor<T>)
+            ? await this.resolver.make(listener as ListenerConstructor<T>)
             : new (listener as ListenerConstructor<T>)()
           await instance.handle(event)
         } else {

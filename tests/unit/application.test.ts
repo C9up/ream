@@ -71,7 +71,7 @@ describe('application > provider lifecycle', () => {
     expect(log).toEqual(['B', 'A']) // Reverse order
   })
 
-  it('provider can register bindings in the container', () => {
+  it('provider can register bindings in the container', async () => {
     const app = new Application()
 
     class DbProvider extends Provider {
@@ -81,7 +81,7 @@ describe('application > provider lifecycle', () => {
     }
 
     app.register(new DbProvider(app))
-    const db = app.container.resolve<{ connected: boolean }>('db')
+    const db = await app.container.resolve<{ connected: boolean }>('db')
     expect(db.connected).toBe(true)
   })
 

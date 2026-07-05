@@ -203,7 +203,7 @@ export interface SelectionField {
 export class GraphQLEngine {
   #schemaSource: string
   #resolvers: Map<string, ResolverEntry> = new Map()
-  #container?: { make<T>(target: new (...args: unknown[]) => T): T }
+  #container?: { make<T>(target: new (...args: unknown[]) => T): Promise<T> }
   readonly path: string
   #playground: boolean
   #maxQueryBytes: number
@@ -238,7 +238,7 @@ export class GraphQLEngine {
   }
 
   /** Set IoC container for resolver instantiation. */
-  useContainer(container: { make<T>(target: new (...args: unknown[]) => T): T }): void {
+  useContainer(container: { make<T>(target: new (...args: unknown[]) => T): Promise<T> }): void {
     this.#container = container
   }
 
@@ -369,7 +369,7 @@ export class GraphQLEngine {
     try {
       // Resolve handler via IoC or direct instantiation.
       const instance = this.#container
-        ? this.#container.make(entry.handlerClass)
+        ? await this.#container.make(entry.handlerClass)
         : new entry.handlerClass()
 
       const handler = instance[entry.methodName]

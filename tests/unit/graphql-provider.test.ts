@@ -25,19 +25,19 @@ describe('GraphQLProvider > opt-in', () => {
     const provider = new GraphQLProvider(buildApp(container))
     provider.register()
     expect(provider.engine).toBeUndefined()
-    expect(() => container.resolve('graphql')).toThrow()
+    await expect(container.resolve('graphql')).rejects.toThrow()
     await provider.boot() // no router needed — returns early
   })
 })
 
 describe('GraphQLProvider > wired', () => {
-  it('binds the engine under the `graphql` token', () => {
+  it('binds the engine under the `graphql` token', async () => {
     const container = new Container()
     const engine = makeEngine()
     const provider = new GraphQLProvider(buildApp(container), { engine })
     provider.register()
     expect(provider.engine).toBe(engine)
-    expect(container.resolve('graphql')).toBe(engine)
+    expect(await container.resolve('graphql')).toBe(engine)
   })
 
   it('mounts GET + POST at engine.path on boot', async () => {

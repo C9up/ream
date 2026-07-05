@@ -35,11 +35,14 @@ function buildContainerWithoutMake() {
     singleton(token: unknown, factory: () => unknown): void {
       bindings.set(token, factory)
     },
-    resolve<T = unknown>(token: unknown): T {
+    // Async + awaits the factory, mirroring the real IoC container so factories
+    // that return a Promise (e.g. EventsProvider's Emitter factory) resolve to
+    // the value, not the Promise.
+    async resolve<T = unknown>(token: unknown): Promise<T> {
       if (cache.has(token)) return cache.get(token) as T
       const factory = bindings.get(token)
       if (!factory) throw new Error(`not registered: ${String(token)}`)
-      const value = factory()
+      const value = await factory()
       cache.set(token, value)
       return value as T
     },
@@ -52,7 +55,7 @@ function buildContainerWithMake() {
   const calls: Array<new (...args: never[]) => unknown> = []
   return {
     ...base,
-    make<T>(Target: new (...args: never[]) => T): T {
+    async make<T>(Target: new (...args: never[]) => T): Promise<T> {
       calls.push(Target)
       return new Target()
     },
@@ -68,7 +71,7 @@ describe('EventsProvider > container compatibility', () => {
     await provider.boot()
 
     // Emitter is bound and usable.
-    const emitter = container.resolve<Emitter>(Emitter)
+    const emitter = await container.resolve<Emitter>(Emitter)
     expect(emitter).toBeInstanceOf(Emitter)
 
     // CLASS listeners still fire via the `new Listener()` fallback —
@@ -85,7 +88,7 @@ describe('EventsProvider > container compatibility', () => {
     provider.register()
     await provider.boot()
 
-    const emitter = container.resolve<Emitter>(Emitter)
+    const emitter = await container.resolve<Emitter>(Emitter)
     emitter.on(TaskAssigned, FakeListener)
     await emitter.dispatchEvent(new TaskAssigned('t-2'))
 
@@ -98,8 +101,8 @@ describe('EventsProvider > container compatibility', () => {
     provider.register()
     await provider.boot()
 
-    const viaClass = container.resolve<EventBus>(EventBus)
-    const viaAlias = container.resolve<EventBus>('bus')
+    const viaClass = await container.resolve<EventBus>(EventBus)
+    const viaAlias = await container.resolve<EventBus>('bus')
     expect(viaClass).toBeInstanceOf(EventBus)
     expect(viaAlias).toBe(viaClass)
   })

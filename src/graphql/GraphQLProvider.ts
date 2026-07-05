@@ -28,6 +28,7 @@ export interface GraphQLProviderOptions {
 
 export class GraphQLProvider extends Provider {
   #engine?: GraphQLEngine
+  #registered = false
 
   constructor(app: AppContext, options: GraphQLProviderOptions = {}) {
     super(app)
@@ -45,9 +46,11 @@ export class GraphQLProvider extends Provider {
     if (!engine) return // GraphQL not configured — opt-out.
     const container = this.app.container
     if (container.has('graphql')) {
-      if (container.resolve('graphql') === engine) {
+      // Idempotent re-register: tracked with a flag rather than
+      // `container.resolve('graphql')` because resolution is now async.
+      if (this.#registered) {
         this.#engine = engine
-        return // re-register is idempotent
+        return
       }
       throw new ReamError(
         'GRAPHQL_PROVIDER_ALREADY_REGISTERED',
@@ -60,12 +63,13 @@ export class GraphQLProvider extends Provider {
     engine.useContainer(container)
     this.#engine = engine
     container.singleton('graphql', () => engine)
+    this.#registered = true
   }
 
   override async boot(): Promise<void> {
     const engine = this.#engine
     if (!engine) return
-    const router = this.app.container.make<Router>('router')
+    const router = await this.app.container.make<Router>('router')
     // GraphQLEngine.handle() serves the playground on GET and executes queries
     // on POST, so mount the same path for both verbs.
     router.get(engine.path, (ctx) => engine.handle(ctx))

@@ -34,7 +34,7 @@ export class StaticProvider extends Provider {
     const config = this.app.config.get<StaticConfig>('static')
     const middleware = this.#override ?? (config?.root ? new StaticMiddleware(config) : undefined)
     if (!middleware) return // not configured — opt-out
-    const server = this.app.container.make<Server>('server')
+    const server = await this.app.container.make<Server>('server')
     server.use([(ctx, next) => middleware.handle(ctx, next)])
   }
 }

@@ -68,8 +68,8 @@ export interface Authorizer {
 // declares its own structurally-compatible interface to stay decoupled (same
 // pattern as warden/blackhole middleware), so nothing cross-imports it.
 interface ContainerResolver {
-  /** Resolve/construct a service by token (class, string, or symbol). */
-  make<T>(token: ServiceToken): T
+  /** Resolve/construct a service by token (class, string, or symbol). Async (AdonisJS parity). */
+  make<T>(token: ServiceToken): Promise<T>
 }
 
 /**
@@ -87,7 +87,7 @@ export interface ContextLogger {
 }
 
 /** A logger that can spawn a request-scoped child (e.g. spectrum's `child()`). */
-interface ChildLoggerSource extends ContextLogger {
+export interface ChildLoggerSource extends ContextLogger {
   child?(options: { correlationId?: string; module?: string }): ContextLogger
 }
 
@@ -107,17 +107,16 @@ function consoleLogger(correlationId: string): ContextLogger {
   }
 }
 
-/** Resolve a request-scoped logger from the container, or fall back to console. */
+/**
+ * Build a request-scoped logger from the app's base logger, or fall back to
+ * console. The base logger is resolved (async) once by HttpKernel and injected
+ * via {@link HttpContext.setBaseLogger}; child-scoping here stays synchronous
+ * so `ctx.logger` remains a plain getter.
+ */
 function resolveRequestLogger(
-  resolver: ContainerResolver | undefined,
+  base: ChildLoggerSource | undefined,
   correlationId: string,
 ): ContextLogger {
-  let base: ChildLoggerSource | undefined
-  try {
-    base = resolver?.make<ChildLoggerSource>('logger')
-  } catch {
-    base = undefined
-  }
   if (!base) return consoleLogger(correlationId)
   return typeof base.child === 'function' ? base.child({ correlationId }) : base
 }
@@ -239,19 +238,38 @@ export class HttpContext extends Macroable {
   /** Lazily-built per-request logger (see {@link logger}). */
   #logger?: ContextLogger
 
+  /** App base logger, resolved once (async) by HttpKernel and injected. */
+  #baseLogger?: ChildLoggerSource
+
   /** Route URL resolver for redirect().toRoute(). */
   #routeUrlResolver?: RouteUrlResolver
 
   /**
-   * Per-request logger (AdonisJS `ctx.logger`). Resolves the container `'logger'`
-   * (e.g. `@c9up/spectrum`) child-scoped to this request's `id`, or falls back to
-   * a console logger when none is registered. Built once, on first access.
+   * Per-request logger (AdonisJS `ctx.logger`) — the injected app logger (e.g.
+   * `@c9up/spectrum`) child-scoped to this request's `id`, or a console logger
+   * when none is registered. Built once, on first access.
    */
   get logger(): ContextLogger {
     if (!this.#logger) {
-      this.#logger = resolveRequestLogger(this.containerResolver, this.id)
+      this.#logger = resolveRequestLogger(this.#baseLogger, this.id)
     }
     return this.#logger
+  }
+
+  /** @internal Inject the app base logger (resolved async by HttpKernel). */
+  setBaseLogger(logger: ChildLoggerSource): void {
+    this.#baseLogger = logger
+  }
+
+  /** @internal Inject the APP_KEY cookie signer into request + response (from HttpKernel). */
+  setCookieSigner(signer: CookieSigner): void {
+    this.response.setCookieSigner(signer)
+    this.request.setCookieSigner(signer)
+  }
+
+  /** @internal Inject the APP_KEY signed-URL helper into the request (from HttpKernel). */
+  setSignedUrl(signedUrl: SignedUrl): void {
+    this.request.setSignedUrl(signedUrl)
   }
 
   /** Subdomains of the request host (AdonisJS `ctx.subdomains`). */
@@ -285,23 +303,9 @@ export class HttpContext extends Macroable {
     // matched-route info for `request.matchesRoute()`.
     this.request.setResponse(this.response)
     this.request.setRouteInfo({ name: route.name, pattern: route.pattern })
-    // Hand the APP_KEY-backed encryption service (when registered) to request +
-    // response so cookie()/encryptedCookie()/request.cookie() can sign & verify.
-    try {
-      const signer = containerResolver?.make<CookieSigner>('encryption')
-      if (signer) {
-        this.response.setCookieSigner(signer)
-        this.request.setCookieSigner(signer)
-      }
-    } catch {
-      // No encryption service registered (no APP_KEY) — cookies stay plain.
-    }
-    try {
-      const signedUrl = containerResolver?.make<SignedUrl>('signedUrl')
-      if (signedUrl) this.request.setSignedUrl(signedUrl)
-    } catch {
-      // No signed-URL service (no APP_KEY) — hasValidSignature() returns false.
-    }
+    // APP_KEY-backed encryption / signed-URL services + the base logger are
+    // resolved asynchronously by HttpKernel and injected via the setters above
+    // (the container is async now, so a constructor can't resolve them itself).
     this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
 
     // Wire redirect builder with request context

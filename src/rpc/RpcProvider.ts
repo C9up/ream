@@ -42,6 +42,7 @@ export interface RpcConfig {
 
 export class RpcProvider extends Provider {
   readonly rpc: RpcRouter
+  #registered = false
 
   constructor(app: AppContext, options: RpcProviderOptions = {}) {
     super(app)
@@ -51,7 +52,9 @@ export class RpcProvider extends Provider {
   override register(): void {
     const container = this.app.container
     if (container.has('rpc')) {
-      if (container.resolve('rpc') === this.rpc) return // re-register is idempotent
+      // Idempotent re-register: tracked with a flag rather than
+      // `container.resolve('rpc')` because resolution is now async.
+      if (this.#registered) return
       throw new ReamError(
         'RPC_PROVIDER_ALREADY_REGISTERED',
         "Container token 'rpc' is already bound to a different instance",
@@ -62,12 +65,13 @@ export class RpcProvider extends Provider {
     }
     this.rpc.useContainer(container)
     container.singleton('rpc', () => this.rpc)
+    this.#registered = true
   }
 
   override async boot(): Promise<void> {
     const config = this.app.config.get<RpcConfig>('rpc')
     const path = config?.path ?? '/rpc'
-    const router = this.app.container.make<Router>('router')
+    const router = await this.app.container.make<Router>('router')
     // RpcRouter.handle() reads the registered methods at request time, so the
     // mount can happen before apps finish registering methods.
     const route = router.post(path, (ctx: HttpContext) => this.rpc.handle(ctx))

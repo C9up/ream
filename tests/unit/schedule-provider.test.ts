@@ -1,11 +1,6 @@
 import 'reflect-metadata'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type {
-  AppContext,
-  ScheduleInvocation,
-  Scheduler,
-  TaskInfo,
-} from '../../src/index.js'
+import type { AppContext, ScheduleInvocation, Scheduler, TaskInfo } from '../../src/index.js'
 import {
   Container,
   clearServiceRegistry,
@@ -330,19 +325,19 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
   })
 
-  it('register() binds the scheduler into the container under token "scheduler"', () => {
+  it('register() binds the scheduler into the container under token "scheduler"', async () => {
     const container = new Container()
     const scheduler = new MockScheduler()
     const provider = new ScheduleProvider(buildApp(container), {
       scheduler: scheduler as unknown as Scheduler,
     })
     provider.register()
-    const resolved = container.resolve<unknown>('scheduler')
+    const resolved = await container.resolve<unknown>('scheduler')
     // The container returns the exact scheduler instance the provider holds.
     expect(resolved).toBe(provider.scheduler)
   })
 
-  it('register() is idempotent when the same provider re-runs phase 1', () => {
+  it('register() is idempotent when the same provider re-runs phase 1', async () => {
     const container = new Container()
     const scheduler = new MockScheduler()
     const provider = new ScheduleProvider(buildApp(container), {
@@ -350,7 +345,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
     provider.register()
     expect(() => provider.register()).not.toThrow()
-    expect(container.resolve<unknown>('scheduler')).toBe(provider.scheduler)
+    expect(await container.resolve<unknown>('scheduler')).toBe(provider.scheduler)
   })
 
   it('register() throws SCHEDULE_PROVIDER_ALREADY_REGISTERED when a different provider claimed the token first', () => {

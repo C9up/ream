@@ -15,8 +15,8 @@ import { setEmitter } from './services/main.js'
  */
 interface EventsContainer {
   singleton(token: unknown, factory: () => unknown): void
-  resolve<T = unknown>(token: unknown): T
-  make?<T>(target: new (...args: never[]) => T): T
+  resolve<T = unknown>(token: unknown): Promise<T>
+  make?<T>(target: new (...args: never[]) => T): Promise<T>
 }
 export interface EventsAppContext {
   container: EventsContainer
@@ -31,8 +31,8 @@ export default class EventsProvider {
     this.app.container.singleton(EventBus, () => new EventBus())
     this.app.container.singleton('bus', () => this.app.container.resolve<EventBus>(EventBus))
 
-    this.app.container.singleton(Emitter, () => {
-      const bus = this.app.container.resolve<EventBus>(EventBus)
+    this.app.container.singleton(Emitter, async () => {
+      const bus = await this.app.container.resolve<EventBus>(EventBus)
       // Forward `make` only when the host actually exposes it.
       // Emitter falls back to direct `new Listener()` instantiation
       // otherwise, which keeps zero-arg listener classes working
@@ -49,7 +49,7 @@ export default class EventsProvider {
   }
 
   async boot() {
-    this.#emitter = this.app.container.resolve<Emitter>(Emitter)
+    this.#emitter = await this.app.container.resolve<Emitter>(Emitter)
     BaseEvent.useEmitter(this.#emitter)
     setEmitter(this.#emitter)
   }

@@ -133,7 +133,7 @@ export function resolveMiddlewareEntry(entry: MiddlewareEntry): MiddlewareFuncti
       cachedClass = mod.default
     }
     const instance = ctx.containerResolver
-      ? ctx.containerResolver.make<MiddlewareClass>(cachedClass)
+      ? await ctx.containerResolver.make<MiddlewareClass>(cachedClass)
       : new cachedClass()
     await instance.handle(ctx, next)
   }
@@ -162,7 +162,7 @@ export function resolveParametrizedMiddlewareEntry(
         cachedClass = mod.default
       }
       const instance = ctx.containerResolver
-        ? ctx.containerResolver.make<MiddlewareClass>(cachedClass)
+        ? await ctx.containerResolver.make<MiddlewareClass>(cachedClass)
         : new cachedClass()
       await instance.handle(ctx, next, args)
     }

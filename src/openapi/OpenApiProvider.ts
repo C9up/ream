@@ -47,8 +47,8 @@ export class OpenApiProvider extends Provider {
     const config = this.app.config.get<OpenApiDocsConfig>('openapi') ?? {}
     if (config.enabled === false) return
 
-    const generator = this.#override ?? this.#buildGenerator(config)
-    const server = this.app.container.make<Server>('server')
+    const generator = this.#override ?? (await this.#buildGenerator(config))
+    const server = await this.app.container.make<Server>('server')
     const middleware = new OpenApiMiddleware({
       specPath: config.specPath,
       docsPath: config.docsPath,
@@ -57,8 +57,8 @@ export class OpenApiProvider extends Provider {
     server.use([(ctx, next) => middleware.handle(ctx, next)])
   }
 
-  #buildGenerator(config: OpenApiDocsConfig): OpenApiGenerator {
-    const router = this.app.container.make<Router>('router')
+  async #buildGenerator(config: OpenApiDocsConfig): Promise<OpenApiGenerator> {
+    const router = await this.app.container.make<Router>('router')
     return new OpenApiGenerator(router, {
       title: config.title ?? 'API',
       version: config.version ?? '1.0.0',

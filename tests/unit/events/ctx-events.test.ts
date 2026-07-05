@@ -36,7 +36,7 @@ describe('events > ctx.events wiring', () => {
   it('emits an "exception" core event when a handler throws', async () => {
     const container = new Container()
     new EventsProvider({ container }).register()
-    const emitter = container.resolve<Emitter>('events')
+    const emitter = await container.resolve<Emitter>('events')
     const errors: Array<{ path: string; error: string }> = []
     emitter.on('exception', (e) => errors.push(e as { path: string; error: string }))
 
@@ -58,7 +58,7 @@ describe('events > ctx.events wiring', () => {
   it('emits "http:request" then "http:response" around a successful request', async () => {
     const container = new Container()
     new EventsProvider({ container }).register()
-    const emitter = container.resolve<Emitter>('events')
+    const emitter = await container.resolve<Emitter>('events')
     const order: string[] = []
     const payloads: unknown[] = []
     emitter.on('http:request', (p) => {
@@ -88,7 +88,7 @@ describe('events > ctx.events wiring', () => {
   it('emits "http:response" on the error path with the error status', async () => {
     const container = new Container()
     new EventsProvider({ container }).register()
-    const emitter = container.resolve<Emitter>('events')
+    const emitter = await container.resolve<Emitter>('events')
     const responses: unknown[] = []
     emitter.on('http:response', (p) => responses.push(p))
 

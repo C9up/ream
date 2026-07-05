@@ -13,7 +13,7 @@
 import type { Container } from './container/Container.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
-import { HttpContext } from './http/HttpContext.js'
+import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
 import type {
   MiddlewareFunction,
   MiddlewareRegistry,
@@ -21,6 +21,8 @@ import type {
 } from './middleware/Pipeline.js'
 import { compose } from './middleware/Pipeline.js'
 import type { RouteDefinition, Router } from './router/Router.js'
+import type { CookieSigner } from './security/CookieSigner.js'
+import type { SignedUrl } from './security/SignedUrl.js'
 import type { Dict } from './types/helpers.js'
 
 export interface HttpKernelConfig {
@@ -91,14 +93,31 @@ export function createHttpKernel(
   // creation, and `has()` avoids loading the native bus for apps without events.
   let eventsEmitter: Emitter | undefined
   let eventsResolved = false
-  const resolveEvents = (): Emitter | undefined => {
+  const resolveEvents = async (): Promise<Emitter | undefined> => {
     if (!eventsResolved) {
       eventsResolved = true
       if (config.container?.has('events')) {
-        eventsEmitter = config.container.resolve<Emitter>('events')
+        eventsEmitter = await config.container.resolve<Emitter>('events')
       }
     }
     return eventsEmitter
+  }
+
+  // APP_KEY-backed services + base logger, resolved once (the container is async
+  // now, so they can't be resolved in the HttpContext constructor) and injected
+  // per request via setters. Best-effort: absent bindings leave the feature off.
+  let servicesResolved = false
+  let encryption: CookieSigner | undefined
+  let signedUrl: SignedUrl | undefined
+  let baseLogger: ChildLoggerSource | undefined
+  const resolveServices = async (): Promise<void> => {
+    if (servicesResolved) return
+    servicesResolved = true
+    const c = config.container
+    if (!c) return
+    if (c.has('encryption')) encryption = await c.resolve<CookieSigner>('encryption')
+    if (c.has('signedUrl')) signedUrl = await c.resolve<SignedUrl>('signedUrl')
+    if (c.has('logger')) baseLogger = await c.resolve<ChildLoggerSource>('logger')
   }
 
   return async (reqData: HttpKernelRequest): Promise<HttpKernelResponse> => {
@@ -145,7 +164,12 @@ export function createHttpKernel(
       config.container,
     )
     ctx.setRouteUrlResolver((name, params) => config.router.urlFor(name, params))
-    ctx.events = resolveEvents()
+    // Inject the async-resolved APP_KEY services + base logger (resolved once).
+    await resolveServices()
+    if (encryption) ctx.setCookieSigner(encryption)
+    if (signedUrl) ctx.setSignedUrl(signedUrl)
+    if (baseLogger) ctx.setBaseLogger(baseLogger)
+    ctx.events = await resolveEvents()
     // Core lifecycle event: a request entered the kernel. Fire-and-forget through
     // the bus when events are wired (`?.` → zero cost when no provider). The
     // `http:response` counterpart fires before every exit below.
@@ -217,16 +241,18 @@ export function createHttpKernel(
           // A declared validator that isn't registered is a HARD error — never
           // silently skip validation, that's a security footgun (a typo'd
           // `.validate('craeteUser')` must fail loudly, not pass unvalidated).
-          const validators: RuntimeValidator[] = match.route.validators.map((name) => {
-            const token = `validator:${name}`
-            if (!config.container?.has(token)) {
-              throw new Error(
-                `[E_VALIDATOR_NOT_FOUND] Route validator '${name}' is not registered. ` +
-                  `Bind it with container.singleton('${token}', () => schema({ ... })).`,
-              )
-            }
-            return config.container.resolve<RuntimeValidator>(token)
-          })
+          const validators: RuntimeValidator[] = await Promise.all(
+            match.route.validators.map((name) => {
+              const token = `validator:${name}`
+              if (!config.container?.has(token)) {
+                throw new Error(
+                  `[E_VALIDATOR_NOT_FOUND] Route validator '${name}' is not registered. ` +
+                    `Bind it with container.singleton('${token}', () => schema({ ... })).`,
+                )
+              }
+              return config.container.resolve<RuntimeValidator>(token)
+            }),
+          )
 
           // Compile pipeline once
           const chain = config.middleware.buildChain(
@@ -319,7 +345,7 @@ function createControllerHandler(
   container?: Container,
 ): (ctx: HttpContext) => Promise<void> {
   return async (ctx: HttpContext) => {
-    const instance = container ? container.make(controller.target) : new controller.target()
+    const instance = container ? await container.make(controller.target) : new controller.target()
     const method = (instance as Record<string, (ctx: HttpContext) => Promise<void> | void>)[
       controller.method
     ]

@@ -29,8 +29,8 @@ export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown>
  * the shared `'middleware'` registry, and `validator:<name>` schemas.
  */
 interface RpcContainer {
-  make<T>(target: new (...args: unknown[]) => T): T
-  resolve<T>(token: string): T
+  make<T>(target: new (...args: unknown[]) => T): Promise<T>
+  resolve<T>(token: string): Promise<T>
   has(token: string): boolean
 }
 
@@ -163,7 +163,7 @@ export class RpcRouter {
       this.method(`${prefix}.${methodName}`, async (ctx, params) => {
         // Resolve through the container on every call (fresh DI per request,
         // like GraphQLEngine), falling back to a bare `new` when unset.
-        const instance = this.#container ? this.#container.make(controller) : new controller()
+        const instance = this.#container ? await this.#container.make(controller) : new controller()
         return instance[methodName](ctx, params)
       })
     }
@@ -237,8 +237,8 @@ export class RpcRouter {
    * are unsupported — deny by throwing.)
    */
   async #runMiddleware(ctx: HttpContext, names: string[]): Promise<void> {
-    const registry = this.#container?.has('middleware')
-      ? this.#container.resolve<MiddlewareRegistry>('middleware')
+    const registry = this.#container?.has("middleware")
+      ? await this.#container.resolve<MiddlewareRegistry>("middleware")
       : undefined
     if (!registry) {
       throw new Error(
@@ -285,7 +285,8 @@ export class RpcRouter {
             id,
           )
         }
-        const outcome = this.#container.resolve<RuntimeValidator>(token).validate(params)
+        const validator = await this.#container.resolve<RuntimeValidator>(token)
+        const outcome = validator.validate(params)
         if (!outcome.valid) return rpcError(-32602, 'Invalid params', id, outcome.errors)
         effectiveParams = outcome.data ?? params
       }

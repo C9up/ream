@@ -10,7 +10,6 @@
  */
 
 import 'reflect-metadata'
-import { createLazyProxy, getLazyParams } from '../decorators/Lazy.js'
 import { getInjectTokens, getServiceMetadata, getServiceRegistry } from '../decorators/Service.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
@@ -37,7 +36,7 @@ export class Container {
   /** Alias key → the token it forwards to (AdonisJS `container.alias`). */
   #aliases: Map<string, ServiceToken> = new Map()
   /** token key → post-resolution callbacks (AdonisJS `container.resolving`). */
-  #resolvingHooks: Map<string, Array<(value: unknown) => void>> = new Map()
+  #resolvingHooks: Map<string, Array<(value: unknown) => void | Promise<void>>> = new Map()
   #resolutionStack: string[] = []
   #resolutionSet: Set<string> = new Set()
 
@@ -77,16 +76,16 @@ export class Container {
    * resolved instance. Runs after construction of a binding/auto-constructed
    * class; NOT for raw `bindValue` values or an already-cached singleton.
    */
-  resolving(token: ServiceToken, callback: (value: unknown) => void): void {
+  resolving(token: ServiceToken, callback: (value: unknown) => void | Promise<void>): void {
     const key = this.#tokenToKey(token)
     const hooks = this.#resolvingHooks.get(key)
     if (hooks) hooks.push(callback)
     else this.#resolvingHooks.set(key, [callback])
   }
 
-  #runResolvingHooks(key: string, value: unknown): void {
+  async #runResolvingHooks(key: string, value: unknown): Promise<void> {
     const hooks = this.#resolvingHooks.get(key)
-    if (hooks) for (const hook of hooks) hook(value)
+    if (hooks) for (const hook of hooks) await hook(value)
   }
 
   // ─── Testing ──────────────────────────────────────────────
@@ -146,17 +145,17 @@ export class Container {
    * 4. Auto-construct if class has @inject() or @Service()
    * 5. Auto-construct any class (plain `new Class()`) as fallback
    */
-  make<T>(token: ServiceToken, runtimeValues?: unknown[]): T {
+  make<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T> {
     return this.resolve<T>(token, runtimeValues)
   }
 
   /**
-   * Alias for make() — backward compatible. `runtimeValues` fill the resolved
-   * class's constructor slots by index (AdonisJS `make(Class, [req, res])`);
-   * only the `undefined` slots are container-resolved. They apply to the
-   * top-level construction only, never to nested dependencies.
+   * Resolve/construct a class or binding (AdonisJS `container.make` — async, so
+   * factories, providers and `resolving` hooks may be async). `runtimeValues`
+   * fill the resolved class's constructor slots by index (`make(Class, [req,
+   * res])`); only the `undefined` slots are container-resolved, top-level only.
    */
-  resolve<T>(token: ServiceToken, runtimeValues?: unknown[]): T {
+  async resolve<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T> {
     // Dereference an alias to its target before anything else.
     const aliasTarget = this.#aliases.get(this.#tokenToKey(token))
     if (aliasTarget !== undefined) return this.resolve<T>(aliasTarget, runtimeValues)
@@ -166,7 +165,7 @@ export class Container {
     if (this.#resolutionSet.has(key)) {
       const cycle = [...this.#resolutionStack, key].join(' → ')
       throw new ReamError('CIRCULAR_DEPENDENCY', `Circular dependency detected: ${cycle}`, {
-        hint: 'Use @Lazy() on one of the constructor parameters to break the cycle.',
+        hint: 'Break the cycle by resolving one dependency lazily inside a method (`await container.make(Dep)`) instead of injecting it in the constructor.',
         context: { chain: cycle },
       })
     }
@@ -174,7 +173,7 @@ export class Container {
     this.#resolutionSet.add(key)
 
     try {
-      return this.#resolveInner<T>(key, token, runtimeValues)
+      return await this.#resolveInner<T>(key, token, runtimeValues)
     } finally {
       this.#resolutionStack.pop()
       this.#resolutionSet.delete(key)
@@ -199,13 +198,17 @@ export class Container {
       Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
 
     const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0)
-    const args = Array.from({ length: len }, (_, index) => {
-      // Runtime values take precedence (and fill slots beyond paramTypes)
-      if (runtimeValues && index < runtimeValues.length) return runtimeValues[index]
+    // Sequential resolution keeps the shared cycle-detection stack consistent.
+    const args: unknown[] = []
+    for (let index = 0; index < len; index += 1) {
+      // Runtime values take precedence (and fill slots beyond paramTypes).
+      if (runtimeValues && index < runtimeValues.length) {
+        args.push(runtimeValues[index])
+        continue
+      }
       const type = paramTypes[index]
-      if (isInjectableClass(type)) return this.resolve(type)
-      return undefined
-    })
+      args.push(isInjectableClass(type) ? await this.resolve(type) : undefined)
+    }
 
     const member: unknown = instance[method]
     if (!isCallable(member)) {
@@ -255,35 +258,34 @@ export class Container {
 
   // ─── Internal resolution ──────────────────────────────────
 
-  #resolveInner<T>(key: string, token: ServiceToken, runtimeValues?: unknown[]): T {
-    // 1. Check swaps (test overrides)
+  async #resolveInner<T>(key: string, token: ServiceToken, runtimeValues?: unknown[]): Promise<T> {
+    // 1. Check swaps (test overrides) — a swap factory may be async.
     if (this.#overrides.has(key)) {
-      // biome-ignore lint/suspicious/noExplicitAny: IoC container factory returns unknown; caller brands via T
-      return this.#overrides.get(key)?.() as any as T
+      const swapped = await this.#overrides.get(key)?.()
+      return swapped as T
     }
 
     // 2. Check cached singletons
     if (this.#singletons.has(key)) {
-      // biome-ignore lint/suspicious/noExplicitAny: IoC singleton stored as unknown; caller brands via T
-      return this.#singletons.get(key) as any as T
+      return this.#singletons.get(key) as T
     }
 
-    // 3. Check explicit bindings
+    // 3. Check explicit bindings — the factory may be async.
     const binding = this.#bindings.get(key)
     if (binding) {
-      const instance = binding.factory ? binding.factory() : undefined
+      const instance = binding.factory ? await binding.factory() : undefined
       if (binding.scope === 'singleton') {
         this.#singletons.set(key, instance)
       }
-      this.#runResolvingHooks(key, instance)
+      await this.#runResolvingHooks(key, instance)
       // Boundary cast from `unknown` — the caller brands the resolved type via T.
       return instance as T
     }
 
     // 4. Auto-construct if it's a class
     if (typeof token === 'function') {
-      const instance = this.#autoConstruct(token, runtimeValues) as T
-      this.#runResolvingHooks(key, instance)
+      const instance = (await this.#autoConstruct(token, runtimeValues)) as T
+      await this.#runResolvingHooks(key, instance)
       return instance
     }
 
@@ -307,7 +309,10 @@ export class Container {
    * 2. Reflect.getMetadata('design:paramtypes') — decorator metadata (requires SWC/tsc)
    * 3. No params → plain `new Class()`
    */
-  #autoConstruct(target: new (...args: unknown[]) => unknown, runtimeValues?: unknown[]): unknown {
+  async #autoConstruct(
+    target: new (...args: unknown[]) => unknown,
+    runtimeValues?: unknown[],
+  ): Promise<unknown> {
     const metadata = getServiceMetadata(target)
     const scope = metadata?.scope ?? 'transient'
     const key = metadata?.as ?? target.name
@@ -321,9 +326,7 @@ export class Container {
     const runtimeAt = (index: number): unknown => runtimeValues?.[index]
 
     // 1. Check static containerInjections (AdonisJS Fold-compatible, works
-    // without emitDecoratorMetadata). The `in` operator narrows the optional
-    // field to `unknown`, then `readContainerInjectionDeps` validates the
-    // shape at runtime — no type-level cast required.
+    // without emitDecoratorMetadata).
     const explicitDeps = readContainerInjectionDeps(target)
 
     // 2. Fallback to reflect-metadata
@@ -331,7 +334,6 @@ export class Container {
       explicitDeps ?? Reflect.getMetadata('design:paramtypes', target) ?? []
 
     const injectTokens = getInjectTokens(target)
-    const lazyIndices = getLazyParams(target)
 
     // No `design:paramtypes` (a dev transpiler may not emit decorator metadata —
     // esbuild / tsx don't). Recover what we can, and NEVER construct with
@@ -339,19 +341,20 @@ export class Container {
     if (paramTypes.length === 0) {
       // (a) `@Inject(token)` records its tokens INDEPENDENTLY of decorator
       //     metadata, so even without `design:paramtypes` we can resolve the
-      //     constructor from that map alone.
+      //     constructor from that map alone. Deps resolve SEQUENTIALLY so the
+      //     shared cycle-detection stack stays consistent.
       if (injectTokens.size > 0) {
         const maxIndex = Math.max(...injectTokens.keys(), (runtimeValues?.length ?? 0) - 1)
-        const deps = Array.from({ length: maxIndex + 1 }, (_value, index) => {
+        const deps: unknown[] = []
+        for (let index = 0; index <= maxIndex; index += 1) {
           const rt = runtimeAt(index)
-          if (rt !== undefined) return rt
-          const depToken = injectTokens.get(index)
-          if (!depToken) return undefined
-          if (lazyIndices.includes(index)) {
-            return createLazyProxy(() => this.resolve<object>(depToken))
+          if (rt !== undefined) {
+            deps.push(rt)
+            continue
           }
-          return this.resolve(depToken)
-        })
+          const depToken = injectTokens.get(index)
+          deps.push(depToken ? await this.resolve(depToken) : undefined)
+        }
         const instance = new target(...deps)
         if (scope === 'singleton') this.#singletons.set(key, instance)
         return instance
@@ -377,33 +380,29 @@ export class Container {
           },
         )
       }
-      // (c) Genuine zero-argument class.
+      // (d) Genuine zero-argument class.
       const instance = new target()
       if (scope === 'singleton') this.#singletons.set(key, instance)
       return instance
     }
 
-    const deps = paramTypes.map((type, index) => {
+    // Resolve constructor deps SEQUENTIALLY (the cycle-detection stack is
+    // instance-shared, so parallel Promise.all would interleave and corrupt it).
+    const deps: unknown[] = []
+    for (let index = 0; index < paramTypes.length; index += 1) {
       const rt = runtimeAt(index)
-      if (rt !== undefined) return rt
+      if (rt !== undefined) {
+        deps.push(rt)
+        continue
+      }
       const namedToken = injectTokens.get(index)
-      // A native primitive constructor (String/Number/Boolean/Array/Object/…)
-      // is NOT injectable — emitDecoratorMetadata uses them for primitive/any
-      // params. Treat them like `Object` (→ undefined, so a default value can
-      // kick in) instead of trying to auto-construct `String`, which produced a
-      // confusing "declares 1 constructor parameter" error.
+      const type = paramTypes[index]
+      // A native primitive constructor (String/Number/Boolean/…) is NOT
+      // injectable — leave the slot undefined so a constructor default can fill it.
       const depToken: ServiceToken | undefined =
         namedToken ?? (isInjectableClass(type) ? type : undefined)
-
-      if (!depToken) return undefined
-
-      if (lazyIndices.includes(index)) {
-        // biome-ignore lint/suspicious/noExplicitAny: lazy proxy target must be object; IoC resolution returns unknown
-        return createLazyProxy(() => this.resolve(depToken) as any as object)
-      }
-
-      return this.resolve(depToken)
-    })
+      deps.push(depToken ? await this.resolve(depToken) : undefined)
+    }
 
     const instance = new target(...deps)
     if (scope === 'singleton') this.#singletons.set(key, instance)

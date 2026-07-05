@@ -128,7 +128,8 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
       async ready() {
         // EventsProvider booted earlier → the 'events' emitter is available;
         // subscribe before the post-ready app:ready emission fires.
-        this.app.container.resolve<Emitter>('events').on('app:ready', (d) => received.push(d))
+        const emitter = await this.app.container.resolve<Emitter>('events')
+        emitter.on('app:ready', (d) => received.push(d))
       }
     }
     await new Ignitor({ port: 3000, serverFactory: factory, gracefulShutdown: false })
