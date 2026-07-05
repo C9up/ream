@@ -399,3 +399,70 @@ describe('container > autoConstruct without decorator metadata (dev loader)', ()
     expect(container.make<NoDeps>(NoDeps).value).toBe(42)
   })
 })
+
+describe('container > fold-parity additions', () => {
+  let container: InstanceType<typeof Container>
+  beforeEach(() => {
+    container = new Container()
+  })
+
+  it('alias() forwards resolution to the target binding', () => {
+    class Database {}
+    container.singleton(Database, () => new Database())
+    container.alias('db', Database)
+    expect(container.resolve('db')).toBeInstanceOf(Database)
+    expect(container.has('db')).toBe(true)
+  })
+
+  it('hasAllBindings() is true only when every token resolves', () => {
+    container.singleton('a', () => 1)
+    container.singleton('b', () => 2)
+    expect(container.hasAllBindings(['a', 'b'])).toBe(true)
+    expect(container.hasAllBindings(['a', 'missing'])).toBe(false)
+  })
+
+  it('make() fills constructor slots from runtimeValues by index', () => {
+    class Controller {
+      constructor(
+        readonly req: { url: string },
+        readonly res: { code: number },
+      ) {}
+    }
+    const req = { url: '/x' }
+    const res = { code: 200 }
+    const ctrl = container.make<Controller>(Controller, [req, res])
+    expect(ctrl.req).toBe(req)
+    expect(ctrl.res).toBe(res)
+  })
+
+  it('does not auto-construct a primitive-typed param — a default value fills the slot', () => {
+    @Service()
+    class WithDefault {
+      constructor(readonly name: string = 'fallback') {}
+    }
+    // String is not injectable → the slot is left undefined → the constructor
+    // default kicks in, instead of the old confusing "auto-construct String" error.
+    expect(() => container.make(WithDefault)).not.toThrow()
+    expect(container.make<WithDefault>(WithDefault).name).toBe('fallback')
+  })
+})
+
+describe('container > resolving() hooks', () => {
+  it('runs a hook on construction (for lazy init / decoration)', () => {
+    const container = new Container()
+    const seen: string[] = []
+    class Db {
+      connected = false
+    }
+    container.singleton(Db, () => new Db())
+    container.resolving(Db, (value) => {
+      seen.push('resolved')
+      ;(value as Db).connected = true
+    })
+    const db = container.resolve<Db>(Db)
+    expect(db.connected).toBe(true)
+    // Singleton → hook runs once even across resolves.
+    container.resolve(Db)
+    expect(seen).toEqual(['resolved'])
+  })
+})

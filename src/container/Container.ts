@@ -34,6 +34,10 @@ export class Container {
    * pointing at the same object after the test ends.
    */
   #singletonBackup: Map<string, unknown> = new Map()
+  /** Alias key → the token it forwards to (AdonisJS `container.alias`). */
+  #aliases: Map<string, ServiceToken> = new Map()
+  /** token key → post-resolution callbacks (AdonisJS `container.resolving`). */
+  #resolvingHooks: Map<string, Array<(value: unknown) => void>> = new Map()
   #resolutionStack: string[] = []
   #resolutionSet: Set<string> = new Set()
 
@@ -56,6 +60,33 @@ export class Container {
     const key = this.#tokenToKey(token)
     this.#singletons.set(key, value)
     this.#bindings.set(key, { token, factory: () => value, scope: 'singleton', dependencies: [] })
+  }
+
+  /**
+   * Register an alias — resolving `alias` forwards to `target` (AdonisJS
+   * `container.alias('db', Database)`). The target may be a class, string, or
+   * symbol that itself resolves to a binding or an auto-constructable class.
+   */
+  alias(alias: ServiceToken, target: ServiceToken): void {
+    this.#aliases.set(this.#tokenToKey(alias), target)
+  }
+
+  /**
+   * Register a callback that runs each time `token` is constructed (AdonisJS
+   * `container.resolving`) — for lazy init (`db.connect()`) or decorating the
+   * resolved instance. Runs after construction of a binding/auto-constructed
+   * class; NOT for raw `bindValue` values or an already-cached singleton.
+   */
+  resolving(token: ServiceToken, callback: (value: unknown) => void): void {
+    const key = this.#tokenToKey(token)
+    const hooks = this.#resolvingHooks.get(key)
+    if (hooks) hooks.push(callback)
+    else this.#resolvingHooks.set(key, [callback])
+  }
+
+  #runResolvingHooks(key: string, value: unknown): void {
+    const hooks = this.#resolvingHooks.get(key)
+    if (hooks) for (const hook of hooks) hook(value)
   }
 
   // ─── Testing ──────────────────────────────────────────────
@@ -115,12 +146,21 @@ export class Container {
    * 4. Auto-construct if class has @inject() or @Service()
    * 5. Auto-construct any class (plain `new Class()`) as fallback
    */
-  make<T>(token: ServiceToken): T {
-    return this.resolve<T>(token)
+  make<T>(token: ServiceToken, runtimeValues?: unknown[]): T {
+    return this.resolve<T>(token, runtimeValues)
   }
 
-  /** Alias for make() — backward compatible. */
-  resolve<T>(token: ServiceToken): T {
+  /**
+   * Alias for make() — backward compatible. `runtimeValues` fill the resolved
+   * class's constructor slots by index (AdonisJS `make(Class, [req, res])`);
+   * only the `undefined` slots are container-resolved. They apply to the
+   * top-level construction only, never to nested dependencies.
+   */
+  resolve<T>(token: ServiceToken, runtimeValues?: unknown[]): T {
+    // Dereference an alias to its target before anything else.
+    const aliasTarget = this.#aliases.get(this.#tokenToKey(token))
+    if (aliasTarget !== undefined) return this.resolve<T>(aliasTarget, runtimeValues)
+
     const key = this.#tokenToKey(token)
 
     if (this.#resolutionSet.has(key)) {
@@ -134,7 +174,7 @@ export class Container {
     this.#resolutionSet.add(key)
 
     try {
-      return this.#resolveInner<T>(key, token)
+      return this.#resolveInner<T>(key, token, runtimeValues)
     } finally {
       this.#resolutionStack.pop()
       this.#resolutionSet.delete(key)
@@ -163,7 +203,7 @@ export class Container {
       // Runtime values take precedence (and fill slots beyond paramTypes)
       if (runtimeValues && index < runtimeValues.length) return runtimeValues[index]
       const type = paramTypes[index]
-      if (isClassConstructor(type)) return this.resolve(type)
+      if (isInjectableClass(type)) return this.resolve(type)
       return undefined
     })
 
@@ -183,8 +223,14 @@ export class Container {
       this.#bindings.has(key) ||
       this.#overrides.has(key) ||
       this.#singletons.has(key) ||
+      this.#aliases.has(key) ||
       (typeof token === 'function' && getServiceMetadata(token) !== undefined)
     )
+  }
+
+  /** True only when EVERY token is registered/resolvable (AdonisJS `hasAllBindings`). */
+  hasAllBindings(tokens: ServiceToken[]): boolean {
+    return tokens.every((token) => this.has(token))
   }
 
   get size(): number {
@@ -209,7 +255,7 @@ export class Container {
 
   // ─── Internal resolution ──────────────────────────────────
 
-  #resolveInner<T>(key: string, token: ServiceToken): T {
+  #resolveInner<T>(key: string, token: ServiceToken, runtimeValues?: unknown[]): T {
     // 1. Check swaps (test overrides)
     if (this.#overrides.has(key)) {
       // biome-ignore lint/suspicious/noExplicitAny: IoC container factory returns unknown; caller brands via T
@@ -229,14 +275,16 @@ export class Container {
       if (binding.scope === 'singleton') {
         this.#singletons.set(key, instance)
       }
-      // biome-ignore lint/suspicious/noExplicitAny: IoC binding factory returns unknown; caller brands via T
-      return instance as any as T
+      this.#runResolvingHooks(key, instance)
+      // Boundary cast from `unknown` — the caller brands the resolved type via T.
+      return instance as T
     }
 
     // 4. Auto-construct if it's a class
     if (typeof token === 'function') {
-      // biome-ignore lint/suspicious/noExplicitAny: IoC auto-construct returns unknown; caller brands via T
-      return this.#autoConstruct(token) as any as T
+      const instance = this.#autoConstruct(token, runtimeValues) as T
+      this.#runResolvingHooks(key, instance)
+      return instance
     }
 
     // 5. Not found
@@ -259,7 +307,7 @@ export class Container {
    * 2. Reflect.getMetadata('design:paramtypes') — decorator metadata (requires SWC/tsc)
    * 3. No params → plain `new Class()`
    */
-  #autoConstruct(target: new (...args: unknown[]) => unknown): unknown {
+  #autoConstruct(target: new (...args: unknown[]) => unknown, runtimeValues?: unknown[]): unknown {
     const metadata = getServiceMetadata(target)
     const scope = metadata?.scope ?? 'transient'
     const key = metadata?.as ?? target.name
@@ -267,6 +315,10 @@ export class Container {
     if (scope === 'singleton' && this.#singletons.has(key)) {
       return this.#singletons.get(key)
     }
+
+    // A runtime value at this index (from `make(Class, [req, res])`) wins over
+    // container resolution for that constructor slot.
+    const runtimeAt = (index: number): unknown => runtimeValues?.[index]
 
     // 1. Check static containerInjections (AdonisJS Fold-compatible, works
     // without emitDecoratorMetadata). The `in` operator narrows the optional
@@ -289,8 +341,10 @@ export class Container {
       //     metadata, so even without `design:paramtypes` we can resolve the
       //     constructor from that map alone.
       if (injectTokens.size > 0) {
-        const maxIndex = Math.max(...injectTokens.keys())
+        const maxIndex = Math.max(...injectTokens.keys(), (runtimeValues?.length ?? 0) - 1)
         const deps = Array.from({ length: maxIndex + 1 }, (_value, index) => {
+          const rt = runtimeAt(index)
+          if (rt !== undefined) return rt
           const depToken = injectTokens.get(index)
           if (!depToken) return undefined
           if (lazyIndices.includes(index)) {
@@ -302,7 +356,16 @@ export class Container {
         if (scope === 'singleton') this.#singletons.set(key, instance)
         return instance
       }
-      // (b) The constructor declares parameters but we have no way to resolve
+      // (b) No @Inject/metadata, but the caller supplied runtime values — build
+      //     from those (the `make(Controller, [req, res])` pattern with a plain
+      //     constructor). Slots beyond the runtime values stay undefined.
+      if (target.length > 0 && (runtimeValues?.length ?? 0) > 0) {
+        const deps = Array.from({ length: target.length }, (_value, index) => runtimeAt(index))
+        const instance = new target(...deps)
+        if (scope === 'singleton') this.#singletons.set(key, instance)
+        return instance
+      }
+      // (c) The constructor declares parameters but we have no way to resolve
       //     them (no metadata, no @Inject, no containerInjections). Fail LOUDLY
       //     instead of `new target()` with undefined deps.
       if (target.length > 0) {
@@ -321,12 +384,16 @@ export class Container {
     }
 
     const deps = paramTypes.map((type, index) => {
+      const rt = runtimeAt(index)
+      if (rt !== undefined) return rt
       const namedToken = injectTokens.get(index)
-      // After the typeof check, type is a constructor function and valid as ServiceToken
+      // A native primitive constructor (String/Number/Boolean/Array/Object/…)
+      // is NOT injectable — emitDecoratorMetadata uses them for primitive/any
+      // params. Treat them like `Object` (→ undefined, so a default value can
+      // kick in) instead of trying to auto-construct `String`, which produced a
+      // confusing "declares 1 constructor parameter" error.
       const depToken: ServiceToken | undefined =
-        namedToken ??
-        // biome-ignore lint/suspicious/noExplicitAny: reflect-metadata returns unknown; constructor functions are valid ServiceTokens
-        (typeof type === 'function' && type !== Object ? (type as any as ServiceToken) : undefined)
+        namedToken ?? (isInjectableClass(type) ? type : undefined)
 
       if (!depToken) return undefined
 
@@ -378,11 +445,29 @@ export class Container {
   }
 }
 
-// `design:paramtypes` returns `unknown[]` per our annotation; we narrow each
-// entry before treating it as a class token. `Object` slips through because
-// emitDecoratorMetadata uses it for `any`/`unknown` parameters.
-function isClassConstructor(value: unknown): value is new (...args: unknown[]) => unknown {
-  return typeof value === 'function' && value !== Object
+/**
+ * Native constructors emitDecoratorMetadata uses for primitive / `any` /
+ * `unknown` parameters. They are NOT injectable — resolving them would try to
+ * auto-construct `String`/`Number`/… (or silently inject `undefined`), so we
+ * skip them and let a constructor default fill the slot instead.
+ */
+const NON_INJECTABLE_CONSTRUCTORS = new Set<unknown>([
+  Object,
+  String,
+  Number,
+  Boolean,
+  Array,
+  Function,
+  Symbol,
+  Date,
+  RegExp,
+  Promise,
+  Error,
+])
+
+/** True for a real, injectable class token (excludes native primitive constructors). */
+function isInjectableClass(value: unknown): value is new (...args: unknown[]) => unknown {
+  return typeof value === 'function' && !NON_INJECTABLE_CONSTRUCTORS.has(value)
 }
 
 function isCallable(value: unknown): value is (...args: unknown[]) => unknown {
