@@ -38,6 +38,16 @@ class ExpectationError extends Error {
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
+/** Cookie the signed CSRF token is issued in (blackhole default: `XSRF-TOKEN`). */
+const CSRF_COOKIE_NAME = 'XSRF-TOKEN'
+/** Header the client echoes the token back in (Axios/Angular default). */
+const CSRF_HEADER_NAME = 'x-xsrf-token'
+
+/** Primitive accepted as a query-string value (mirrors `.qs()` in japa/api-client). */
+type QueryValue = string | number | boolean
+/** Query-string map — a value or an array of values (repeated key). */
+export type QueryParams = Record<string, QueryValue | ReadonlyArray<QueryValue>>
+
 /**
  * Internal low-level sender — matches what the TestClient exposes.
  * Accepting it as an injected callable keeps RequestBuilder framework-agnostic.
@@ -72,6 +82,7 @@ export class RequestBuilder {
   #body: Buffer = Buffer.alloc(0)
   #multipart: MultipartPart[] = []
   #cookies: Record<string, string> = {}
+  #query = new URLSearchParams()
   #authStrategy: AuthStrategy | null
   #pendingAuth: AuthSubject | null = null
   #sent: Promise<TestResponse> | null = null
@@ -156,6 +167,58 @@ export class RequestBuilder {
 
   cookie(name: string, value: string): this {
     this.#cookies[name] = value
+    return this
+  }
+
+  /**
+   * Append query-string params — mirrors japa/api-client's `.qs()`. Values are
+   * URL-encoded; arrays repeat the key (`?tag=a&tag=b`). Merges with any query
+   * string already on the path and with earlier `.qs()` calls.
+   */
+  qs(params: QueryParams): this {
+    for (const [key, value] of Object.entries(params)) {
+      if (Array.isArray(value)) {
+        for (const item of value) this.#query.append(key, String(item))
+      } else {
+        this.#query.append(key, String(value))
+      }
+    }
+    return this
+  }
+
+  /** Pass a bearer token as the `Authorization` header — japa `.bearerToken()`. */
+  bearerToken(token: string): this {
+    this.#headers.authorization = `Bearer ${token}`
+    return this
+  }
+
+  /** Pass HTTP Basic credentials as the `Authorization` header — japa `.basicAuth()`. */
+  basicAuth(user: string, password: string): this {
+    const encoded = Buffer.from(`${user}:${password}`, 'utf8').toString('base64')
+    this.#headers.authorization = `Basic ${encoded}`
+    return this
+  }
+
+  /**
+   * Satisfy blackhole's signed double-submit CSRF check: echo the `XSRF-TOKEN`
+   * cookie back in the `X-XSRF-TOKEN` header (the pair the server compares).
+   *
+   * With a `token` argument, sets both the cookie and the header — useful when
+   * you already hold a signed token. Without one, reads the token from a cookie
+   * set earlier on this request (typically extracted from a prior safe GET's
+   * `Set-Cookie`); throws if none is present so the mistake is caught at the
+   * call site instead of surfacing as a confusing 403.
+   */
+  withCsrf(token?: string): this {
+    if (token !== undefined) this.#cookies[CSRF_COOKIE_NAME] = token
+    const value = this.#cookies[CSRF_COOKIE_NAME]
+    if (value === undefined) {
+      throw new Error(
+        `RequestBuilder: withCsrf() found no '${CSRF_COOKIE_NAME}' cookie. Set it first via ` +
+          `.cookie('${CSRF_COOKIE_NAME}', token) (extracted from a prior safe GET) or pass the token: withCsrf(token).`,
+      )
+    }
+    this.#headers[CSRF_HEADER_NAME] = value
     return this
   }
 
@@ -250,6 +313,152 @@ export class RequestBuilder {
     return this
   }
 
+  // ─── japa/api-client status shortcuts ──────────────────────
+  // Thin aliases over expectStatus() — one per common HTTP status, matching
+  // @japa/api-client's assertOk()/assertCreated()/… surface.
+
+  /** Assert a 200 OK response. */
+  assertOk(): Promise<this> {
+    return this.expectStatus(200)
+  }
+
+  /** Assert a 201 Created response. */
+  assertCreated(): Promise<this> {
+    return this.expectStatus(201)
+  }
+
+  /** Assert a 204 No Content response. */
+  assertNoContent(): Promise<this> {
+    return this.expectStatus(204)
+  }
+
+  /** Assert a 400 Bad Request response. */
+  assertBadRequest(): Promise<this> {
+    return this.expectStatus(400)
+  }
+
+  /** Assert a 401 Unauthorized response. */
+  assertUnauthorized(): Promise<this> {
+    return this.expectStatus(401)
+  }
+
+  /** Assert a 403 Forbidden response. */
+  assertForbidden(): Promise<this> {
+    return this.expectStatus(403)
+  }
+
+  /** Assert a 404 Not Found response. */
+  assertNotFound(): Promise<this> {
+    return this.expectStatus(404)
+  }
+
+  /**
+   * Assert a redirect (3xx) whose `Location` resolves to `path`. Compares the
+   * pathname (query/host ignored), mirroring japa's `assertRedirectsTo`.
+   */
+  async assertRedirectsTo(path: string): Promise<this> {
+    const res = await this.send()
+    if (res.status < 300 || res.status >= 400) {
+      throw new ExpectationError(
+        `Expected a redirect (3xx) to "${path}", got status ${res.status}.`,
+      )
+    }
+    const location = res.headers.location
+    if (location === undefined) {
+      throw new ExpectationError(
+        `Expected a redirect to "${path}", but the response has no Location header.`,
+      )
+    }
+    // Location may be absolute or path-only; compare pathnames either way.
+    const actual = location.startsWith('http')
+      ? new URL(location).pathname
+      : (location.split('?')[0] ?? location)
+    if (actual !== path) {
+      throw new ExpectationError(`Expected redirect to "${path}", got "${actual}".`)
+    }
+    return this
+  }
+
+  /** Assert the JSON body contains `subset` (deep partial) — japa `assertBodyContains`. */
+  async assertBodyContains(subset: unknown): Promise<this> {
+    const actual = await this.#bodyJson()
+    if (!partialMatch(actual, subset)) {
+      throw new ExpectationError(
+        `Expected body to contain subset.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
+      )
+    }
+    return this
+  }
+
+  /** Assert the JSON body does NOT contain `subset` — japa `assertBodyNotContains`. */
+  async assertBodyNotContains(subset: unknown): Promise<this> {
+    const actual = await this.#bodyJson()
+    if (partialMatch(actual, subset)) {
+      throw new ExpectationError(
+        `Expected body NOT to contain subset, but it did.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
+      )
+    }
+    return this
+  }
+
+  /**
+   * Assert a response header is present, and equals `value` when given. Unlike
+   * {@link expectHeader}, the value is optional (presence-only check).
+   */
+  async assertHeader(name: string, value?: string): Promise<this> {
+    if (value !== undefined) return this.expectHeader(name, value)
+    const res = await this.send()
+    if (res.headers[name.toLowerCase()] === undefined) {
+      throw new ExpectationError(
+        `Expected header ${name}, not present in: ${Object.keys(res.headers).join(', ')}`,
+      )
+    }
+    return this
+  }
+
+  /** Assert a response header is absent — japa `assertHeaderMissing`. */
+  async assertHeaderMissing(name: string): Promise<this> {
+    const res = await this.send()
+    if (res.headers[name.toLowerCase()] !== undefined) {
+      throw new ExpectationError(`Expected header ${name} to be absent, but it was present.`)
+    }
+    return this
+  }
+
+  /** Assert the response set a cookie, optionally with a given value — japa `assertCookie`. */
+  assertCookie(name: string, value?: string): Promise<this> {
+    return this.expectCookie(name, value)
+  }
+
+  /** Assert the response did NOT set a cookie — japa `assertCookieMissing`. */
+  async assertCookieMissing(name: string): Promise<this> {
+    const res = await this.send()
+    const setCookie = res.headers['set-cookie']
+    if (setCookie) {
+      const present = setCookie
+        .split(/,(?=\s*\w+=)/)
+        .some((c) => c.trimStart().startsWith(`${name}=`))
+      if (present) {
+        throw new ExpectationError(
+          `Expected cookie ${name} to be absent, but it was set: ${setCookie}`,
+        )
+      }
+    }
+    return this
+  }
+
+  /** Send (once) and parse the body as JSON, wrapping parse errors as ExpectationError. */
+  async #bodyJson(): Promise<unknown> {
+    const res = await this.send()
+    try {
+      return res.json()
+    } catch (err) {
+      throw new ExpectationError(
+        `Expected JSON body, got non-JSON. Body: ${capBody(res.body)} (parse error: ${err instanceof Error ? err.message : String(err)})`,
+      )
+    }
+  }
+
   async #execute(): Promise<TestResponse> {
     // Resolve auth before sending.
     if (this.#pendingAuth !== null) {
@@ -287,7 +496,15 @@ export class RequestBuilder {
       this.#headers.cookie = cookieEntries.map(([k, v]) => `${k}=${v}`).join('; ')
     }
 
-    return this.#sender(this.#method, this.#path, {
+    // Merge `.qs()` params into the path, preserving any query string it
+    // already carries.
+    let path = this.#path
+    const qs = this.#query.toString()
+    if (qs) {
+      path += (path.includes('?') ? '&' : '?') + qs
+    }
+
+    return this.#sender(this.#method, path, {
       headers: this.#headers,
       body: this.#body,
     })

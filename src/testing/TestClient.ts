@@ -51,18 +51,27 @@ export interface TestRequestBuilder extends PromiseLike<TestResponse> {
   send(): Promise<TestResponse>
 }
 
+/**
+ * Named-route manifest — `name → path pattern`, e.g. `{ 'users.show':
+ * '/users/:id' }`. Feed `router.namedManifest()` here so `visit()` can resolve
+ * named routes without the full Router.
+ */
+export type RouteManifest = Record<string, string>
+
 export class TestClient {
   #port = 0
   #headers: Dict = {}
   #bootFn: (port: number) => Promise<{ port: number; close: () => Promise<void> | void }>
   #auth: AuthStrategy | null
+  #routes: RouteManifest | null
 
   constructor(
     bootFn: (port: number) => Promise<{ port: number; close: () => Promise<void> | void }>,
-    options: { auth?: AuthStrategy } = {},
+    options: { auth?: AuthStrategy; routes?: RouteManifest } = {},
   ) {
     this.#bootFn = bootFn
     this.#auth = options.auth ?? null
+    this.#routes = options.routes ?? null
   }
 
   #server: { port: number; close: () => Promise<void> | void } | null = null
@@ -140,6 +149,21 @@ export class TestClient {
     return new RequestBuilder(sender, method, path, this.#auth)
   }
 
+  /**
+   * GET a named route — japa/api-client's `.visit()`. Resolves `name` against
+   * the `routes` manifest (`router.namedManifest()`), fills `:param`
+   * placeholders, and returns the rich chainable builder. Throws a clear error
+   * when no manifest was configured or the name is unknown.
+   */
+  visit(name: string, params?: Record<string, string>): RequestBuilder {
+    if (!this.#routes) {
+      throw new Error(
+        'TestClient: visit() needs a named-route manifest. Pass `routes: router.namedManifest()` in the client options.',
+      )
+    }
+    return this.fluent('GET', resolveNamedRoute(this.#routes, name, params))
+  }
+
   /** Build a request with the low-level fluent API. */
   request(method: string, path: string): TestRequestBuilder {
     const headers: Dict = { ...this.#headers }
@@ -198,8 +222,40 @@ export {
   type HttpMethod,
   type HttpSender,
   partialMatch,
+  type QueryParams,
   RequestBuilder,
 } from './RequestBuilder.js'
+
+/**
+ * Resolve a named route against a manifest — the client-side twin of
+ * `Router.urlFor`. Fills `:param` placeholders (word-boundary safe), strips
+ * unprovided `:optional?` segments, and throws on an unknown name or a missing
+ * required param.
+ */
+export function resolveNamedRoute(
+  manifest: RouteManifest,
+  name: string,
+  params?: Record<string, string>,
+): string {
+  const pattern = manifest[name]
+  if (pattern === undefined) {
+    const available = Object.keys(manifest).join(', ') || '(none)'
+    throw new Error(`Route '${name}' not found. Available: ${available}`)
+  }
+  let url = pattern
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      url = url.replace(new RegExp(`:${escaped}\\??(?![\\w])`, 'g'), encodeURIComponent(value))
+    }
+  }
+  url = url.replace(/\/:[A-Za-z_][\w]*\?/g, '')
+  const missing = url.match(/:[A-Za-z_][\w]*/g)
+  if (missing && missing.length > 0) {
+    throw new Error(`Cannot generate URL for route '${name}': missing params ${missing.join(', ')}`)
+  }
+  return url
+}
 
 /** Send an HTTP request using raw TCP (no external dependencies). */
 async function sendRequest(

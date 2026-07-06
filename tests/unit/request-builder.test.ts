@@ -237,6 +237,175 @@ describe('helix > RequestBuilder', () => {
   })
 })
 
+describe('RequestBuilder > qs / auth shortcuts (japa parity)', () => {
+  it('qs() appends url-encoded params, repeating keys for arrays', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/search')
+      .qs({ q: 'a b', page: 2, tag: ['x', 'y'] })
+      .send()
+
+    const path = sender.mock.calls[0][1]
+    expect(path).toBe('/search?q=a+b&page=2&tag=x&tag=y')
+  })
+
+  it('qs() merges with a query string already on the path', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/search?existing=1').qs({ page: 2 }).send()
+
+    expect(sender.mock.calls[0][1]).toBe('/search?existing=1&page=2')
+  })
+
+  it('bearerToken() sets the Authorization header', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/me').bearerToken('tok-123').send()
+
+    expect(sender.mock.calls[0][2].headers.authorization).toBe('Bearer tok-123')
+  })
+
+  it('basicAuth() base64-encodes the credentials', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/me').basicAuth('alice', 's3cret').send()
+
+    const expected = `Basic ${Buffer.from('alice:s3cret', 'utf8').toString('base64')}`
+    expect(sender.mock.calls[0][2].headers.authorization).toBe(expected)
+  })
+})
+
+describe('RequestBuilder > withCsrf (signed double-submit)', () => {
+  it('mirrors the XSRF-TOKEN cookie into the X-XSRF-TOKEN header', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/protected')
+      .cookie('XSRF-TOKEN', 'signed.token')
+      .withCsrf()
+      .send()
+
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['x-xsrf-token']).toBe('signed.token')
+    expect(init.headers.cookie).toBe('XSRF-TOKEN=signed.token')
+  })
+
+  it('withCsrf(token) sets both the cookie and the header', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/protected').withCsrf('abc.def').send()
+
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['x-xsrf-token']).toBe('abc.def')
+    expect(init.headers.cookie).toBe('XSRF-TOKEN=abc.def')
+  })
+
+  it('throws when no XSRF-TOKEN cookie is present and no token is passed', () => {
+    const sender = vi.fn(async () => makeResponse())
+    expect(() => new RequestBuilder(sender, 'POST', '/protected').withCsrf()).toThrow(
+      /found no 'XSRF-TOKEN' cookie/,
+    )
+  })
+})
+
+describe('RequestBuilder > status shortcuts', () => {
+  const cases: Array<[number, (b: RequestBuilder) => Promise<RequestBuilder>]> = [
+    [200, (b) => b.assertOk()],
+    [201, (b) => b.assertCreated()],
+    [204, (b) => b.assertNoContent()],
+    [400, (b) => b.assertBadRequest()],
+    [401, (b) => b.assertUnauthorized()],
+    [403, (b) => b.assertForbidden()],
+    [404, (b) => b.assertNotFound()],
+  ]
+
+  for (const [code, run] of cases) {
+    it(`passes on ${code} and throws on a mismatch`, async () => {
+      const ok = vi.fn(async () => makeResponse({ status: code }))
+      await expect(run(new RequestBuilder(ok, 'GET', '/p'))).resolves.toBeDefined()
+
+      const bad = vi.fn(async () => makeResponse({ status: code === 200 ? 500 : 200 }))
+      await expect(run(new RequestBuilder(bad, 'GET', '/p'))).rejects.toThrow(/Expected status/)
+    })
+  }
+})
+
+describe('RequestBuilder > assertBodyContains / assertBodyNotContains', () => {
+  it('assertBodyContains passes on a present subset, throws when absent', async () => {
+    const sender = vi.fn(async () => makeResponse({ body: '{"id":1,"name":"Ada","role":"admin"}' }))
+    await new RequestBuilder(sender, 'GET', '/me').assertBodyContains({ name: 'Ada' })
+
+    const sender2 = vi.fn(async () => makeResponse({ body: '{"id":1}' }))
+    await expect(
+      new RequestBuilder(sender2, 'GET', '/me').assertBodyContains({ name: 'Ada' }),
+    ).rejects.toThrow(/Expected body to contain subset/)
+  })
+
+  it('assertBodyNotContains passes when absent, throws when the subset is present', async () => {
+    const sender = vi.fn(async () => makeResponse({ body: '{"id":1}' }))
+    await new RequestBuilder(sender, 'GET', '/me').assertBodyNotContains({ password: 'x' })
+
+    const sender2 = vi.fn(async () => makeResponse({ body: '{"password":"x"}' }))
+    await expect(
+      new RequestBuilder(sender2, 'GET', '/me').assertBodyNotContains({ password: 'x' }),
+    ).rejects.toThrow(/Expected body NOT to contain subset/)
+  })
+})
+
+describe('RequestBuilder > assertRedirectsTo', () => {
+  it('passes on a 3xx with a matching Location pathname', async () => {
+    const sender = vi.fn(async () =>
+      makeResponse({ status: 302, headers: { location: '/dashboard?welcome=1' } }),
+    )
+    await new RequestBuilder(sender, 'POST', '/login').assertRedirectsTo('/dashboard')
+  })
+
+  it('throws when the response is not a redirect', async () => {
+    const sender = vi.fn(async () => makeResponse({ status: 200 }))
+    await expect(new RequestBuilder(sender, 'GET', '/p').assertRedirectsTo('/x')).rejects.toThrow(
+      /Expected a redirect \(3xx\)/,
+    )
+  })
+
+  it('throws when the Location pathname differs', async () => {
+    const sender = vi.fn(async () => makeResponse({ status: 301, headers: { location: '/other' } }))
+    await expect(
+      new RequestBuilder(sender, 'GET', '/p').assertRedirectsTo('/dashboard'),
+    ).rejects.toThrow(/Expected redirect to "\/dashboard", got "\/other"/)
+  })
+})
+
+describe('RequestBuilder > header / cookie presence asserts', () => {
+  it('assertHeader checks presence (no value) and value equality', async () => {
+    const sender = vi.fn(async () => makeResponse({ headers: { 'x-trace': 'req-1' } }))
+    await new RequestBuilder(sender, 'GET', '/p')
+      .assertHeader('x-trace')
+      .then((b) => b.assertHeader('x-trace', 'req-1'))
+
+    const sender2 = vi.fn(async () => makeResponse({ headers: {} }))
+    await expect(new RequestBuilder(sender2, 'GET', '/p').assertHeader('x-trace')).rejects.toThrow(
+      /Expected header x-trace/,
+    )
+  })
+
+  it('assertHeaderMissing passes when absent, throws when present', async () => {
+    const sender = vi.fn(async () => makeResponse({ headers: {} }))
+    await new RequestBuilder(sender, 'GET', '/p').assertHeaderMissing('x-deprecated')
+
+    const sender2 = vi.fn(async () => makeResponse({ headers: { 'x-deprecated': '1' } }))
+    await expect(
+      new RequestBuilder(sender2, 'GET', '/p').assertHeaderMissing('x-deprecated'),
+    ).rejects.toThrow(/Expected header x-deprecated to be absent/)
+  })
+
+  it('assertCookie / assertCookieMissing read Set-Cookie', async () => {
+    const sender = vi.fn(async () =>
+      makeResponse({ headers: { 'set-cookie': 'session=abc; HttpOnly' } }),
+    )
+    await new RequestBuilder(sender, 'GET', '/p')
+      .assertCookie('session')
+      .then((b) => b.assertCookieMissing('theme'))
+
+    const sender2 = vi.fn(async () => makeResponse({ headers: { 'set-cookie': 'theme=dark' } }))
+    await expect(
+      new RequestBuilder(sender2, 'GET', '/p').assertCookieMissing('theme'),
+    ).rejects.toThrow(/Expected cookie theme to be absent/)
+  })
+})
+
 describe('helix > partialMatch', () => {
   it('matches primitives by strict equality', () => {
     expect(partialMatch(1, 1)).toBe(true)
