@@ -81,6 +81,16 @@ export class Request extends Macroable {
    */
   csrfToken?: string
 
+  /**
+   * `true` only when CSRF was enabled, the request method guarded, the route not
+   * excepted, AND the token validated for this request — set by the
+   * `@c9up/blackhole` middleware. Unlike {@link csrfToken} (seeded on every
+   * passing request, even when verification was skipped), this is the trustworthy
+   * "the request was CSRF-verified" signal a consumer reads to fail-close on
+   * state-changing routes. `undefined` when the middleware never ran.
+   */
+  csrfProtected?: boolean
+
   constructor(raw: RawRequest, params: Dict = {}) {
     super()
     this.#raw = raw
