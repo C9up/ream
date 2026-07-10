@@ -100,4 +100,12 @@ describe('ream > RedirectBuilder > back', () => {
     new RedirectBuilder(response).back()
     expect(spy.headers.location).toBe('/')
   })
+
+  it('rejects a backslash Referer (open-redirect: "\\" normalises to "/") and uses the fallback', () => {
+    const { response, spy } = makeResponseFake()
+    // "/\\evil.com" starts with a single "/" but browsers normalise "\" → "/",
+    // turning it into the protocol-relative "//evil.com". Must not be trusted.
+    new RedirectBuilder(response, { requestReferer: '/\\evil.com' }).back('/safe')
+    expect(spy.headers.location).toBe('/safe')
+  })
 })

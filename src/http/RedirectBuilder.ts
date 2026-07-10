@@ -14,7 +14,10 @@ import type { Response } from './Response.js'
 export type RouteUrlResolver = (name: string, params?: Record<string, string>) => string
 
 function isSameOriginOrRelative(referer: string, requestUrl?: string): boolean {
-  if (referer.startsWith('/') && !referer.startsWith('//')) return true
+  // A relative path is trusted only when it starts with a single "/" and has no
+  // backslash: browsers normalise "\" to "/", so "/\evil.com" would become the
+  // protocol-relative "//evil.com" that a lone `!startsWith("//")` check misses.
+  if (referer.startsWith('/') && !referer.startsWith('//') && !referer.includes('\\')) return true
   if (!requestUrl) return false
   try {
     const ref = new URL(referer)
