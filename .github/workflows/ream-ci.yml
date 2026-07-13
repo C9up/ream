@@ -131,7 +131,7 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-and-test, rust-tests, ts-tests]
+    needs: [quality, build-and-test, rust-tests, ts-tests]
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
