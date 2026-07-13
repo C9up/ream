@@ -127,6 +127,7 @@
     "tsconfig.app.json"
   ],
   "scripts": {
+    "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc -p tsconfig.build.json",
     "build:rust": "cargo build --release -p ream-http-napi -p ream-scheduler-napi -p ream-events-napi",
     "build:napi": "pnpm build:rust && node scripts/copy-napi.mjs",
