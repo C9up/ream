@@ -17,8 +17,21 @@ export interface ServiceMetadata {
 // biome-ignore lint/suspicious/noExplicitAny: IoC container tokens must accept any constructor signature
 export type ServiceToken = (new (...args: any[]) => unknown) | string | symbol
 
-/** Factory function for creating service instances. */
-export type ServiceFactory = () => unknown
+/**
+ * Resolver handed to a binding factory so it can resolve its own dependencies
+ * (AdonisJS parity: `container.singleton(token, async (resolver) =>
+ * await resolver.make(Dep))`). The Container itself satisfies this contract.
+ */
+export interface ContainerResolver {
+  make<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T>
+}
+
+/**
+ * Factory function for creating service instances. Receives a {@link
+ * ContainerResolver} (AdonisJS parity) — the async container means a factory
+ * that needs another binding must `await resolver.make(Dep)`.
+ */
+export type ServiceFactory = (resolver: ContainerResolver) => unknown
 
 /** Binding entry in the container. */
 export interface Binding {

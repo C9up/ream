@@ -261,7 +261,7 @@ export class Container {
   async #resolveInner<T>(key: string, token: ServiceToken, runtimeValues?: unknown[]): Promise<T> {
     // 1. Check swaps (test overrides) — a swap factory may be async.
     if (this.#overrides.has(key)) {
-      const swapped = await this.#overrides.get(key)?.()
+      const swapped = await this.#overrides.get(key)?.(this)
       return swapped as T
     }
 
@@ -273,7 +273,7 @@ export class Container {
     // 3. Check explicit bindings — the factory may be async.
     const binding = this.#bindings.get(key)
     if (binding) {
-      const instance = binding.factory ? await binding.factory() : undefined
+      const instance = binding.factory ? await binding.factory(this) : undefined
       if (binding.scope === 'singleton') {
         this.#singletons.set(key, instance)
       }
