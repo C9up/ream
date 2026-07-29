@@ -99,13 +99,13 @@ describeIfNetwork('TestClient > withCsrf + visit (real HyperServer)', () => {
       .withCsrf()
       .json({ name: 'x' })
       .assertOk()
-      .then((b) => b.assertBodyContains({ ok: true }))
+      .assertBodyContains({ ok: true })
   })
 
   it('visit() resolves a named route and GETs it', async () => {
     await client
       .visit('users.show', { id: '7' })
       .assertOk()
-      .then((b) => b.assertBodyContains({ path: '/users/7' }))
+      .assertBodyContains({ path: '/users/7' })
   })
 })

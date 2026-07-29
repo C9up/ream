@@ -183,7 +183,7 @@ describe('helix > RequestBuilder', () => {
     const sender = vi.fn(async () => makeResponse({ headers: { 'x-trace': 'req-123' } }))
     await new RequestBuilder(sender, 'GET', '/p')
       .expectHeader('x-trace', 'req-123')
-      .then((b) => b.expectHeader('X-Trace', /^req-/))
+      .expectHeader('X-Trace', /^req-/)
   })
 
   it('expectHeader() throws when header missing or mismatched', async () => {
@@ -204,8 +204,8 @@ describe('helix > RequestBuilder', () => {
     )
     await new RequestBuilder(sender, 'GET', '/p')
       .expectCookie('session', 'abc')
-      .then((b) => b.expectCookie('theme', /^(dark|light)$/))
-      .then((b) => b.expectCookie('session'))
+      .expectCookie('theme', /^(dark|light)$/)
+      .expectCookie('session')
   })
 
   it('expectJson() performs partial match', async () => {
@@ -221,7 +221,7 @@ describe('helix > RequestBuilder', () => {
     )
   })
 
-  it('assertion chain survives across awaits', async () => {
+  it('assertions chain synchronously and run on a single await', async () => {
     const sender = vi.fn(async () =>
       makeResponse({
         status: 201,
@@ -229,11 +229,14 @@ describe('helix > RequestBuilder', () => {
         body: '{"id":7}',
       }),
     )
+    // Japa model: assertions register + return `this`; the single await sends
+    // once and runs them all in order.
     await new RequestBuilder(sender, 'POST', '/u')
       .json({ name: 'Lin' })
       .expectStatus(201)
-      .then((b) => b.expectHeader('x-trace', 'xyz'))
-      .then((b) => b.expectJson({ id: 7 }))
+      .expectHeader('x-trace', 'xyz')
+      .expectJson({ id: 7 })
+    expect(sender).toHaveBeenCalledOnce()
   })
 })
 
@@ -373,7 +376,7 @@ describe('RequestBuilder > header / cookie presence asserts', () => {
     const sender = vi.fn(async () => makeResponse({ headers: { 'x-trace': 'req-1' } }))
     await new RequestBuilder(sender, 'GET', '/p')
       .assertHeader('x-trace')
-      .then((b) => b.assertHeader('x-trace', 'req-1'))
+      .assertHeader('x-trace', 'req-1')
 
     const sender2 = vi.fn(async () => makeResponse({ headers: {} }))
     await expect(new RequestBuilder(sender2, 'GET', '/p').assertHeader('x-trace')).rejects.toThrow(
@@ -397,7 +400,7 @@ describe('RequestBuilder > header / cookie presence asserts', () => {
     )
     await new RequestBuilder(sender, 'GET', '/p')
       .assertCookie('session')
-      .then((b) => b.assertCookieMissing('theme'))
+      .assertCookieMissing('theme')
 
     const sender2 = vi.fn(async () => makeResponse({ headers: { 'set-cookie': 'theme=dark' } }))
     await expect(

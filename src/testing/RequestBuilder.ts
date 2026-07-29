@@ -1,17 +1,19 @@
 import type { TestResponse } from './TestClient.js'
 
 /**
- * Fluent HTTP request builder with assertion methods.
+ * Fluent HTTP request builder with assertion methods (japa/api-client model).
  *
  *   await client
- *     .fluent('GET', '/api/users/42')
+ *     .get('/api/users/42')
  *     .withAuth(user)
- *     .expectStatus(200)
- *     .expectJson({ id: 42 })
+ *     .assertOk()
+ *     .assertBody({ id: 42 })
  *
- * The builder chains: setters return `this`, assertion methods send the
- * request on first call (memoised) and return a `Promise<this>` so further
- * assertions can be awaited or chained via `await`.
+ * The builder chains SYNCHRONOUSLY: setters and assertion methods both return
+ * `this`. Assertions are LAZY — each registers a check; the request is sent
+ * once and every check runs, in order, when the builder is awaited (it is
+ * thenable, so `await builder` resolves to the response). A plain `await
+ * client.get('/x')` (no assertion) just sends and returns the response.
  */
 
 export interface AuthSubject {
@@ -101,6 +103,11 @@ export class RequestBuilder {
   #authStrategy: AuthStrategy | null
   #pendingAuth: AuthSubject | null = null
   #sent: Promise<TestResponse> | null = null
+  // Lazy assertions (japa model): each `assert*`/`expect*` registers a check and
+  // returns `this` synchronously; the checks run in order when the builder is
+  // awaited (`then`) — after the single send. So `await client.get('/x')
+  // .assertOk().assertBody(y)` sends once and runs both.
+  #checks: Array<(res: TestResponse) => void> = []
 
   constructor(
     sender: HttpSender,
@@ -283,293 +290,262 @@ export class RequestBuilder {
     return this.#sent
   }
 
-  async expectStatus(code: number): Promise<this> {
+  /**
+   * Thenable — `await client.get('/x')` sends the request and resolves to the
+   * response (Japa/api-client parity), so the fluent assertion surface and a
+   * plain `await` share ONE builder. (Assertion methods return `Promise<this>`;
+   * awaiting one resolves via this `then` to the response — a single assertion
+   * per `await`, which is the documented pattern.)
+   */
+  then<R1 = TestResponse, R2 = never>(
+    onFulfilled?: ((value: TestResponse) => R1 | PromiseLike<R1>) | null,
+    onRejected?: ((reason: unknown) => R2 | PromiseLike<R2>) | null,
+  ): Promise<R1 | R2> {
+    return this.#settle().then(onFulfilled, onRejected)
+  }
+
+  /** Send once, then run every registered assertion (throws on first failure). */
+  async #settle(): Promise<TestResponse> {
     const res = await this.send()
-    if (res.status !== code) {
-      throw new ExpectationError(
-        `Expected status ${code}, got ${res.status}. Body: ${capBody(res.body)}`,
-      )
-    }
+    for (const check of this.#checks) check(res)
+    return res
+  }
+
+  /** Register a lazy assertion; returns `this` for synchronous chaining. */
+  #assert(check: (res: TestResponse) => void): this {
+    this.#checks.push(check)
     return this
   }
 
-  async expectHeader(name: string, value: string | RegExp): Promise<this> {
-    const res = await this.send()
-    const actual = res.headers[name.toLowerCase()]
-    if (actual === undefined) {
-      throw new ExpectationError(
-        `Expected header ${name}, not present in response headers: ${Object.keys(res.headers).join(', ')}`,
-      )
-    }
-    if (value instanceof RegExp) {
-      if (!value.test(actual)) {
-        throw new ExpectationError(`Expected header ${name} to match ${value}, got "${actual}"`)
+  expectStatus(code: number): this {
+    return this.#assert((res) => {
+      if (res.status !== code) {
+        throw new ExpectationError(
+          `Expected status ${code}, got ${res.status}. Body: ${capBody(res.body)}`,
+        )
       }
-    } else if (actual !== value) {
-      throw new ExpectationError(`Expected header ${name} = "${value}", got "${actual}"`)
-    }
-    return this
+    })
   }
 
-  async expectCookie(name: string, value?: string | RegExp): Promise<this> {
-    const res = await this.send()
-    const setCookie = res.headers['set-cookie']
-    if (!setCookie) {
-      throw new ExpectationError(`Expected cookie ${name}, but no Set-Cookie header was returned`)
-    }
-    const cookies = setCookie.split(/,(?=\s*\w+=)/)
-    const match = cookies.find((c) => c.trimStart().startsWith(`${name}=`))
-    if (!match) {
-      throw new ExpectationError(`Expected cookie ${name}, not found in: ${setCookie}`)
-    }
-    if (value === undefined) return this
-    const rawVal = match.split(';')[0]?.split('=')[1] ?? ''
-    if (value instanceof RegExp) {
-      if (!value.test(rawVal)) {
-        throw new ExpectationError(`Expected cookie ${name} to match ${value}, got "${rawVal}"`)
+  expectHeader(name: string, value: string | RegExp): this {
+    return this.#assert((res) => {
+      const actual = res.headers[name.toLowerCase()]
+      if (actual === undefined) {
+        throw new ExpectationError(
+          `Expected header ${name}, not present in response headers: ${Object.keys(res.headers).join(', ')}`,
+        )
       }
-    } else if (rawVal !== value) {
-      throw new ExpectationError(`Expected cookie ${name} = "${value}", got "${rawVal}"`)
-    }
-    return this
+      if (value instanceof RegExp) {
+        if (!value.test(actual)) {
+          throw new ExpectationError(`Expected header ${name} to match ${value}, got "${actual}"`)
+        }
+      } else if (actual !== value) {
+        throw new ExpectationError(`Expected header ${name} = "${value}", got "${actual}"`)
+      }
+    })
   }
 
-  async expectJson(expected: unknown): Promise<this> {
-    const res = await this.send()
-    let actual: unknown
-    try {
-      actual = res.json()
-    } catch (err) {
-      throw new ExpectationError(
-        `Expected JSON body, got non-JSON. Body: ${capBody(res.body)} (parse error: ${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
-    if (!partialMatch(actual, expected)) {
-      throw new ExpectationError(
-        `JSON partial match failed.\nExpected (partial): ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
-    }
-    return this
+  expectCookie(name: string, value?: string | RegExp): this {
+    return this.#assert((res) => {
+      const setCookie = res.headers['set-cookie']
+      if (!setCookie) {
+        throw new ExpectationError(`Expected cookie ${name}, but no Set-Cookie header was returned`)
+      }
+      const match = setCookie
+        .split(/,(?=\s*\w+=)/)
+        .find((c) => c.trimStart().startsWith(`${name}=`))
+      if (!match) {
+        throw new ExpectationError(`Expected cookie ${name}, not found in: ${setCookie}`)
+      }
+      if (value === undefined) return
+      const rawVal = match.split(';')[0]?.split('=')[1] ?? ''
+      if (value instanceof RegExp) {
+        if (!value.test(rawVal)) {
+          throw new ExpectationError(`Expected cookie ${name} to match ${value}, got "${rawVal}"`)
+        }
+      } else if (rawVal !== value) {
+        throw new ExpectationError(`Expected cookie ${name} = "${value}", got "${rawVal}"`)
+      }
+    })
   }
 
-  // ─── japa/api-client status shortcuts ──────────────────────
-  // Thin aliases over expectStatus() — one per common HTTP status, matching
-  // @japa/api-client's assertOk()/assertCreated()/… surface.
+  expectJson(expected: unknown): this {
+    return this.#assert((res) => {
+      const actual = jsonOf(res)
+      if (!partialMatch(actual, expected)) {
+        throw new ExpectationError(
+          `JSON partial match failed.\nExpected (partial): ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(actual))}`,
+        )
+      }
+    })
+  }
 
-  /** Assert a 200 OK response. */
-  assertOk(): Promise<this> {
+  // japa/api-client status shortcuts — register via expectStatus, return `this`.
+  assertOk(): this {
     return this.expectStatus(200)
   }
-
-  /** Assert a 201 Created response. */
-  assertCreated(): Promise<this> {
+  assertCreated(): this {
     return this.expectStatus(201)
   }
-
-  /** Assert a 204 No Content response. */
-  assertNoContent(): Promise<this> {
+  assertNoContent(): this {
     return this.expectStatus(204)
   }
-
-  /** Assert a 400 Bad Request response. */
-  assertBadRequest(): Promise<this> {
+  assertBadRequest(): this {
     return this.expectStatus(400)
   }
-
-  /** Assert a 401 Unauthorized response. */
-  assertUnauthorized(): Promise<this> {
+  assertUnauthorized(): this {
     return this.expectStatus(401)
   }
-
-  /** Assert a 403 Forbidden response. */
-  assertForbidden(): Promise<this> {
+  assertForbidden(): this {
     return this.expectStatus(403)
   }
-
-  /** Assert a 404 Not Found response. */
-  assertNotFound(): Promise<this> {
+  assertNotFound(): this {
     return this.expectStatus(404)
   }
-
-  /** Assert an exact status code — japa/api-client's `.assertStatus(code)`. */
-  assertStatus(code: number): Promise<this> {
+  assertStatus(code: number): this {
     return this.expectStatus(code)
   }
-
-  /** Assert a 202 Accepted response. */
-  assertAccepted(): Promise<this> {
+  assertAccepted(): this {
     return this.expectStatus(202)
   }
-
-  /** Assert a 405 Method Not Allowed response. */
-  assertMethodNotAllowed(): Promise<this> {
+  assertMethodNotAllowed(): this {
     return this.expectStatus(405)
   }
-
-  /** Assert a 409 Conflict response. */
-  assertConflict(): Promise<this> {
+  assertConflict(): this {
     return this.expectStatus(409)
   }
-
-  /** Assert a 422 Unprocessable Entity response (validation failure). */
-  assertUnprocessableEntity(): Promise<this> {
+  assertUnprocessableEntity(): this {
     return this.expectStatus(422)
   }
-
-  /** Assert a 429 Too Many Requests response. */
-  assertTooManyRequests(): Promise<this> {
+  assertTooManyRequests(): this {
     return this.expectStatus(429)
   }
-
-  /** Assert a 500 Internal Server Error response. */
-  assertInternalServerError(): Promise<this> {
+  assertInternalServerError(): this {
     return this.expectStatus(500)
   }
 
-  /**
-   * Assert a redirect (3xx) whose `Location` resolves to `path`. Compares the
-   * pathname (query/host ignored), mirroring japa's `assertRedirectsTo`.
-   */
-  async assertRedirectsTo(path: string): Promise<this> {
-    const res = await this.send()
-    if (res.status < 300 || res.status >= 400) {
-      throw new ExpectationError(
-        `Expected a redirect (3xx) to "${path}", got status ${res.status}.`,
-      )
-    }
-    const location = res.headers.location
-    if (location === undefined) {
-      throw new ExpectationError(
-        `Expected a redirect to "${path}", but the response has no Location header.`,
-      )
-    }
-    // Location may be absolute or path-only; compare pathnames either way.
-    const actual = location.startsWith('http')
-      ? new URL(location).pathname
-      : (location.split('?')[0] ?? location)
-    if (actual !== path) {
-      throw new ExpectationError(`Expected redirect to "${path}", got "${actual}".`)
-    }
-    return this
+  /** Assert a redirect (3xx) whose `Location` pathname resolves to `path`. */
+  assertRedirectsTo(path: string): this {
+    return this.#assert((res) => {
+      if (res.status < 300 || res.status >= 400) {
+        throw new ExpectationError(
+          `Expected a redirect (3xx) to "${path}", got status ${res.status}.`,
+        )
+      }
+      const location = res.headers.location
+      if (location === undefined) {
+        throw new ExpectationError(
+          `Expected a redirect to "${path}", but the response has no Location header.`,
+        )
+      }
+      const actual = location.startsWith('http')
+        ? new URL(location).pathname
+        : (location.split('?')[0] ?? location)
+      if (actual !== path) {
+        throw new ExpectationError(`Expected redirect to "${path}", got "${actual}".`)
+      }
+    })
   }
 
   /** Assert the JSON body contains `subset` (deep partial) — japa `assertBodyContains`. */
-  async assertBodyContains(subset: unknown): Promise<this> {
-    const actual = await this.#bodyJson()
-    if (!partialMatch(actual, subset)) {
-      throw new ExpectationError(
-        `Expected body to contain subset.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
-    }
-    return this
+  assertBodyContains(subset: unknown): this {
+    return this.#assert((res) => {
+      const actual = jsonOf(res)
+      if (!partialMatch(actual, subset)) {
+        throw new ExpectationError(
+          `Expected body to contain subset.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
+        )
+      }
+    })
   }
 
   /** Assert the JSON body does NOT contain `subset` — japa `assertBodyNotContains`. */
-  async assertBodyNotContains(subset: unknown): Promise<this> {
-    const actual = await this.#bodyJson()
-    if (partialMatch(actual, subset)) {
-      throw new ExpectationError(
-        `Expected body NOT to contain subset, but it did.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
-    }
-    return this
+  assertBodyNotContains(subset: unknown): this {
+    return this.#assert((res) => {
+      const actual = jsonOf(res)
+      if (partialMatch(actual, subset)) {
+        throw new ExpectationError(
+          `Expected body NOT to contain subset, but it did.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
+        )
+      }
+    })
   }
 
-  /**
-   * Assert the JSON body EXACTLY equals `expected` (deep equality) — japa
-   * `assertBody`. Use {@link assertBodyContains} for a partial/subset match.
-   */
-  async assertBody(expected: unknown): Promise<this> {
-    const actual = await this.#bodyJson()
-    if (!deepEqual(actual, expected)) {
-      throw new ExpectationError(
-        `Expected body to equal.\nExpected: ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
-    }
-    return this
+  /** Assert the JSON body EXACTLY equals `expected` (deep equality) — japa `assertBody`. */
+  assertBody(expected: unknown): this {
+    return this.#assert((res) => {
+      const actual = jsonOf(res)
+      if (!deepEqual(actual, expected)) {
+        throw new ExpectationError(
+          `Expected body to equal.\nExpected: ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(actual))}`,
+        )
+      }
+    })
   }
 
   /** Assert the raw response text includes `substring` — japa `assertTextIncludes`. */
-  async assertTextIncludes(substring: string): Promise<this> {
-    const res = await this.send()
-    if (!res.body.includes(substring)) {
-      throw new ExpectationError(
-        `Expected response text to include ${JSON.stringify(substring)}.\nActual: ${capBody(res.body)}`,
+  assertTextIncludes(substring: string): this {
+    return this.#assert((res) => {
+      if (!res.body.includes(substring)) {
+        throw new ExpectationError(
+          `Expected response text to include ${JSON.stringify(substring)}.\nActual: ${capBody(res.body)}`,
+        )
+      }
+    })
+  }
+
+  /** Print status/headers/body to stderr for debugging — japa `.dump()`. */
+  dump(): this {
+    return this.#assert((res) => {
+      process.stderr.write(
+        `[helix:dump] ${this.#method} ${this.#path} → ${res.status}\n` +
+          `headers: ${JSON.stringify(res.headers, null, 2)}\n` +
+          `body: ${capBody(res.body, 2048)}\n`,
       )
-    }
-    return this
+    })
   }
 
-  /**
-   * Print the response status, headers, and body to stderr for debugging —
-   * japa/api-client's `.dump()`. Returns `this` so it chains inside assertions.
-   */
-  async dump(): Promise<this> {
-    const res = await this.send()
-    process.stderr.write(
-      `[helix:dump] ${this.#method} ${this.#path} → ${res.status}\n` +
-        `headers: ${JSON.stringify(res.headers, null, 2)}\n` +
-        `body: ${capBody(res.body, 2048)}\n`,
-    )
-    return this
-  }
-
-  /**
-   * Assert a response header is present, and equals `value` when given. Unlike
-   * {@link expectHeader}, the value is optional (presence-only check).
-   */
-  async assertHeader(name: string, value?: string): Promise<this> {
+  /** Assert a header is present, and equals `value` when given (presence-only otherwise). */
+  assertHeader(name: string, value?: string): this {
     if (value !== undefined) return this.expectHeader(name, value)
-    const res = await this.send()
-    if (res.headers[name.toLowerCase()] === undefined) {
-      throw new ExpectationError(
-        `Expected header ${name}, not present in: ${Object.keys(res.headers).join(', ')}`,
-      )
-    }
-    return this
+    return this.#assert((res) => {
+      if (res.headers[name.toLowerCase()] === undefined) {
+        throw new ExpectationError(
+          `Expected header ${name}, not present in: ${Object.keys(res.headers).join(', ')}`,
+        )
+      }
+    })
   }
 
   /** Assert a response header is absent — japa `assertHeaderMissing`. */
-  async assertHeaderMissing(name: string): Promise<this> {
-    const res = await this.send()
-    if (res.headers[name.toLowerCase()] !== undefined) {
-      throw new ExpectationError(`Expected header ${name} to be absent, but it was present.`)
-    }
-    return this
+  assertHeaderMissing(name: string): this {
+    return this.#assert((res) => {
+      if (res.headers[name.toLowerCase()] !== undefined) {
+        throw new ExpectationError(`Expected header ${name} to be absent, but it was present.`)
+      }
+    })
   }
 
   /** Assert the response set a cookie, optionally with a given value — japa `assertCookie`. */
-  assertCookie(name: string, value?: string): Promise<this> {
+  assertCookie(name: string, value?: string): this {
     return this.expectCookie(name, value)
   }
 
   /** Assert the response did NOT set a cookie — japa `assertCookieMissing`. */
-  async assertCookieMissing(name: string): Promise<this> {
-    const res = await this.send()
-    const setCookie = res.headers['set-cookie']
-    if (setCookie) {
-      const present = setCookie
-        .split(/,(?=\s*\w+=)/)
-        .some((c) => c.trimStart().startsWith(`${name}=`))
-      if (present) {
-        throw new ExpectationError(
-          `Expected cookie ${name} to be absent, but it was set: ${setCookie}`,
-        )
+  assertCookieMissing(name: string): this {
+    return this.#assert((res) => {
+      const setCookie = res.headers['set-cookie']
+      if (setCookie) {
+        const present = setCookie
+          .split(/,(?=\s*\w+=)/)
+          .some((c) => c.trimStart().startsWith(`${name}=`))
+        if (present) {
+          throw new ExpectationError(
+            `Expected cookie ${name} to be absent, but it was set: ${setCookie}`,
+          )
+        }
       }
-    }
-    return this
-  }
-
-  /** Send (once) and parse the body as JSON, wrapping parse errors as ExpectationError. */
-  async #bodyJson(): Promise<unknown> {
-    const res = await this.send()
-    try {
-      return res.json()
-    } catch (err) {
-      throw new ExpectationError(
-        `Expected JSON body, got non-JSON. Body: ${capBody(res.body)} (parse error: ${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
+    })
   }
 
   async #execute(): Promise<TestResponse> {
@@ -621,6 +597,16 @@ export class RequestBuilder {
       headers: this.#headers,
       body: this.#body,
     })
+  }
+}
+
+function jsonOf(res: TestResponse): unknown {
+  try {
+    return res.json()
+  } catch (err) {
+    throw new ExpectationError(
+      `Expected JSON body, got non-JSON. Body: ${capBody(res.body)} (parse error: ${err instanceof Error ? err.message : String(err)})`,
+    )
   }
 }
 

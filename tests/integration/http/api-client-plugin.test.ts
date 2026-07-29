@@ -51,15 +51,15 @@ describe('helix plugin > apiClient()', () => {
 
     if (!registered) throw new Error('apiClient did not register a `client`')
 
-    // The verb shortcut returns the thenable low-level builder (awaiting sends).
-    const ok = await registered.get('/health')
-    expect(ok.status).toBe(200)
-    expect(ok.json()).toEqual({ ok: true })
+    // Unified builder: the verb shortcut carries the japa assertion surface AND
+    // is awaitable — `await client.get('/x').assertOk()` (the documented form).
+    await registered.get('/health').assertOk().assertBody({ ok: true })
+    await registered.get('/missing').assertNotFound()
 
-    // The rich builder (fluent) carries the japa assertion surface.
-    await registered.fluent('GET', '/health').assertOk()
-    await registered.fluent('GET', '/health').assertBody({ ok: true })
-    await registered.fluent('GET', '/missing').assertNotFound()
+    // A plain await (no assertion) still resolves to the raw response.
+    const res = await registered.get('/health')
+    expect(res.status).toBe(200)
+    expect(res.json()).toEqual({ ok: true })
 
     await registered.close()
   })

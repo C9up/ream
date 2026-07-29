@@ -107,29 +107,34 @@ export class TestClient {
     return this
   }
 
-  /** GET request. Returns a chainable, awaitable builder (await sends it). */
-  get(path: string): TestRequestBuilder {
-    return this.request('GET', path)
+  // Verb shortcuts return the RICH builder — the full japa/api-client surface
+  // (assertOk/assertStatus/assertBody/… + auth/csrf) AND awaitable (`await
+  // client.get('/x')` sends and resolves to the response). One unified builder,
+  // no split between `get()` and `fluent()`.
+
+  /** GET request — rich, awaitable builder. */
+  get(path: string): RequestBuilder {
+    return this.fluent('GET', path)
   }
 
-  /** POST request. */
-  post(path: string): TestRequestBuilder {
-    return this.request('POST', path)
+  /** POST request — rich, awaitable builder. */
+  post(path: string): RequestBuilder {
+    return this.fluent('POST', path)
   }
 
-  /** PUT request. */
-  put(path: string): TestRequestBuilder {
-    return this.request('PUT', path)
+  /** PUT request — rich, awaitable builder. */
+  put(path: string): RequestBuilder {
+    return this.fluent('PUT', path)
   }
 
-  /** PATCH request. */
-  patch(path: string): TestRequestBuilder {
-    return this.request('PATCH', path)
+  /** PATCH request — rich, awaitable builder. */
+  patch(path: string): RequestBuilder {
+    return this.fluent('PATCH', path)
   }
 
-  /** DELETE request. Returns a chainable, awaitable builder (await sends it). */
-  delete(path: string): TestRequestBuilder {
-    return this.request('DELETE', path)
+  /** DELETE request — rich, awaitable builder. */
+  delete(path: string): RequestBuilder {
+    return this.fluent('DELETE', path)
   }
 
   /**
