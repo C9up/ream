@@ -132,6 +132,14 @@ export class TestClient {
   }
 
   /**
+   * HEAD request — japa/api-client's `.head()`. Returns the rich builder so you
+   * can assert status/headers (a HEAD response carries headers, no body).
+   */
+  head(path: string): RequestBuilder {
+    return this.fluent('HEAD', path)
+  }
+
+  /**
    * Build a request with the rich fluent surface: chained assertions
    * (`expectStatus` / `expectJson` / `expectHeader` / `expectCookie`), auth
    * injection (`withAuth` / `asUser`, needs the `auth` client option), and

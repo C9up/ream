@@ -427,3 +427,87 @@ describe('helix > partialMatch', () => {
     expect(partialMatch([{ id: 1 }], [{ id: 2 }])).toBe(false)
   })
 })
+
+describe('helix > RequestBuilder > japa/api-client additions', () => {
+  it('type()/accept() expand shorthands into headers', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    const builder = new RequestBuilder(sender, 'POST', '/u')
+    await builder.type('json').accept('html').send()
+
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['content-type']).toBe('application/json')
+    expect(init.headers.accept).toBe('text/html')
+  })
+
+  it('type() passes a full MIME type through unchanged', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/u').type('application/vnd.api+json').send()
+    expect(sender.mock.calls[0][2].headers['content-type']).toBe('application/vnd.api+json')
+  })
+
+  it('withCsrfToken() aliases withCsrf (sets cookie + echo header)', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/u').withCsrfToken('signed-token').send()
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['x-xsrf-token']).toBe('signed-token')
+    expect(init.headers.cookie).toContain('XSRF-TOKEN=signed-token')
+  })
+
+  it('assertStatus() passes on match and throws otherwise', async () => {
+    const okSender = vi.fn(async () => makeResponse({ status: 418 }))
+    await new RequestBuilder(okSender, 'GET', '/p').assertStatus(418)
+
+    const badSender = vi.fn(async () => makeResponse({ status: 200 }))
+    await expect(new RequestBuilder(badSender, 'GET', '/p').assertStatus(418)).rejects.toThrow()
+  })
+
+  it('named status shortcuts map to their codes', async () => {
+    await new RequestBuilder(
+      vi.fn(async () => makeResponse({ status: 422 })),
+      'POST',
+      '/p',
+    ).assertUnprocessableEntity()
+    await new RequestBuilder(
+      vi.fn(async () => makeResponse({ status: 409 })),
+      'POST',
+      '/p',
+    ).assertConflict()
+    await new RequestBuilder(
+      vi.fn(async () => makeResponse({ status: 202 })),
+      'POST',
+      '/p',
+    ).assertAccepted()
+  })
+
+  it('assertBody() requires EXACT deep equality', async () => {
+    const body = JSON.stringify({ id: 1, name: 'Ada' })
+    await new RequestBuilder(
+      vi.fn(async () => makeResponse({ body })),
+      'GET',
+      '/p',
+    ).assertBody({
+      id: 1,
+      name: 'Ada',
+    })
+    // A subset is NOT enough for assertBody (unlike assertBodyContains).
+    await expect(
+      new RequestBuilder(
+        vi.fn(async () => makeResponse({ body })),
+        'GET',
+        '/p',
+      ).assertBody({ id: 1 }),
+    ).rejects.toThrow()
+  })
+
+  it('assertTextIncludes() checks the raw response text', async () => {
+    const sender = vi.fn(async () => makeResponse({ body: '<h1>Welcome Ada</h1>' }))
+    await new RequestBuilder(sender, 'GET', '/p').assertTextIncludes('Welcome Ada')
+    await expect(
+      new RequestBuilder(
+        vi.fn(async () => makeResponse({ body: 'nope' })),
+        'GET',
+        '/p',
+      ).assertTextIncludes('Welcome'),
+    ).rejects.toThrow()
+  })
+})

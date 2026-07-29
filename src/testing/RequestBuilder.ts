@@ -36,12 +36,27 @@ class ExpectationError extends Error {
   }
 }
 
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 /** Cookie the signed CSRF token is issued in (blackhole default: `XSRF-TOKEN`). */
 const CSRF_COOKIE_NAME = 'XSRF-TOKEN'
 /** Header the client echoes the token back in (Axios/Angular default). */
 const CSRF_HEADER_NAME = 'x-xsrf-token'
+
+/** Content-type / accept shorthands — mirrors japa/api-client's `.type()`/`.accept()`. */
+const TYPE_SHORTHANDS: Record<string, string> = {
+  json: 'application/json',
+  form: 'application/x-www-form-urlencoded',
+  urlencoded: 'application/x-www-form-urlencoded',
+  text: 'text/plain',
+  html: 'text/html',
+  xml: 'application/xml',
+}
+
+/** Expand a shorthand (`'json'`) to a full MIME type, or pass a full type through. */
+function resolveMime(type: string): string {
+  return TYPE_SHORTHANDS[type] ?? type
+}
 
 /** Primitive accepted as a query-string value (mirrors `.qs()` in japa/api-client). */
 type QueryValue = string | number | boolean
@@ -200,6 +215,25 @@ export class RequestBuilder {
   }
 
   /**
+   * Set the request `Content-Type` from a shorthand (`'json'`, `'form'`, …) or a
+   * full MIME type — mirrors japa/api-client's `.type()`. Prefer `json()`/`form()`
+   * when you also set the body; `.type()` is for overriding the type only.
+   */
+  type(mime: string): this {
+    this.#headers['content-type'] = resolveMime(mime)
+    return this
+  }
+
+  /**
+   * Set the `Accept` header from a shorthand (`'json'`, `'html'`, …) or a full
+   * MIME type — mirrors japa/api-client's `.accept()`.
+   */
+  accept(mime: string): this {
+    this.#headers.accept = resolveMime(mime)
+    return this
+  }
+
+  /**
    * Satisfy blackhole's signed double-submit CSRF check: echo the `XSRF-TOKEN`
    * cookie back in the `X-XSRF-TOKEN` header (the pair the server compares).
    *
@@ -220,6 +254,11 @@ export class RequestBuilder {
     }
     this.#headers[CSRF_HEADER_NAME] = value
     return this
+  }
+
+  /** japa/api-client's spelling of {@link withCsrf}. */
+  withCsrfToken(token?: string): this {
+    return this.withCsrf(token)
   }
 
   /**
@@ -352,6 +391,41 @@ export class RequestBuilder {
     return this.expectStatus(404)
   }
 
+  /** Assert an exact status code — japa/api-client's `.assertStatus(code)`. */
+  assertStatus(code: number): Promise<this> {
+    return this.expectStatus(code)
+  }
+
+  /** Assert a 202 Accepted response. */
+  assertAccepted(): Promise<this> {
+    return this.expectStatus(202)
+  }
+
+  /** Assert a 405 Method Not Allowed response. */
+  assertMethodNotAllowed(): Promise<this> {
+    return this.expectStatus(405)
+  }
+
+  /** Assert a 409 Conflict response. */
+  assertConflict(): Promise<this> {
+    return this.expectStatus(409)
+  }
+
+  /** Assert a 422 Unprocessable Entity response (validation failure). */
+  assertUnprocessableEntity(): Promise<this> {
+    return this.expectStatus(422)
+  }
+
+  /** Assert a 429 Too Many Requests response. */
+  assertTooManyRequests(): Promise<this> {
+    return this.expectStatus(429)
+  }
+
+  /** Assert a 500 Internal Server Error response. */
+  assertInternalServerError(): Promise<this> {
+    return this.expectStatus(500)
+  }
+
   /**
    * Assert a redirect (3xx) whose `Location` resolves to `path`. Compares the
    * pathname (query/host ignored), mirroring japa's `assertRedirectsTo`.
@@ -398,6 +472,45 @@ export class RequestBuilder {
         `Expected body NOT to contain subset, but it did.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
       )
     }
+    return this
+  }
+
+  /**
+   * Assert the JSON body EXACTLY equals `expected` (deep equality) — japa
+   * `assertBody`. Use {@link assertBodyContains} for a partial/subset match.
+   */
+  async assertBody(expected: unknown): Promise<this> {
+    const actual = await this.#bodyJson()
+    if (!deepEqual(actual, expected)) {
+      throw new ExpectationError(
+        `Expected body to equal.\nExpected: ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(actual))}`,
+      )
+    }
+    return this
+  }
+
+  /** Assert the raw response text includes `substring` — japa `assertTextIncludes`. */
+  async assertTextIncludes(substring: string): Promise<this> {
+    const res = await this.send()
+    if (!res.body.includes(substring)) {
+      throw new ExpectationError(
+        `Expected response text to include ${JSON.stringify(substring)}.\nActual: ${capBody(res.body)}`,
+      )
+    }
+    return this
+  }
+
+  /**
+   * Print the response status, headers, and body to stderr for debugging —
+   * japa/api-client's `.dump()`. Returns `this` so it chains inside assertions.
+   */
+  async dump(): Promise<this> {
+    const res = await this.send()
+    process.stderr.write(
+      `[helix:dump] ${this.#method} ${this.#path} → ${res.status}\n` +
+        `headers: ${JSON.stringify(res.headers, null, 2)}\n` +
+        `body: ${capBody(res.body, 2048)}\n`,
+    )
     return this
   }
 
@@ -561,6 +674,23 @@ function isRecord(x: unknown): x is Record<string, unknown> {
  * `actual`. For arrays, every element in `expected` must match SOMEWHERE in
  * `actual` (order-independent). Primitives compared by strict equality.
  */
+/** Exact structural equality (order-insensitive object keys) for `assertBody`. */
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return false
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((item, i) => deepEqual(item, b[i]))
+  }
+  if (!isRecord(a) || !isRecord(b)) return false
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  return aKeys.every((key) => key in b && deepEqual(a[key], b[key]))
+}
+
 export function partialMatch(actual: unknown, expected: unknown): boolean {
   if (expected === null || expected === undefined) {
     return actual === expected
