@@ -254,8 +254,9 @@ export interface ApiClientConfig {
  *     await client.get('/health').assertOk()
  *   })
  *
- * The server is booted once at `configure()` time and shared across the run;
- * the worker process closing releases the socket.
+ * The server is booted once at `configure()` time, shared across the run, and
+ * closed via `api.cleanup` after the run finishes (proper lifecycle — no
+ * reliance on process exit).
  */
 export function apiClient(config: ApiClientConfig): Plugin {
   return async (api) => {
@@ -265,6 +266,7 @@ export function apiClient(config: ApiClientConfig): Plugin {
     })
     await client.boot()
     api.context.macro('client', client)
+    api.cleanup(() => client.close())
   }
 }
 

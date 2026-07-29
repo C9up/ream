@@ -38,12 +38,16 @@ describe('helix plugin > apiClient()', () => {
 
     // Mock PluginApi — capture what the plugin registers under `client`.
     let registered: TestClient | undefined
+    const teardowns: Array<() => void | Promise<void>> = []
     const api = {
       context: {
         macro(name: string, value: unknown) {
           if (name === 'client' && value instanceof TestClient) registered = value
         },
         getter() {},
+      },
+      cleanup(fn: () => void | Promise<void>) {
+        teardowns.push(fn)
       },
     }
 
@@ -61,6 +65,8 @@ describe('helix plugin > apiClient()', () => {
     expect(res.status).toBe(200)
     expect(res.json()).toEqual({ ok: true })
 
-    await registered.close()
+    // The plugin registered a teardown to close the server (no manual close).
+    expect(teardowns).toHaveLength(1)
+    for (const fn of teardowns) await fn()
   })
 })
