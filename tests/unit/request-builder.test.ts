@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import {
   type AuthStrategy,
@@ -90,10 +91,11 @@ describe('helix > RequestBuilder', () => {
     expect(init.body.includes(png)).toBe(true)
   })
 
-  it('file() defaults filename to the field name and content-type to octet-stream', async () => {
+  it('file() from a Buffer defaults filename to the field name + octet-stream', async () => {
     const sender = vi.fn(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
-    await builder.file('doc', 'hello').send()
+    // A string arg is a PATH now (Japa parity); pass a Buffer for inline content.
+    await builder.file('doc', Buffer.from('hello')).send()
 
     const text = sender.mock.calls[0][2].body.toString('utf8')
     expect(text).toContain('name="doc"; filename="doc"')
@@ -166,7 +168,7 @@ describe('helix > RequestBuilder', () => {
     const sender = vi.fn(async () => makeResponse({ status: 201, body: '{"ok":true}' }))
     const builder = new RequestBuilder(sender, 'GET', '/p')
     const res = await builder.send()
-    expect(res.status).toBe(201)
+    expect(res.status()).toBe(201)
   })
 
   it('expectStatus() passes when codes match, fails otherwise', async () => {
@@ -349,25 +351,26 @@ describe('RequestBuilder > assertBodyContains / assertBodyNotContains', () => {
 })
 
 describe('RequestBuilder > assertRedirectsTo', () => {
-  it('passes on a 3xx with a matching Location pathname', async () => {
+  it('passes on a 3xx with a matching Location pathname (no follow)', async () => {
     const sender = vi.fn(async () =>
       makeResponse({ status: 302, headers: { location: '/dashboard?welcome=1' } }),
     )
-    await new RequestBuilder(sender, 'POST', '/login').assertRedirectsTo('/dashboard')
+    // .redirects(0) so the 3xx is inspected directly (default now follows 5).
+    await new RequestBuilder(sender, 'POST', '/login').redirects(0).assertRedirectsTo('/dashboard')
   })
 
   it('throws when the response is not a redirect', async () => {
     const sender = vi.fn(async () => makeResponse({ status: 200 }))
-    await expect(new RequestBuilder(sender, 'GET', '/p').assertRedirectsTo('/x')).rejects.toThrow(
-      /Expected a redirect \(3xx\)/,
-    )
+    await expect(
+      new RequestBuilder(sender, 'GET', '/p').redirects(0).assertRedirectsTo('/x'),
+    ).rejects.toThrow(/Expected redirect to "\/x"/)
   })
 
   it('throws when the Location pathname differs', async () => {
     const sender = vi.fn(async () => makeResponse({ status: 301, headers: { location: '/other' } }))
     await expect(
-      new RequestBuilder(sender, 'GET', '/p').assertRedirectsTo('/dashboard'),
-    ).rejects.toThrow(/Expected redirect to "\/dashboard", got "\/other"/)
+      new RequestBuilder(sender, 'GET', '/p').redirects(0).assertRedirectsTo('/dashboard'),
+    ).rejects.toThrow(/Expected redirect to "\/dashboard"/)
   })
 })
 
@@ -512,5 +515,159 @@ describe('helix > RequestBuilder > japa/api-client additions', () => {
         '/p',
       ).assertTextIncludes('Welcome'),
     ).rejects.toThrow()
+  })
+})
+
+describe('helix > RequestBuilder Japa parity (F7-F9)', () => {
+  it('fields() adds several multipart parts', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/u').fields({ a: '1', b: '2' }).send()
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['content-type']).toMatch(/^multipart\/form-data; boundary=/)
+    const text = init.body.toString('utf8')
+    expect(text).toContain('name="a"')
+    expect(text).toContain('name="b"')
+  })
+
+  it('unsafeQs() appends params from an object (Japa signature)', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/s').unsafeQs({ a: 1, b: 'two' }).send()
+    expect(sender.mock.calls[0][1]).toBe('/s?a=1&b=two')
+  })
+
+  it('timeout() threads the per-request timeout to the sender', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/s').timeout(1234).send()
+    expect(sender.mock.calls[0][2].timeoutMs).toBe(1234)
+  })
+
+  it('redirects() follows a 3xx Location and records the chain', async () => {
+    const sender = vi.fn(async (m: string, p: string) => {
+      if (p === '/start') return makeResponse({ status: 302, headers: { location: '/dest' } })
+      return makeResponse({ status: 200, body: 'arrived' })
+    })
+    const res = await new RequestBuilder(sender, 'GET', '/start').redirects(3)
+    expect(sender).toHaveBeenCalledTimes(2)
+    expect(res.status()).toBe(200)
+    expect(res.redirects()).toEqual(['/dest'])
+    expect(res.text()).toBe('arrived')
+  })
+
+  it('follows up to 5 redirects by DEFAULT (Japa parity)', async () => {
+    let hops = 0
+    const sender = vi.fn(async () => {
+      hops += 1
+      // Keep redirecting; the builder must stop after the default budget (5).
+      return makeResponse({ status: 302, headers: { location: `/hop${hops}` } })
+    })
+    const res = await new RequestBuilder(sender, 'GET', '/start')
+    // 1 initial + 5 follows = 6 sends; final response is still the last 302.
+    expect(sender).toHaveBeenCalledTimes(6)
+    expect(res.redirects()).toHaveLength(5)
+    expect(res.status()).toBe(302)
+  })
+
+  it('redirects(0) disables following', async () => {
+    const sender = vi.fn(async () => makeResponse({ status: 302, headers: { location: '/dest' } }))
+    const res = await new RequestBuilder(sender, 'GET', '/start').redirects(0)
+    expect(sender).toHaveBeenCalledOnce()
+    expect(res.status()).toBe(302)
+  })
+
+  it('generated status-shortcut asserts run lazily against the response', async () => {
+    await new RequestBuilder(
+      vi.fn(async () => makeResponse({ status: 410 })),
+      'GET',
+      '/p',
+    ).assertGone()
+    await expect(
+      new RequestBuilder(
+        vi.fn(async () => makeResponse({ status: 200 })),
+        'GET',
+        '/p',
+      ).assertTooManyRequests(),
+    ).rejects.toThrow(/Expected status 429/)
+  })
+
+  it('TLS knobs are inert no-ops that keep the chain (loopback has no TLS)', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    const builder = new RequestBuilder(sender, 'GET', '/p')
+    expect(builder.trustLocalhost().disableTLSCerts().ca('x').cert('y').privateKey('z')).toBe(
+      builder,
+    )
+    await builder.send()
+    expect(sender).toHaveBeenCalledOnce()
+  })
+
+  it('macro/getter graft onto every request builder', async () => {
+    RequestBuilder.macro('tag', 'v1')
+    RequestBuilder.getter('lazyTag', () => 'computed')
+    const builder = new RequestBuilder(
+      vi.fn(async () => makeResponse()),
+      'GET',
+      '/p',
+    ) as RequestBuilder & { tag: string; lazyTag: string }
+    expect(builder.tag).toBe('v1')
+    expect(builder.lazyTag).toBe('computed')
+  })
+
+  it('awaiting the builder resolves to a rich ApiResponse', async () => {
+    const res = await new RequestBuilder(
+      vi.fn(async () =>
+        makeResponse({ status: 200, headers: { 'x-a': '1' }, body: '{"ok":true}' }),
+      ),
+      'GET',
+      '/p',
+    )
+    expect(res.header('x-a')).toBe('1')
+    expect(res.statusType()).toBe(2)
+    res.assertOk().assertBodyContains({ ok: true })
+  })
+})
+
+describe('helix > RequestBuilder audit #3 parity', () => {
+  it('header() accepts a string[] (joined)', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'GET', '/p').header('accept', ['a/b', 'c/d']).send()
+    expect(sender.mock.calls[0][2].headers.accept).toBe('a/b, c/d')
+  })
+
+  it('form() repeats array values (a=1&a=2)', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/p').form({ tag: ['x', 'y'], n: 1 }).send()
+    expect(sender.mock.calls[0][2].body.toString('utf8')).toBe('tag=x&tag=y&n=1')
+  })
+
+  it('field() accepts an array + a number (multiple parts)', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/p').field('t', ['a', 'b']).field('n', 42).send()
+    const body = sender.mock.calls[0][2].body.toString('utf8')
+    expect(body.match(/name="t"/g)).toHaveLength(2)
+    expect(body).toContain('\r\n\r\n42\r\n')
+  })
+
+  it('file() drains a Readable stream to the multipart part', async () => {
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/up')
+      .file('doc', Readable.from(['strea', 'med']), {
+        filename: 'd.txt',
+        contentType: 'text/plain',
+      })
+      .send()
+    const body = sender.mock.calls[0][2].body.toString('utf8')
+    expect(body).toContain('filename="d.txt"')
+    expect(body).toContain('\r\n\r\nstreamed\r\n')
+  })
+
+  it('addSerializer + serialize() sets a custom body', async () => {
+    RequestBuilder.addSerializer('csv', (data) => ({
+      body: Buffer.from((data as string[]).join(','), 'utf8'),
+      contentType: 'text/csv',
+    }))
+    const sender = vi.fn(async () => makeResponse())
+    await new RequestBuilder(sender, 'POST', '/p').serialize('csv', ['a', 'b', 'c']).send()
+    const init = sender.mock.calls[0][2]
+    expect(init.headers['content-type']).toBe('text/csv')
+    expect(init.body.toString('utf8')).toBe('a,b,c')
   })
 })

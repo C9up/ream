@@ -60,10 +60,19 @@ describe('helix plugin > apiClient()', () => {
     await registered.get('/health').assertOk().assertBody({ ok: true })
     await registered.get('/missing').assertNotFound()
 
-    // A plain await (no assertion) still resolves to the raw response.
+    // A plain await (no assertion) still resolves to the rich response.
     const res = await registered.get('/health')
-    expect(res.status).toBe(200)
+    expect(res.status()).toBe(200)
     expect(res.json()).toEqual({ ok: true })
+    // Japa accessor surface on the awaited response.
+    expect(res.header('content-type')).toContain('application/json')
+    expect(res.assertOk().text()).toBe('{"ok":true}')
+
+    // F8: `client.request(url, method)` — Japa arg order (URL first, method
+    // second, defaulting to GET). Returns the same rich awaitable builder.
+    await registered.request('/health').assertOk()
+    await registered.request('/health', 'GET').assertBody({ ok: true })
+    await registered.request('/missing', 'GET').assertNotFound()
 
     // The plugin registered a teardown to close the server (no manual close).
     expect(teardowns).toHaveLength(1)

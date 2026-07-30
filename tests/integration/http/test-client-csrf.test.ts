@@ -89,7 +89,7 @@ describeIfNetwork('TestClient > withCsrf + visit (real HyperServer)', () => {
   it('a protected POST WITH withCsrf() succeeds (200)', async () => {
     // Obtain the signed token the server issues on a safe GET.
     const issued = await client.fluent('GET', '/csrf-token').send()
-    const setCookie = issued.headers['set-cookie'] ?? ''
+    const setCookie = issued.headers()['set-cookie'] ?? ''
     const token = setCookie.split(';')[0]?.split('=')[1] ?? ''
     expect(token).toBe(ISSUED_TOKEN)
 

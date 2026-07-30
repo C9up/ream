@@ -24,40 +24,24 @@ import {
   type HttpMethod,
   type HttpSender,
   RequestBuilder,
+  type TestResponse,
 } from './RequestBuilder.js'
 
-export interface TestResponse {
-  status: number
-  headers: Dict
-  body: string
-  json<T = unknown>(): T
-}
-
-/**
- * Fluent request builder. Thenable like AdonisJS/japa's api-client: `await
- * client.get('/x')` sends the request, and chaining works on every verb —
- * `await client.get('/x').header('authorization', token)`. The explicit
- * `.send()` is kept for callers that prefer it.
- */
-export interface TestRequestBuilder extends PromiseLike<TestResponse> {
-  /** Set a request header. */
-  header(name: string, value: string): TestRequestBuilder
-  /** Set the request body as JSON. */
-  json(data: unknown): TestRequestBuilder
-  /** Set a raw string body with optional content type. */
-  body(content: string, contentType?: string): TestRequestBuilder
-  /** Set a cookie. */
-  cookie(name: string, value: string): TestRequestBuilder
-  /** Send the request and return the response. */
-  send(): Promise<TestResponse>
-}
+// The raw response shape + the rich response live in ApiResponse.ts and are
+// re-exported here so `@c9up/ream/testing` consumers keep their import path.
+export { ApiResponse, type TestResponse } from './RequestBuilder.js'
 
 /**
  * Named-route manifest — `name → path pattern`, e.g. `{ 'users.show':
  * '/users/:id' }`. Feed `router.namedManifest()` here so `visit()` can resolve
  * named routes without the full Router.
+ *
+ * A value may be a bare path string OR `{ path, method }` — when the method is
+ * present, `visit(name)` uses it (Japa route-registry parity, e.g.
+ * `visit('users.store').json(...).assertCreated()` issues a POST).
  */
-export type RouteManifest = Record<string, string>
+export type RouteEntry = string | { path: string; method?: HttpMethod }
+export type RouteManifest = Record<string, RouteEntry>
 
 export class TestClient {
   #port = 0
@@ -145,6 +129,11 @@ export class TestClient {
     return this.fluent('HEAD', path)
   }
 
+  /** OPTIONS request — japa/api-client's `.options()`. */
+  options(path: string): RequestBuilder {
+    return this.fluent('OPTIONS', path)
+  }
+
   /**
    * Build a request with the rich fluent surface: chained assertions
    * (`expectStatus` / `expectJson` / `expectHeader` / `expectCookie`), auth
@@ -159,6 +148,7 @@ export class TestClient {
         p,
         { ...this.#headers, ...init.headers },
         init.body.toString('utf8'),
+        init.timeoutMs,
       )
     return new RequestBuilder(sender, method, path, this.#auth)
   }
@@ -175,48 +165,20 @@ export class TestClient {
         'TestClient: visit() needs a named-route manifest. Pass `routes: router.namedManifest()` in the client options.',
       )
     }
-    return this.fluent('GET', resolveNamedRoute(this.#routes, name, params))
+    const entry = this.#routes[name]
+    // Method comes from the registry when the entry carries one (Japa parity),
+    // otherwise GET.
+    const method: HttpMethod = typeof entry === 'object' && entry.method ? entry.method : 'GET'
+    return this.fluent(method, resolveNamedRoute(this.#routes, name, params))
   }
 
-  /** Build a request with the low-level fluent API. */
-  request(method: string, path: string): TestRequestBuilder {
-    const headers: Dict = { ...this.#headers }
-    let bodyContent = ''
-    const cookies: string[] = []
-
-    const builder: TestRequestBuilder = {
-      header(name: string, value: string) {
-        headers[name.toLowerCase()] = value
-        return builder
-      },
-      json(data: unknown) {
-        bodyContent = JSON.stringify(data)
-        headers['content-type'] = 'application/json'
-        return builder
-      },
-      body(content: string, contentType?: string) {
-        bodyContent = content
-        if (contentType) headers['content-type'] = contentType
-        return builder
-      },
-      cookie(name: string, value: string) {
-        cookies.push(`${name}=${value}`)
-        return builder
-      },
-      send: async () => {
-        if (cookies.length > 0) {
-          headers.cookie = cookies.join('; ')
-        }
-        return sendRequest(this.#port, method, path, headers, bodyContent)
-      },
-      // Thenable: `await client.get('/x')` (or any builder) sends the request,
-      // matching AdonisJS/japa's api-client ergonomics. The `then` IS the public
-      // contract here — awaiting the builder is the documented way to send.
-      // biome-ignore lint/suspicious/noThenProperty: thenable request builder is the intended API (AdonisJS/japa parity) — `await client.get(path)` sends
-      then: (onfulfilled, onrejected) => builder.send().then(onfulfilled, onrejected),
-    }
-
-    return builder
+  /**
+   * Generic request — japa/api-client's `client.request(url, method)` (note the
+   * arg order: URL first, method second, defaulting to GET). Returns the same
+   * rich, awaitable builder as the verb shortcuts.
+   */
+  request(path: string, method: HttpMethod = 'GET'): RequestBuilder {
+    return this.fluent(method, path)
   }
 }
 
@@ -299,12 +261,12 @@ export function resolveNamedRoute(
   name: string,
   params?: Record<string, string>,
 ): string {
-  const pattern = manifest[name]
-  if (pattern === undefined) {
+  const entry = manifest[name]
+  if (entry === undefined) {
     const available = Object.keys(manifest).join(', ') || '(none)'
     throw new Error(`Route '${name}' not found. Available: ${available}`)
   }
-  let url = pattern
+  let url = typeof entry === 'string' ? entry : entry.path
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -326,6 +288,7 @@ async function sendRequest(
   path: string,
   headers: Dict,
   body: string,
+  timeoutMs?: number,
 ): Promise<TestResponse> {
   const { connect } = await import('node:net')
 
@@ -371,8 +334,9 @@ async function sendRequest(
     // tokio runtimes) the cumulative latency exceeded 5s ~30% of runs
     // and surfaced as flaky `bob accepts` / `non-member 403` failures
     // in kitchen-sink's workspace.test.ts. 30s matches the helix
-    // `--timeout=60000` per-test budget without masking real hangs.
-    socket.setTimeout(30_000, () => {
+    // `--timeout=60000` per-test budget without masking real hangs. A
+    // per-request `.timeout(ms)` (Japa) overrides the default.
+    socket.setTimeout(timeoutMs && timeoutMs > 0 ? timeoutMs : 30_000, () => {
       socket.destroy()
       reject(new Error('TestClient request timed out'))
     })
