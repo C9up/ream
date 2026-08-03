@@ -35,6 +35,51 @@ const app = new Ignitor({ port: 3000 })
 await app.start()
 ```
 
+## Testing
+
+Declare your suites in `reamrc.ts`, the way AdonisJS declares them in
+`adonisrc.ts`, and `ream test` runs them:
+
+```ts
+// reamrc.ts
+export default defineConfig({
+  tests: {
+    timeout: 2_000,
+    forceExit: false,
+    suites: [
+      { name: 'unit', files: ['tests/unit/**/*.spec.(js|ts)'] },
+      { name: 'functional', files: ['tests/functional/**/*.spec.ts'], timeout: 30_000 },
+    ],
+  },
+})
+```
+
+```sh
+ream test                    # every suite, in order
+ream test functional         # one suite
+ream test --bail --threads=4
+```
+
+`ream test` sets `NODE_ENV=test`, so `.env.test` is loaded over `.env` and
+`.env.local` is skipped — a developer's local overrides never leak into a
+test run.
+
+The stratification is AdonisJS's: ream reads its rc file and hands the
+suites to the runner ([`@c9up/helix`](../helix)), exactly as
+`@adonisjs/core` reads `adonisrc.ts` and hands them to Japa. helix knows
+nothing about ream, and ream owns no test execution. `tests/bootstrap.ts`
+— plugins, `runnerHooks`, `configureSuite` — is helix's, unchanged.
+
+Driving it yourself (a `bin/test.ts`, a console command) is the same call:
+
+```ts
+import { runTestsFromRcFile } from '@c9up/ream/test-runner'
+
+process.exitCode = await runTestsFromRcFile('./reamrc.ts', {
+  suites: process.argv.slice(2),
+})
+```
+
 ## Ecosystem
 
 Every package is standalone and publishable on its own; they consume the Ream

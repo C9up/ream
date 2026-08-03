@@ -65,6 +65,42 @@ export interface ReamrcConfig {
     /** Auto-loaded files in each module directory. Default: ['routes'] */
     autoload?: string[]
   }
+  /** Test suites and runner settings — the `tests` block of adonisrc.ts. */
+  tests?: TestsConfig
+}
+
+/** One test suite, as declared in the rc file (AdonisJS `tests.suites[]`). */
+export interface TestSuiteConfig {
+  /** Suite name — what `ream test <name>` selects. */
+  name: string
+  /**
+   * The suite's files: a glob, several, or a callback returning their URLs
+   * (Japa `TestFiles`).
+   */
+  files: string | string[] | (() => URL[] | Promise<URL[]>)
+  /** Per-test timeout for this suite, in ms. */
+  timeout?: number
+  /** Extra attempts on failure for this suite. */
+  retries?: number
+}
+
+/**
+ * The `tests` block of the rc file — AdonisJS `adonisrc.ts` `tests`, field for
+ * field. The runner that consumes it is helix; ream reads the file, exactly as
+ * `@adonisjs/core` reads adonisrc and hands the suites to Japa.
+ */
+export interface TestsConfig {
+  /** Named suites. `ream test` with no argument runs them all, in order. */
+  suites?: TestSuiteConfig[]
+  /** Default per-test timeout, in ms. */
+  timeout?: number
+  /** `process.exit()` once the run ends instead of draining the event loop. */
+  forceExit?: boolean
+  /**
+   * Ream particularity: the bootstrap module's path. AdonisJS hardcodes
+   * `tests/bootstrap.ts`; that stays the default here, and this overrides it.
+   */
+  bootstrap?: string
 }
 
 /** defineConfig helper — like AdonisJS defineConfig(). */

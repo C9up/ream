@@ -1,0 +1,162 @@
+/**
+ * `ream test` — run the suites declared in the rc file.
+ *
+ * The AdonisJS stratification, kept intact: the FRAMEWORK reads its rc file and
+ * hands the suites to the runner, exactly as `@adonisjs/core` reads
+ * `adonisrc.ts` and hands them to Japa. The runner itself (helix) knows nothing
+ * about ream, and ream owns no test execution — it only translates.
+ *
+ *     // bin/test.ts
+ *     import { runTests } from '@c9up/ream/test-runner'
+ *     import rc from '../reamrc.js'
+ *     process.exitCode = await runTests(rc.tests, { suites: process.argv.slice(2) })
+ */
+
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import type { TestsConfig, TestSuiteConfig } from '../Ignitor.js'
+
+/** What a caller may override on top of the rc file. */
+export interface RunTestsOptions {
+  /** Project root the suites resolve against. Defaults to `process.cwd()`. */
+  root?: string
+  /**
+   * Suite names to run. Empty (the default) runs every declared suite, in
+   * order — the AdonisJS behaviour for `node ace test` with no argument.
+   */
+  suites?: string[]
+  /** Concurrent worker processes. */
+  threads?: number
+  /** Reporter name, or several (`["spec", "json"]`). */
+  reporters?: string[]
+  /** Stop at the first failure. */
+  bail?: boolean
+  /**
+   * Flags the worker processes are spawned with. Defaults to this process's own
+   * (`process.execArgv`), so the workers load TypeScript through whatever
+   * loader the parent was started with — `--import @swc-node/register/esm-register`
+   * for `ream test`, tsx for a project that prefers it. Nothing to detect: the
+   * workers simply run under the same loader as their parent.
+   */
+  nodeArgs?: string[]
+}
+
+/** A suite name that was asked for but is not declared. */
+export class UnknownSuiteError extends Error {
+  constructor(name: string, declared: string[]) {
+    super(
+      declared.length === 0
+        ? `Unknown test suite "${name}": the rc file declares none.`
+        : `Unknown test suite "${name}". Declared: ${declared.join(', ')}.`,
+    )
+    this.name = 'UnknownSuiteError'
+  }
+}
+
+/** The suites to run, in declaration order, for the given selection. */
+function select(declared: TestSuiteConfig[], asked: string[]): TestSuiteConfig[] {
+  if (asked.length === 0) return declared
+  const byName = new Map(declared.map((suite) => [suite.name, suite]))
+  return asked.map((name) => {
+    const suite = byName.get(name)
+    if (suite === undefined) {
+      throw new UnknownSuiteError(name, [...byName.keys()])
+    }
+    return suite
+  })
+}
+
+/**
+ * Run the rc file's test suites. Returns the process exit code; the caller
+ * decides what to do with it, so this stays usable from a `bin/test.ts`, from a
+ * console command, or from a test of its own.
+ *
+ * `NODE_ENV=test` is set before anything else, which is what makes `.env.test`
+ * win over `.env` when the app's config loads its environment.
+ */
+export async function runTests(
+  tests: TestsConfig | undefined,
+  options: RunTestsOptions = {},
+): Promise<number> {
+  process.env.NODE_ENV = 'test'
+
+  const root = options.root ?? process.cwd()
+  const declared = tests?.suites ?? []
+  const selected = select(declared, options.suites ?? [])
+
+  const helix = await import('@c9up/helix/runner')
+
+  // The bootstrap module is the app's, not the runner's — helix imports it in
+  // every worker, so a plugin's context extensions exist before the first test
+  // declares itself.
+  const bootstrap = helix.resolveBootstrap(root, tests?.bootstrap)
+  process.env.HELIX_BOOTSTRAP = bootstrap ?? ''
+  if (tests?.forceExit === true) process.env.HELIX_FORCE_EXIT = '1'
+
+  const base = {
+    root,
+    nodeArgs: options.nodeArgs ?? process.execArgv,
+    threads: options.threads,
+    timeoutMs: tests?.timeout,
+    reporters: options.reporters,
+    bail: options.bail,
+  }
+
+  // No suites declared: run whatever the project's discovery finds, so an app
+  // with a plain `tests/` directory works without declaring anything.
+  if (selected.length === 0) {
+    const outcome = await helix.run(base)
+    return outcome.exitCode
+  }
+
+  const steps = []
+  for (const suite of selected) {
+    const files = await helix.resolveSuiteFiles(
+      { name: suite.name, files: suite.files, timeout: suite.timeout, retries: suite.retries },
+      root,
+      undefined,
+    )
+    if (files.length === 0) {
+      process.stderr.write(`ream: suite "${suite.name}": no test files\n`)
+      continue
+    }
+    steps.push({
+      env: {
+        HELIX_SUITE: suite.name,
+        // Empty means unset, so a suite that declares no retries does not
+        // inherit the previous suite's.
+        HELIX_RETRIES: suite.retries === undefined ? '' : String(suite.retries),
+      },
+      config: { ...base, files, timeoutMs: suite.timeout ?? tests?.timeout },
+    })
+  }
+  if (steps.length === 0) return 0
+
+  const outcome = await helix.runSuites(steps, base)
+  return outcome.exitCode
+}
+
+/**
+ * Load an rc file and run its suites — the one-liner a `bin/test.ts` needs.
+ * `rcPath` is resolved against `root`.
+ */
+export async function runTestsFromRcFile(
+  rcPath: string,
+  options: RunTestsOptions = {},
+): Promise<number> {
+  const root = options.root ?? process.cwd()
+  const absolute = path.isAbsolute(rcPath) ? rcPath : path.resolve(root, rcPath)
+  const imported: unknown = await import(pathToFileURL(absolute).href)
+  const rc =
+    imported !== null && typeof imported === 'object'
+      ? (Reflect.get(imported, 'default') ?? imported)
+      : undefined
+  const tests =
+    rc !== null && typeof rc === 'object' ? Reflect.get(rc, 'tests') : undefined
+  return runTests(isTestsConfig(tests) ? tests : undefined, { ...options, root })
+}
+
+/** Narrow an rc file's `tests` value without trusting it. */
+function isTestsConfig(value: unknown): value is TestsConfig {
+  return value !== null && typeof value === 'object'
+}

@@ -1,7 +1,7 @@
 {
   "name": "@c9up/ream",
   "version": "0.1.27",
-  "description": "Ream — Rust-powered Node.js application framework",
+  "description": "Ream \u2014 Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -54,6 +54,10 @@
     "./testing": {
       "types": "./src/testing/TestClient.ts",
       "import": "./src/testing/TestClient.ts"
+    },
+    "./test-runner": {
+      "types": "./src/testing/runTests.ts",
+      "import": "./src/testing/runTests.ts"
     },
     "./bootstrap": {
       "types": "./src/bootstrap/hyper-server.ts",
@@ -279,6 +283,10 @@
       "./testing": {
         "types": "./dist/testing/TestClient.d.ts",
         "import": "./dist/testing/TestClient.js"
+      },
+      "./test-runner": {
+        "types": "./dist/testing/runTests.d.ts",
+        "import": "./dist/testing/runTests.js"
       },
       "./bootstrap": {
         "types": "./dist/bootstrap/hyper-server.d.ts",

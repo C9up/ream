@@ -171,7 +171,14 @@ export { resolveMiddlewareEntry, Server } from './server/Server.js'
 
 export type { Command } from './console/CommandRunner.js'
 export { CommandRunner } from './console/CommandRunner.js'
-export type { AppEnvironment, HyperServerLike, IgnitorConfig, ReamrcConfig } from './Ignitor.js'
+export type {
+  AppEnvironment,
+  HyperServerLike,
+  IgnitorConfig,
+  ReamrcConfig,
+  TestsConfig,
+  TestSuiteConfig,
+} from './Ignitor.js'
 export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignitor.js'
 
 // ─── Providers ──────────────────────────────────────────────
