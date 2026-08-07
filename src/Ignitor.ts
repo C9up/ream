@@ -123,6 +123,14 @@ export interface TestsConfig {
    * `tests/bootstrap.ts`; that stays the default here, and this overrides it.
    */
   bootstrap?: string
+  /**
+   * Point `@japa/runner/core` at helix's shim in every worker, so official Japa
+   * plugins (`@japa/assert`, …) instrument the runner that is actually running.
+   *
+   * Off by default: redirecting a package specifier is not something to do
+   * behind a user's back, and a project with no Japa plugin gains nothing.
+   */
+  japaPlugins?: boolean
 }
 
 /** defineConfig helper — like AdonisJS defineConfig(). */

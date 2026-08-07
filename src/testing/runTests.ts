@@ -88,6 +88,22 @@ export class SuiteConfigureUnreachableError extends Error {
   }
 }
 
+/**
+ * The flags the worker processes are spawned with.
+ *
+ * Split out because it is a decision, not plumbing: the Japa alias loader
+ * redirects a package specifier, so it goes in only when a project asks. It
+ * rides ALONGSIDE whatever loader is already there — the test files still need
+ * theirs to read TypeScript.
+ */
+export function workerNodeArgs(tests: TestsConfig | undefined, options: RunTestsOptions): string[] {
+  const args = [...(options.nodeArgs ?? process.execArgv)]
+  if (tests?.japaPlugins === true) {
+    args.push('--import', import.meta.resolve('@c9up/helix/japa-alias'))
+  }
+  return args
+}
+
 /** The suites to run, in declaration order, for the given selection. */
 function select(declared: TestSuiteConfig[], asked: string[]): TestSuiteConfig[] {
   if (asked.length === 0) return declared
@@ -154,7 +170,7 @@ export async function runTests(
 
   const base = {
     root,
-    nodeArgs: options.nodeArgs ?? process.execArgv,
+    nodeArgs: workerNodeArgs(tests, options),
     threads: options.threads,
     timeoutMs: tests?.timeout,
     reporters: options.reporters,

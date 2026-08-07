@@ -7,6 +7,7 @@ import {
   runTestsFromRcFile,
   SuiteConfigureUnreachableError,
   UnknownSuiteError,
+  workerNodeArgs,
 } from '../../src/testing/runTests.js'
 
 /**
@@ -187,6 +188,39 @@ describe('runTests', () => {
     // An empty suite is a warning, not a failure — the exit code must not
     // claim tests failed when none ran.
     await expect(runTests({ suites: [emptySuite] }, { root })).resolves.toBe(0)
+  })
+})
+
+describe('workerNodeArgs', () => {
+  it('adds the Japa alias loader only when a project asks for it', () => {
+    // The loader redirects `@japa/runner/core` to helix's shim so official Japa
+    // plugins instrument the runner that is running. Redirecting a package
+    // specifier is not a default.
+    const base = ['--import', 'loader']
+
+    expect(workerNodeArgs({ suites: [] }, { nodeArgs: base })).toEqual(base)
+
+    const withJapa = workerNodeArgs({ suites: [], japaPlugins: true }, { nodeArgs: base })
+    expect(withJapa.slice(0, 2)).toEqual(base)
+    expect(withJapa[2]).toBe('--import')
+    expect(withJapa[3]).toMatch(/japa-alias/)
+  })
+
+  it('keeps the loader the workers already needed', () => {
+    // Replacing it instead of appending would leave them unable to read
+    // TypeScript, which every fixture in a ream app is.
+    const args = workerNodeArgs(
+      { suites: [], japaPlugins: true },
+      {
+        nodeArgs: ['--import', 'tsx-loader'],
+      },
+    )
+
+    expect(args).toContain('tsx-loader')
+  })
+
+  it("inherits this process's own flags when none are given", () => {
+    expect(workerNodeArgs(undefined, {})).toEqual(process.execArgv)
   })
 })
 
