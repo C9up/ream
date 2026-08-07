@@ -180,7 +180,9 @@ export async function runTests(
   // `runnerHooks` run ONCE around the whole run, here, and the workers skip
   // them — Japa's semantics, and the difference between migrating once and
   // migrating once per test file.
-  const dropGlobalHooks = await helix.runGlobalHooks(bootstrap)
+  const dropGlobalHooks = await helix.runGlobalHooks(bootstrap, {
+    japaPlugins: tests?.japaPlugins === true,
+  })
 
   // No suites declared: run whatever the project's discovery finds, so an app
   // with a plain `tests/` directory works without declaring anything.
