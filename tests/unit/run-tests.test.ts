@@ -131,6 +131,45 @@ describe('runTests', () => {
     expect(process.env.HELIX_SUITE_CONFIG_KEY).toBe('tests.suites')
   })
 
+  it('says so instead of dropping a configure it cannot deliver', async () => {
+    // `runTests` takes the exported object, not the module, so it has no path
+    // to hand the workers. Silence would let the suite run with the callback
+    // quietly skipped.
+    const written: string[] = []
+    const original = process.stderr.write.bind(process.stderr)
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      written.push(String(chunk))
+      return true
+    }
+    try {
+      await runTests({ suites: [{ ...emptySuite, configure: () => {} }] }, { root })
+    } finally {
+      process.stderr.write = original
+    }
+
+    const message = written.join('')
+    expect(message).toMatch(/"unit"/)
+    expect(message).toMatch(/runTestsFromRcFile/)
+    expect(message).toMatch(/will NOT run/)
+    expect(process.env.HELIX_SUITE_CONFIG).toBe('')
+  })
+
+  it('stays quiet when no suite declares configure', async () => {
+    const written: string[] = []
+    const original = process.stderr.write.bind(process.stderr)
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      written.push(String(chunk))
+      return true
+    }
+    try {
+      await runTests({ suites: [emptySuite] }, { root })
+    } finally {
+      process.stderr.write = original
+    }
+
+    expect(written.join('')).not.toMatch(/configure/)
+  })
+
   it('clears a stale forceExit rather than inheriting it', async () => {
     // The flag is what a plugin reads off `api.cliArgs.forceExit`. It is
     // assigned unconditionally, so a value left in the environment — by the

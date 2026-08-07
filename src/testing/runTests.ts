@@ -7,9 +7,15 @@
  * about ream, and ream owns no test execution — it only translates.
  *
  *     // bin/test.ts
- *     import { runTests } from '@c9up/ream/test-runner'
- *     import rc from '../reamrc.js'
- *     process.exitCode = await runTests(rc.tests, { suites: process.argv.slice(2) })
+ *     import { runTestsFromRcFile } from '@c9up/ream/test-runner'
+ *     process.exitCode = await runTestsFromRcFile('./reamrc.ts', {
+ *       suites: process.argv.slice(2),
+ *     })
+ *
+ * Prefer that over `runTests(rc.tests, …)`: a `suites[].configure` callback has
+ * to be re-imported in each worker, so the runner needs the module's PATH, not
+ * just the object it exported. `runTests` takes it as `configModule` and says
+ * so out loud when a suite declares a callback it was given no way to deliver.
  */
 
 import path from 'node:path'
@@ -112,9 +118,21 @@ export async function runTests(
   // Only named when a suite actually declares `configure`: pointing at it makes
   // every worker import the rc file, which a project not using the callback
   // should not pay for.
-  const declaresConfigure = selected.some((suite) => typeof suite.configure === 'function')
+  const configuring = selected.filter((suite) => typeof suite.configure === 'function')
+  if (configuring.length > 0 && options.configModule === undefined) {
+    // Dropping it quietly would be the worst outcome: the suite runs, nothing
+    // says the callback did not, and the difference only shows as a missing
+    // hook much later.
+    process.stderr.write(
+      `ream: suite${configuring.length > 1 ? 's' : ''} ` +
+        `${configuring.map((suite) => `"${suite.name}"`).join(', ')} ` +
+        `declare${configuring.length > 1 ? '' : 's'} \`configure\`, which needs the rc file's path ` +
+        'to reach the workers. Call runTestsFromRcFile(), or pass `configModule`. ' +
+        'The callback will NOT run.\n',
+    )
+  }
   process.env.HELIX_SUITE_CONFIG =
-    declaresConfigure && options.configModule !== undefined ? options.configModule : ''
+    configuring.length > 0 && options.configModule !== undefined ? options.configModule : ''
   process.env.HELIX_SUITE_CONFIG_KEY = 'tests.suites'
 
   const base = {
