@@ -161,11 +161,20 @@ export async function runTests(
     bail: options.bail,
   }
 
+  // `runnerHooks` run ONCE around the whole run, here, and the workers skip
+  // them — Japa's semantics, and the difference between migrating once and
+  // migrating once per test file.
+  const dropGlobalHooks = await helix.runGlobalHooks(bootstrap)
+
   // No suites declared: run whatever the project's discovery finds, so an app
   // with a plain `tests/` directory works without declaring anything.
   if (selected.length === 0) {
-    const outcome = await helix.run(base)
-    return finish(outcome.exitCode, forceExit)
+    try {
+      const outcome = await helix.run(base)
+      return finish(outcome.exitCode, forceExit)
+    } finally {
+      await dropGlobalHooks()
+    }
   }
 
   const steps = []
@@ -189,10 +198,17 @@ export async function runTests(
       config: { ...base, files, timeoutMs: suite.timeout ?? tests?.timeout },
     })
   }
-  if (steps.length === 0) return finish(0, forceExit)
+  if (steps.length === 0) {
+    await dropGlobalHooks()
+    return finish(0, forceExit)
+  }
 
-  const outcome = await helix.runSuites(steps, base)
-  return finish(outcome.exitCode, forceExit)
+  try {
+    const outcome = await helix.runSuites(steps, base)
+    return finish(outcome.exitCode, forceExit)
+  } finally {
+    await dropGlobalHooks()
+  }
 }
 
 /**
