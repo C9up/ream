@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { runTests, runTestsFromRcFile, UnknownSuiteError } from '../../src/testing/runTests.js'
+import {
+  runTests,
+  runTestsFromRcFile,
+  SuiteConfigureUnreachableError,
+  UnknownSuiteError,
+} from '../../src/testing/runTests.js'
 
 /**
  * `ream test` — the framework reads its rc file and hands the suites to the
@@ -131,43 +136,35 @@ describe('runTests', () => {
     expect(process.env.HELIX_SUITE_CONFIG_KEY).toBe('tests.suites')
   })
 
-  it('says so instead of dropping a configure it cannot deliver', async () => {
-    // `runTests` takes the exported object, not the module, so it has no path
-    // to hand the workers. Silence would let the suite run with the callback
-    // quietly skipped.
-    const written: string[] = []
-    const original = process.stderr.write.bind(process.stderr)
-    process.stderr.write = (chunk: string | Uint8Array): boolean => {
-      written.push(String(chunk))
-      return true
-    }
-    try {
-      await runTests({ suites: [{ ...emptySuite, configure: () => {} }] }, { root })
-    } finally {
-      process.stderr.write = original
-    }
+  it('refuses to run when it cannot deliver a suite configure', async () => {
+    // Japa runs a declared `configure`. This entry point cannot — it was handed
+    // the exported object, not the module — so it stops instead of producing a
+    // green suite configured differently from what the rc file says.
+    await expect(
+      runTests({ suites: [{ ...emptySuite, configure: () => {} }] }, { root }),
+    ).rejects.toThrow(SuiteConfigureUnreachableError)
 
-    const message = written.join('')
-    expect(message).toMatch(/"unit"/)
-    expect(message).toMatch(/runTestsFromRcFile/)
-    expect(message).toMatch(/will NOT run/)
-    expect(process.env.HELIX_SUITE_CONFIG).toBe('')
+    await expect(
+      runTests({ suites: [{ ...emptySuite, configure: () => {} }] }, { root }),
+    ).rejects.toThrow(/runTestsFromRcFile/)
   })
 
-  it('stays quiet when no suite declares configure', async () => {
-    const written: string[] = []
-    const original = process.stderr.write.bind(process.stderr)
-    process.stderr.write = (chunk: string | Uint8Array): boolean => {
-      written.push(String(chunk))
-      return true
-    }
-    try {
-      await runTests({ suites: [emptySuite] }, { root })
-    } finally {
-      process.stderr.write = original
-    }
+  it('names every suite whose configure it cannot deliver', async () => {
+    await expect(
+      runTests(
+        {
+          suites: [
+            { ...emptySuite, configure: () => {} },
+            { name: 'e2e', files: 'x', configure: () => {} },
+          ],
+        },
+        { root },
+      ),
+    ).rejects.toThrow(/"unit", "e2e"/)
+  })
 
-    expect(written.join('')).not.toMatch(/configure/)
+  it('runs normally when no suite declares configure', async () => {
+    await expect(runTests({ suites: [emptySuite] }, { root })).resolves.toBe(0)
   })
 
   it('clears a stale forceExit rather than inheriting it', async () => {

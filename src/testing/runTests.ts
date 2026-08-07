@@ -14,8 +14,10 @@
  *
  * Prefer that over `runTests(rc.tests, …)`: a `suites[].configure` callback has
  * to be re-imported in each worker, so the runner needs the module's PATH, not
- * just the object it exported. `runTests` takes it as `configModule` and says
- * so out loud when a suite declares a callback it was given no way to deliver.
+ * just the object it exported. `runTests` takes it as `configModule`, and
+ * REFUSES to run when a suite declares a callback it was given no way to
+ * deliver — in Japa a declared `configure` runs, so a run that skipped it would
+ * be green in a state its own config does not describe.
  */
 
 import path from 'node:path'
@@ -63,6 +65,26 @@ export class UnknownSuiteError extends Error {
         : `Unknown test suite "${name}". Declared: ${declared.join(', ')}.`,
     )
     this.name = 'UnknownSuiteError'
+  }
+}
+
+/**
+ * A suite declares `configure`, but this entry point cannot deliver it.
+ *
+ * Not a warning: Japa runs a declared `configure`, so carrying on would run the
+ * suite in a state its own config does not describe — and a warning is exactly
+ * what gets scrolled past in CI.
+ */
+export class SuiteConfigureUnreachableError extends Error {
+  constructor(names: string[]) {
+    const plural = names.length > 1
+    super(
+      `Suite${plural ? 's' : ''} ${names.map((name) => `"${name}"`).join(', ')} ` +
+        `declare${plural ? '' : 's'} \`configure\`, which has to be re-imported in each ` +
+        'worker and therefore needs the rc file PATH, not the object it exported. ' +
+        'Call runTestsFromRcFile(), or pass `configModule`.',
+    )
+    this.name = 'SuiteConfigureUnreachableError'
   }
 }
 
@@ -120,16 +142,11 @@ export async function runTests(
   // should not pay for.
   const configuring = selected.filter((suite) => typeof suite.configure === 'function')
   if (configuring.length > 0 && options.configModule === undefined) {
-    // Dropping it quietly would be the worst outcome: the suite runs, nothing
-    // says the callback did not, and the difference only shows as a missing
-    // hook much later.
-    process.stderr.write(
-      `ream: suite${configuring.length > 1 ? 's' : ''} ` +
-        `${configuring.map((suite) => `"${suite.name}"`).join(', ')} ` +
-        `declare${configuring.length > 1 ? '' : 's'} \`configure\`, which needs the rc file's path ` +
-        'to reach the workers. Call runTestsFromRcFile(), or pass `configModule`. ' +
-        'The callback will NOT run.\n',
-    )
+    // In Japa a declared `configure` RUNS. It cannot here — the callback needs
+    // the module's path to be re-imported in each worker, and this entry was
+    // handed the exported object. Running anyway would produce a green suite
+    // configured differently from what the rc file says, so the run stops.
+    throw new SuiteConfigureUnreachableError(configuring.map((suite) => suite.name))
   }
   process.env.HELIX_SUITE_CONFIG =
     configuring.length > 0 && options.configModule !== undefined ? options.configModule : ''
