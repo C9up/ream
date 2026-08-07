@@ -33,6 +33,12 @@ export interface RunTestsOptions {
   /** Stop at the first failure. */
   bail?: boolean
   /**
+   * The module that declared the suites, so a `suites[].configure` callback can
+   * be re-imported in each worker — a function does not cross a process
+   * boundary. Set for you by {@link runTestsFromRcFile}.
+   */
+  configModule?: string
+  /**
    * Flags the worker processes are spawned with. Defaults to this process's own
    * (`process.execArgv`), so the workers load TypeScript through whatever
    * loader the parent was started with — `--import @swc-node/register/esm-register`
@@ -102,6 +108,14 @@ export async function runTests(
   // the first one's flag. A plugin reads it back off `api.cliArgs.forceExit`.
   const forceExit = tests?.forceExit === true
   process.env.HELIX_FORCE_EXIT = forceExit ? '1' : ''
+
+  // Only named when a suite actually declares `configure`: pointing at it makes
+  // every worker import the rc file, which a project not using the callback
+  // should not pay for.
+  const declaresConfigure = selected.some((suite) => typeof suite.configure === 'function')
+  process.env.HELIX_SUITE_CONFIG =
+    declaresConfigure && options.configModule !== undefined ? options.configModule : ''
+  process.env.HELIX_SUITE_CONFIG_KEY = 'tests.suites'
 
   const base = {
     root,
@@ -176,7 +190,11 @@ export async function runTestsFromRcFile(
       ? (Reflect.get(imported, 'default') ?? imported)
       : undefined
   const tests = rc !== null && typeof rc === 'object' ? Reflect.get(rc, 'tests') : undefined
-  return runTests(isTestsConfig(tests) ? tests : undefined, { ...options, root })
+  return runTests(isTestsConfig(tests) ? tests : undefined, {
+    ...options,
+    root,
+    configModule: absolute,
+  })
 }
 
 /** Narrow an rc file's `tests` value without trusting it. */

@@ -48,7 +48,14 @@ export default defineConfig({
     forceExit: false,
     suites: [
       { name: 'unit', files: ['tests/unit/**/*.spec.(js|ts)'] },
-      { name: 'functional', files: ['tests/functional/**/*.spec.ts'], timeout: 30_000 },
+      {
+        name: 'functional',
+        files: ['tests/functional/**/*.spec.ts'],
+        timeout: 30_000,
+        // Japa's per-suite `configure`. Costs an import of this file in every
+        // worker — `configureSuite` in tests/bootstrap.ts does the same for free.
+        configure: (suite) => suite.setup(() => startHttpServer()),
+      },
     ],
   },
 })

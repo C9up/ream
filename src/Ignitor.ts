@@ -82,6 +82,28 @@ export interface TestSuiteConfig {
   timeout?: number
   /** Extra attempts on failure for this suite. */
   retries?: number
+  /**
+   * Configure the suite before it runs (Japa `TestSuite.configure`). Receives
+   * the same handle as the bootstrap's `configureSuite`, and runs after it.
+   *
+   * Costs an import of the rc file in every worker, since a function cannot
+   * cross a process boundary — `configureSuite` in `tests/bootstrap.ts` does
+   * the same job for free, and is what AdonisJS itself uses.
+   */
+  configure?: (suite: TestSuiteHandle) => void
+}
+
+/**
+ * What a suite's `configure` receives — helix's `SuiteHandle`, re-declared here
+ * so the rc file types without ream depending on the runner at type level.
+ */
+export interface TestSuiteHandle {
+  readonly name: string
+  setup(fn: () => void | Promise<void>): TestSuiteHandle
+  teardown(fn: () => void | Promise<void>): TestSuiteHandle
+  onTest(callback: (test: unknown) => void): TestSuiteHandle
+  onGroup(callback: (group: unknown) => void): TestSuiteHandle
+  bail(toggle?: boolean): TestSuiteHandle
 }
 
 /**

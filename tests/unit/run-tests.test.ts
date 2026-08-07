@@ -26,6 +26,8 @@ describe('runTests', () => {
     else process.env.NODE_ENV = savedNodeEnv
     delete process.env.HELIX_BOOTSTRAP
     delete process.env.HELIX_FORCE_EXIT
+    delete process.env.HELIX_SUITE_CONFIG
+    delete process.env.HELIX_SUITE_CONFIG_KEY
     for (const key of ['REAM_RT_DB', 'REAM_RT_BASE', 'REAM_RT_LOCAL', 'REAM_RT_SHELL']) {
       delete process.env[key]
     }
@@ -112,6 +114,21 @@ describe('runTests', () => {
     await runTests({ suites: [emptySuite], bootstrap: 'custom/boot.ts' }, { root })
 
     expect(process.env.HELIX_BOOTSTRAP).toBe(join(root, 'custom/boot.ts'))
+  })
+
+  it('names the config module only when a suite declares configure', async () => {
+    // Pointing at it makes every worker import the rc file; a project not using
+    // the callback must not pay for that.
+    await runTests({ suites: [emptySuite] }, { root, configModule: '/tmp/rc.ts' })
+    expect(process.env.HELIX_SUITE_CONFIG).toBe('')
+
+    await runTests(
+      { suites: [{ ...emptySuite, configure: () => {} }] },
+      { root, configModule: '/tmp/rc.ts' },
+    )
+    expect(process.env.HELIX_SUITE_CONFIG).toBe('/tmp/rc.ts')
+    // ream declares its suites under `tests.suites`, not at the top level.
+    expect(process.env.HELIX_SUITE_CONFIG_KEY).toBe('tests.suites')
   })
 
   it('clears a stale forceExit rather than inheriting it', async () => {
