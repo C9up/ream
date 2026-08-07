@@ -10,6 +10,7 @@
  */
 
 import 'reflect-metadata'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { getInjectTokens, getServiceMetadata, getServiceRegistry } from '../decorators/Service.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
@@ -21,6 +22,12 @@ import type { Binding, ServiceFactory, ServiceToken } from './types.js'
  * as a prototype-pollution vector.
  */
 const RESERVED_TOKEN_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** One resolution chain: the tokens on it, and a set for O(1) membership. */
+interface ResolutionChain {
+  stack: string[]
+  set: Set<string>
+}
 
 export class Container {
   #bindings: Map<string, Binding> = new Map()
@@ -37,8 +44,16 @@ export class Container {
   #aliases: Map<string, ServiceToken> = new Map()
   /** token key → post-resolution callbacks (AdonisJS `container.resolving`). */
   #resolvingHooks: Map<string, Array<(value: unknown) => void | Promise<void>>> = new Map()
-  #resolutionStack: string[] = []
-  #resolutionSet: Set<string> = new Set()
+  /**
+   * The resolution chain currently being walked, for cycle detection.
+   *
+   * Scoped to the async context, NOT to the container: `resolve()` is async, so
+   * two independent chains interleave, and a stack held on the instance would
+   * splice them together and report a cycle neither of them has. Per-container
+   * storage keeps a chain that crosses two containers from colliding on a token
+   * name they happen to share.
+   */
+  readonly #chain = new AsyncLocalStorage<ResolutionChain>()
 
   // ─── Explicit bindings ────────────────────────────────────
 
@@ -162,21 +177,30 @@ export class Container {
 
     const key = this.#tokenToKey(token)
 
-    if (this.#resolutionSet.has(key)) {
-      const cycle = [...this.#resolutionStack, key].join(' → ')
+    // Top of a chain: open one, so everything this resolution triggers shares
+    // it and nothing outside it does.
+    const chain = this.#chain.getStore()
+    if (chain === undefined) {
+      return this.#chain.run({ stack: [], set: new Set() }, () =>
+        this.resolve<T>(token, runtimeValues),
+      )
+    }
+
+    if (chain.set.has(key)) {
+      const cycle = [...chain.stack, key].join(' → ')
       throw new ReamError('CIRCULAR_DEPENDENCY', `Circular dependency detected: ${cycle}`, {
         hint: 'Break the cycle by resolving one dependency lazily inside a method (`await container.make(Dep)`) instead of injecting it in the constructor.',
         context: { chain: cycle },
       })
     }
-    this.#resolutionStack.push(key)
-    this.#resolutionSet.add(key)
+    chain.stack.push(key)
+    chain.set.add(key)
 
     try {
       return await this.#resolveInner<T>(key, token, runtimeValues)
     } finally {
-      this.#resolutionStack.pop()
-      this.#resolutionSet.delete(key)
+      chain.stack.pop()
+      chain.set.delete(key)
     }
   }
 
