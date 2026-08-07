@@ -26,6 +26,9 @@ describe('runTests', () => {
     else process.env.NODE_ENV = savedNodeEnv
     delete process.env.HELIX_BOOTSTRAP
     delete process.env.HELIX_FORCE_EXIT
+    for (const key of ['REAM_RT_DB', 'REAM_RT_BASE', 'REAM_RT_LOCAL', 'REAM_RT_SHELL']) {
+      delete process.env[key]
+    }
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
@@ -40,14 +43,45 @@ describe('runTests', () => {
     expect(process.env.NODE_ENV).toBe('test')
   })
 
+  it('loads .env.test over .env, with no hook asked of the app', async () => {
+    // "Loaded automatically" has to mean the app writes nothing. It happens in
+    // this process, so every worker spawned below inherits it.
+    writeFileSync(join(root, '.env'), 'REAM_RT_DB=dev\nREAM_RT_BASE=base\n')
+    writeFileSync(join(root, '.env.test'), 'REAM_RT_DB=testdb\n')
+
+    await runTests({ suites: [emptySuite] }, { root })
+
+    expect(process.env.REAM_RT_DB).toBe('testdb')
+    // `.env` still fills what `.env.test` leaves out.
+    expect(process.env.REAM_RT_BASE).toBe('base')
+  })
+
+  it('ignores .env.local, so a local override never decides what CI runs', async () => {
+    writeFileSync(join(root, '.env'), 'REAM_RT_LOCAL=base\n')
+    writeFileSync(join(root, '.env.local'), 'REAM_RT_LOCAL=from_local\n')
+
+    await runTests({ suites: [emptySuite] }, { root })
+
+    expect(process.env.REAM_RT_LOCAL).toBe('base')
+  })
+
+  it('lets the shell keep the last word', async () => {
+    process.env.REAM_RT_SHELL = 'from_shell'
+    writeFileSync(join(root, '.env.test'), 'REAM_RT_SHELL=from_file\n')
+
+    await runTests({ suites: [emptySuite] }, { root })
+
+    expect(process.env.REAM_RT_SHELL).toBe('from_shell')
+  })
+
   it('names the unknown suite and lists what is declared', async () => {
     await expect(
       runTests({ suites: [emptySuite, { name: 'e2e', files: 'x' }] }, { root, suites: ['nope'] }),
     ).rejects.toThrow(UnknownSuiteError)
 
-    await expect(
-      runTests({ suites: [emptySuite] }, { root, suites: ['nope'] }),
-    ).rejects.toThrow(/Declared: unit\./)
+    await expect(runTests({ suites: [emptySuite] }, { root, suites: ['nope'] })).rejects.toThrow(
+      /Declared: unit\./,
+    )
   })
 
   it('says so when the rc file declares no suite at all', async () => {

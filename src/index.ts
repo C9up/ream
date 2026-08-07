@@ -176,8 +176,8 @@ export type {
   HyperServerLike,
   IgnitorConfig,
   ReamrcConfig,
-  TestsConfig,
   TestSuiteConfig,
+  TestsConfig,
 } from './Ignitor.js'
 export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignitor.js'
 

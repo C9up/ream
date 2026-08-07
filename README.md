@@ -60,9 +60,11 @@ ream test functional         # one suite
 ream test --bail --threads=4
 ```
 
-`ream test` sets `NODE_ENV=test`, so `.env.test` is loaded over `.env` and
-`.env.local` is skipped — a developer's local overrides never leak into a
-test run.
+`ream test` sets `NODE_ENV=test` and loads the `.env` files itself, before
+spawning anything: `.env.test` wins over `.env`, `.env.local` is skipped so
+a developer's local overrides never decide what CI runs, and the shell keeps
+the last word. The app writes no hook for this — the workers inherit the
+environment of the process that spawned them.
 
 The stratification is AdonisJS's: ream reads its rc file and hands the
 suites to the runner ([`@c9up/helix`](../helix)), exactly as

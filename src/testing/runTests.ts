@@ -14,7 +14,8 @@
 
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { TestsConfig, TestSuiteConfig } from '../Ignitor.js'
+import { loadEnvFiles } from '../env/loadEnvFiles.js'
+import type { TestSuiteConfig, TestsConfig } from '../Ignitor.js'
 
 /** What a caller may override on top of the rc file. */
 export interface RunTestsOptions {
@@ -71,8 +72,11 @@ function select(declared: TestSuiteConfig[], asked: string[]): TestSuiteConfig[]
  * decides what to do with it, so this stays usable from a `bin/test.ts`, from a
  * console command, or from a test of its own.
  *
- * `NODE_ENV=test` is set before anything else, which is what makes `.env.test`
- * win over `.env` when the app's config loads its environment.
+ * `NODE_ENV=test` is set first, then the `.env` files are loaded — so `.env.test`
+ * wins over `.env` and `.env.local` is skipped, the AdonisJS test-env rules. It
+ * happens HERE, in the process that spawns the workers, so every worker
+ * inherits the result: an app gets its test environment without writing a
+ * single hook, which is what "loaded automatically" has to mean.
  */
 export async function runTests(
   tests: TestsConfig | undefined,
@@ -81,6 +85,9 @@ export async function runTests(
   process.env.NODE_ENV = 'test'
 
   const root = options.root ?? process.cwd()
+  // Skipping `.env.local` is deliberate (and what the Ignitor does for the test
+  // environment): a developer's local overrides must not decide what CI runs.
+  loadEnvFiles(pathToFileURL(`${root}${path.sep}`), { skipEnvLocal: true })
   const declared = tests?.suites ?? []
   const selected = select(declared, options.suites ?? [])
 
@@ -151,8 +158,7 @@ export async function runTestsFromRcFile(
     imported !== null && typeof imported === 'object'
       ? (Reflect.get(imported, 'default') ?? imported)
       : undefined
-  const tests =
-    rc !== null && typeof rc === 'object' ? Reflect.get(rc, 'tests') : undefined
+  const tests = rc !== null && typeof rc === 'object' ? Reflect.get(rc, 'tests') : undefined
   return runTests(isTestsConfig(tests) ? tests : undefined, { ...options, root })
 }
 
