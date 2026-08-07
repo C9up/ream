@@ -66,6 +66,12 @@ a developer's local overrides never decide what CI runs, and the shell keeps
 the last word. The app writes no hook for this — the workers inherit the
 environment of the process that spawned them.
 
+`forceExit: true` makes the run call `process.exit()` once it ends instead
+of waiting for the event loop to drain — the same thing Japa does with it,
+and the answer to a pool or a server the app left open. Without it the
+process exits on its own, so a leaked handle surfaces as a diagnosable
+hang rather than being swallowed.
+
 The stratification is AdonisJS's: ream reads its rc file and hands the
 suites to the runner ([`@c9up/helix`](../helix)), exactly as
 `@adonisjs/core` reads `adonisrc.ts` and hands them to Japa. helix knows

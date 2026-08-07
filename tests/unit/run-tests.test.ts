@@ -114,10 +114,20 @@ describe('runTests', () => {
     expect(process.env.HELIX_BOOTSTRAP).toBe(join(root, 'custom/boot.ts'))
   })
 
-  it('carries tests.forceExit through to the runner', async () => {
-    await runTests({ suites: [emptySuite], forceExit: true }, { root })
+  it('clears a stale forceExit rather than inheriting it', async () => {
+    // The flag is what a plugin reads off `api.cliArgs.forceExit`. It is
+    // assigned unconditionally, so a value left in the environment — by the
+    // CLI, by CI, by an earlier run — cannot make a run claim it force-exits
+    // when its rc file says nothing of the sort.
+    //
+    // Not asserted here: that force-exit actually leaves the process. It does,
+    // which is precisely why it cannot be called from inside a test runner —
+    // see tests/integration/force-exit.test.ts.
+    process.env.HELIX_FORCE_EXIT = '1'
 
-    expect(process.env.HELIX_FORCE_EXIT).toBe('1')
+    await runTests({ suites: [emptySuite] }, { root })
+
+    expect(process.env.HELIX_FORCE_EXIT).toBe('')
   })
 
   it('succeeds when every declared suite matches nothing', async () => {

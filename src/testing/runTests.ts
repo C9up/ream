@@ -98,7 +98,10 @@ export async function runTests(
   // declares itself.
   const bootstrap = helix.resolveBootstrap(root, tests?.bootstrap)
   process.env.HELIX_BOOTSTRAP = bootstrap ?? ''
-  if (tests?.forceExit === true) process.env.HELIX_FORCE_EXIT = '1'
+  // Assigned either way: a second call in the same process must not inherit
+  // the first one's flag. A plugin reads it back off `api.cliArgs.forceExit`.
+  const forceExit = tests?.forceExit === true
+  process.env.HELIX_FORCE_EXIT = forceExit ? '1' : ''
 
   const base = {
     root,
@@ -113,7 +116,7 @@ export async function runTests(
   // with a plain `tests/` directory works without declaring anything.
   if (selected.length === 0) {
     const outcome = await helix.run(base)
-    return outcome.exitCode
+    return finish(outcome.exitCode, forceExit)
   }
 
   const steps = []
@@ -137,10 +140,24 @@ export async function runTests(
       config: { ...base, files, timeoutMs: suite.timeout ?? tests?.timeout },
     })
   }
-  if (steps.length === 0) return 0
+  if (steps.length === 0) return finish(0, forceExit)
 
   const outcome = await helix.runSuites(steps, base)
-  return outcome.exitCode
+  return finish(outcome.exitCode, forceExit)
+}
+
+/**
+ * Apply `tests.forceExit`. Japa does this inside its own run — sets the exit
+ * code, then `process.exit()` — rather than leaving it to the caller, because
+ * the whole point is to not wait for the event loop to drain. A run that
+ * force-exits never returns here; the value is for every other run.
+ */
+function finish(code: number, forceExit: boolean): number {
+  if (forceExit) {
+    process.exitCode = code
+    process.exit()
+  }
+  return code
 }
 
 /**
