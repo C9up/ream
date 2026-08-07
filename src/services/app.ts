@@ -3,7 +3,7 @@
  *
  * Usage:
  *   import app from '@c9up/ream/services/app'
- *   const logger = app.container.make('logger')
+ *   const logger = await app.container.make('logger')
  *   if (app.inProduction) { ... }
  */
 
