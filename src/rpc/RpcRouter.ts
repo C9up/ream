@@ -286,7 +286,18 @@ export class RpcRouter {
           )
         }
         const validator = await this.#container.resolve<RuntimeValidator>(token)
-        const outcome = validator.validate(params)
+        // `validateResult` first: rune's `validate()` is the VineJS contract
+        // (async, throwing), and reading `.valid` off a Promise is `undefined`,
+        // which would wave every payload through as invalid.
+        const check = validator.validateResult ?? validator.validate
+        if (typeof check !== 'function') {
+          return rpcError(
+            -32603,
+            `Validator '${def.validator}' exposes neither validateResult() nor validate().`,
+            id,
+          )
+        }
+        const outcome = check.call(validator, params)
         if (!outcome.valid) return rpcError(-32602, 'Invalid params', id, outcome.errors)
         effectiveParams = outcome.data ?? params
       }

@@ -20,13 +20,27 @@ export type MiddlewareFunction = (
   next: () => Promise<void>,
 ) => Promise<void> | void
 
+/** What a route validator must hand back, whichever method it exposes. */
+export interface RuntimeValidationResult {
+  valid: boolean
+  errors: unknown[]
+  data?: unknown
+}
+
 /**
- * Structural contract for a route validator. A `@c9up/rune` schema matches this
- * shape, so ream stays decoupled from the validation engine — any object with a
- * `validate(data)` returning `{ valid, errors, data? }` works.
+ * Structural contract for a route validator. ream stays decoupled from the
+ * validation engine — any object exposing a never-throwing, result-returning
+ * check works.
+ *
+ * Two spellings are accepted because `@c9up/rune` reserves `validate()` for the
+ * VineJS contract (async, throwing) and names its result-based form
+ * `validateResult()`. `validateResult` is preferred when both exist: reading a
+ * `{ valid }` off a Promise yields `undefined`, i.e. a request that silently
+ * fails validation.
  */
 export interface RuntimeValidator {
-  validate(data: unknown): { valid: boolean; errors: unknown[]; data?: unknown }
+  validate?(data: unknown): RuntimeValidationResult
+  validateResult?(data: unknown): RuntimeValidationResult
 }
 
 /** Named middleware registry. */
@@ -174,7 +188,13 @@ function createGuardMiddleware(
 function createValidationMiddleware(validators: RuntimeValidator[]): MiddlewareFunction {
   return async (ctx, next) => {
     for (const validator of validators) {
-      const result = validator.validate(ctx.request.body())
+      const check = validator.validateResult ?? validator.validate
+      if (typeof check !== 'function') {
+        throw new TypeError(
+          'Route validator exposes neither validateResult() nor validate().'
+        )
+      }
+      const result = check.call(validator, ctx.request.body())
       if (!result.valid) {
         throw new E_VALIDATION_ERROR(result.errors)
       }
