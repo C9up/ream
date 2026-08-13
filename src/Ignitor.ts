@@ -14,9 +14,13 @@
  */
 
 import { Application } from './Application.js'
+import type { Ace } from './console/Ace.js'
+import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
+import { type CommandClass, isCommandClass } from './console/types.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
 import { loadEnvFiles } from './env/loadEnvFiles.js'
+import { prettyPrintError } from './errors/prettyPrintError.js'
 import { ReamError } from './errors/ReamError.js'
 import type { Emitter } from './events/Emitter.js'
 import type { ShutdownHandle } from './GracefulShutdown.js'
@@ -59,6 +63,12 @@ export interface ReamrcConfig {
       }
   >
   commands?: Array<() => Promise<unknown>>
+  /**
+   * Command shorthands — Ace's `commandsAliases`. The value is the command the
+   * alias stands for, flags included:
+   *   `{ resource: 'make:controller --resource' }`
+   */
+  commandsAliases?: Record<string, string>
   modules?: {
     /** Path to the modules directory (relative to app root). Default: './app/modules' */
     path?: string
@@ -200,6 +210,7 @@ export class Ignitor {
   private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
   private hotReloadCleanup?: () => void
   #shutdownHandle?: ShutdownHandle
+  #ace?: Ace
 
   // Inline configuration (for simple use or testing)
   private inlineRoutes?: (router: Router) => void
@@ -377,6 +388,12 @@ export class Ignitor {
       await this.phaseRegister()
       await this.phaseBoot()
       await this.phaseStart()
+      // Ace documents its `ace` service as available once the application has
+      // booted, so the locator is installed here rather than on first use —
+      // `import ace from '@c9up/ream/services/ace'` must not throw in a running
+      // app. Only the façade is built (three small modules); loading the
+      // commands themselves stays lazy, inside `ace.boot()`.
+      await this.ace()
       await this.phaseReady()
     } catch (err) {
       // A throw mid-boot (e.g. a provider ready() failing AFTER the HTTP port
@@ -701,6 +718,20 @@ export class Ignitor {
    */
   async stop(): Promise<void> {
     const errors: unknown[] = []
+
+    // Release the ace locator first — ownership-guarded, so a second Ignitor
+    // having rebound it is left alone.
+    if (this.#ace !== undefined) {
+      const ace = this.#ace
+      this.#ace = undefined
+      try {
+        const { clearAce } = await import('./services/ace.js')
+        clearAce(ace)
+      } catch {
+        /* the module never loaded — nothing to clear */
+      }
+    }
+
     const attempt = async (step: () => void | Promise<void>): Promise<void> => {
       try {
         await step()
@@ -747,6 +778,51 @@ export class Ignitor {
 
   getApp(): Application {
     return this.app
+  }
+
+  /**
+   * The application root passed to `new Ignitor(new URL('../', import.meta.url))`.
+   * Undefined for inline/test ignitors created without one.
+   */
+  getAppRoot(): URL | undefined {
+    return this.appRoot
+  }
+
+  /** Has the application already been started? */
+  isStarted(): boolean {
+    return this.phase === 'started' || this.phase === 'ready'
+  }
+
+  /**
+   * The `ace` façade — the programmatic console (Ace's `ace` service).
+   *
+   * Built on demand: the console modules are only imported when something
+   * actually reaches for them, so an HTTP-only boot does not pay for the CLI.
+   */
+  async ace(): Promise<Ace> {
+    if (this.#ace !== undefined) return this.#ace
+
+    const [{ Ace }, { setAce }] = await Promise.all([
+      import('./console/Ace.js'),
+      import('./services/ace.js'),
+    ])
+    const { kernel, load } = await new ConsoleKernel(this).build()
+    const ace = new Ace({ kernel, load })
+
+    this.#ace = ace
+    setAce(ace)
+    this.app.container.singleton('ace', () => ace)
+    return ace
+  }
+
+  /** The loaded rc file, if `useRcFile()` was called. */
+  getRcFile(): ReamrcConfig | undefined {
+    return this.reamrc
+  }
+
+  /** The custom module importer, when the app provided one. */
+  getImporter(): ((filePath: string) => Promise<unknown>) | undefined {
+    return this.config.importer
   }
 
   getRouter(): Router {
@@ -810,65 +886,221 @@ export class Ignitor {
   }
 }
 
-/**
- * Pretty-print an error (like AdonisJS prettyPrintError).
- */
-export function prettyPrintError(error: unknown): void {
-  if (error instanceof ReamError) {
-    console.error(error.toDevString())
-  } else if (error instanceof Error) {
-    console.error(`\n  ${error.message}\n`)
-    if (error.stack) console.error(error.stack)
-  } else {
-    console.error(error)
-  }
-}
+export { prettyPrintError }
 
 /**
- * ConsoleKernel — handles CLI command dispatching.
- * Like AdonisJS: new Ignitor(...).console().handle(process.argv.splice(2))
+ * ConsoleKernel — boots the app in console mode and dispatches a command.
+ *
+ * Ace parity: `new Ignitor(...).console().handle(process.argv.slice(2))`.
+ *
+ * Commands come from two places, as in Ace:
+ *   1. the app's own `commands/` directory, discovered automatically;
+ *   2. `reamrc.commands[]`, which registers commands shipped by packages.
+ *
+ * The application is booted lazily — only for a command declaring
+ * `options.startApp`. A generator has no reason to open a database
+ * connection, and paying the boot cost on every `--help` is worse than
+ * pointless: it fails on a machine where the DB is simply not running.
  */
 export class ConsoleKernel {
-  private ignitor: Ignitor
+  #ignitor: Ignitor
+  #started = false
 
   constructor(ignitor: Ignitor) {
-    this.ignitor = ignitor
+    this.#ignitor = ignitor
+  }
+
+  /**
+   * Build the console kernel and the function that fills it.
+   *
+   * Shared by `handle()` (the CLI) and the `ace` façade (programmatic use), so
+   * both see exactly the same commands — discovery plus `reamrc.commands` —
+   * instead of two loaders drifting apart.
+   */
+  async build(): Promise<{ kernel: ConsoleKernelInstance; load: () => Promise<void> }> {
+    const { Kernel } = await import('./console/Kernel.js')
+
+    const kernel = new Kernel({
+      binaryName: 'ream',
+      // A `staysAlive` command ends itself through `this.terminate()`; the
+      // kernel deliberately does not tear the app down for those.
+      onTerminate: async () => {
+        if (this.#started) await this.#ignitor.stop()
+      },
+      startApp: async () => {
+        // The façade can be used from an already-running application; starting
+        // it a second time would re-register providers.
+        if (!this.#ignitor.isStarted()) {
+          await this.#ignitor.start()
+          this.#started = true
+        }
+        const app = this.#ignitor.getApp()
+        app.container.singleton('console', () => kernel)
+        return app
+      },
+    })
+
+    // Discovery is registered as a LOADER, not run beside the kernel: `boot()`
+    // is then the single moment commands come in, whether they were found on
+    // disk, declared in the rc file, or added by an application's own loader.
+    kernel.addLoader(this.#commandLoader(kernel))
+
+    const load = async (): Promise<void> => {
+      const aliases = this.#ignitor.getRcFile()?.commandsAliases
+      if (aliases !== undefined) {
+        for (const [alias, expansion] of Object.entries(aliases)) {
+          kernel.addAlias(alias, expansion)
+        }
+      }
+      await kernel.boot()
+    }
+
+    return { kernel, load }
   }
 
   async handle(argv: string[]): Promise<void> {
-    await this.ignitor.start()
-    const { CommandRunner } = await import('./console/CommandRunner.js')
-    const runner = new CommandRunner()
+    const { kernel, load } = await this.build()
+    await load()
 
-    // Auto-register commands from reamrc
-    const reamrc = (this.ignitor as unknown as { reamrc?: ReamrcConfig }).reamrc
-    if (reamrc?.commands) {
-      for (const commandImport of reamrc.commands) {
-        const mod = await commandImport()
-        const cmd = (
-          mod as {
-            default: {
-              name: string
-              description: string
-              run: (args: string[], flags: Record<string, string | boolean>) => Promise<void>
-            }
-          }
-        ).default
-        if (cmd?.name && typeof cmd?.run === 'function') {
-          runner.register(cmd)
-        }
-      }
-    }
-
-    this.ignitor.getApp().container.singleton('console', () => runner)
+    let staysAlive = false
     try {
-      await runner.handle(argv)
+      // `process.execArgv` IS what node was started with — Ace's `nodeArgs`,
+      // which a command reads to know how the process was launched.
+      const result = await kernel.handle(argv, process.execArgv)
+      staysAlive = result.staysAlive
     } finally {
       // A throwing command must still release the Ignitor's resources
       // (scheduler tickers, watchers) — otherwise the CLI process hangs.
-      await this.ignitor.stop()
+      // A `staysAlive` command keeps them on purpose.
+      if (this.#started && !staysAlive) await this.#ignitor.stop()
     }
   }
+
+  /**
+   * The application's commands, as a loader the kernel consumes at boot.
+   *
+   * Two sources, one collection: the `commands/` directory and the rc file's
+   * `commands[]`. Collecting them together is what lets a command listed in
+   * both be reported as the duplicate it is.
+   */
+  #commandLoader(kernel: ConsoleCommandKernel): CommandLoader {
+    const found = new Map<string, CommandClass>()
+
+    return {
+      getMetaData: async () => {
+        await this.#discoverAppCommands(kernel, found)
+        await this.#loadPackageCommands(found)
+        // Imported here, not at the top of the file: the console stack is only
+        // loaded for a console dispatch, and a static import would pull it into
+        // every HTTP boot.
+        const { serializeCommand } = await import('./console/Kernel.js')
+        return [...found.values()].map(serializeCommand)
+      },
+      getCommand: async (metadata) => found.get(metadata.commandName) ?? null,
+    }
+  }
+
+  /**
+   * Load every command in the app's `commands/` directory.
+   *
+   * Tolerant by design: a module that does not default-export a command is
+   * reported and skipped rather than aborting the whole CLI. Discovery scans a
+   * conventional directory, so a stray helper file there must not make
+   * `ream list` unusable. Explicitly declared entries (`reamrc.commands`) are
+   * held to a stricter standard — see {@link #loadPackageCommands}.
+   */
+  async #discoverAppCommands(
+    kernel: ConsoleCommandKernel,
+    found: Map<string, CommandClass>,
+  ): Promise<void> {
+    const root = this.#ignitor.getAppRoot()
+    if (root === undefined) return
+
+    // The framework's own `FsLoader`, with the application's importer plugged
+    // in: scanning a directory for commands is written once, and an app that
+    // compiles its sources differently only replaces the import.
+    const { FsLoader } = await import('./console/loaders.js')
+    const importModule = (file: URL): Promise<unknown> => this.#importModule(file)
+
+    const loader = new (class extends FsLoader {
+      protected override import(file: URL): Promise<unknown> {
+        return importModule(file)
+      }
+    })(new URL('commands/', root)).onSkipped((fileName) => {
+      // Tolerant by design: discovery scans a conventional directory, so a
+      // stray helper there must not make `ream list` unusable.
+      kernel.logger.warning(`Skipped ${fileName} in commands/ — no default-exported command class.`)
+    })
+
+    for (const metadata of await loader.getMetaData()) {
+      const command = await loader.getCommand(metadata)
+      if (command !== null) found.set(command.commandName, command)
+    }
+  }
+
+  /**
+   * Register commands declared in `reamrc.commands[]` — the channel for
+   * commands shipped by packages, which discovery cannot see.
+   *
+   * Strict: an entry listed by hand that does not resolve to a command is a
+   * configuration error, and silently ignoring it is how a command "disappears"
+   * with no explanation.
+   */
+  async #loadPackageCommands(found: Map<string, CommandClass>): Promise<void> {
+    const declared = this.#ignitor.getRcFile()?.commands
+    if (!declared) return
+
+    for (const entry of declared) {
+      const command = commandOf(await entry())
+      if (command === undefined) {
+        throw new ReamError(
+          'E_CONSOLE_INVALID_COMMAND',
+          'An entry of reamrc.ts `commands` does not default-export a command class.',
+          {
+            hint: 'Expected `export default class X { static commandName = "..."; static description = "..."; run() {} }`.',
+          },
+        )
+      }
+
+      // The most likely duplicate after the move to auto-discovery: a command
+      // living in `commands/` AND still listed by hand. Say so, rather than
+      // leaving the user to guess which two registrations collided.
+      const existing = found.get(command.commandName)
+      if (existing !== undefined && existing !== command) {
+        throw new ReamError(
+          'E_CONSOLE_DUPLICATE_COMMAND',
+          `Two commands claim the name "${command.commandName}".`,
+          {
+            hint: 'Commands in commands/ are discovered automatically — remove this entry from reamrc.ts `commands`, which is only for commands shipped by packages.',
+          },
+        )
+      }
+      found.set(command.commandName, command)
+    }
+  }
+
+  /** Honour the app's custom importer when it provided one. */
+  async #importModule(file: URL): Promise<unknown> {
+    const importer = this.#ignitor.getImporter()
+    if (importer === undefined) return import(file.href)
+
+    const root = this.#ignitor.getAppRoot()
+    const relative = root === undefined ? file.href : `./${file.href.slice(root.href.length)}`
+    return importer(relative)
+  }
+}
+
+/** The slice of the console kernel this class drives. */
+interface ConsoleCommandKernel {
+  addAlias(alias: string, expansion: string): unknown
+  logger: { warning(message: string): void }
+}
+
+/** The command a module default-exports, or undefined when it exports none. */
+function commandOf(mod: unknown): CommandClass | undefined {
+  if (typeof mod !== 'object' || mod === null) return undefined
+  const value = Reflect.get(mod, 'default')
+  return isCommandClass(value) ? value : undefined
 }
 
 async function findAvailablePort(desired: number): Promise<number> {

@@ -20,7 +20,7 @@ import {
 } from '@c9up/comet'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
-import { compose } from '../middleware/Pipeline.js'
+import { compose, runValidator } from '../middleware/Pipeline.js'
 
 export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown> | unknown
 
@@ -286,18 +286,21 @@ export class RpcRouter {
           )
         }
         const validator = await this.#container.resolve<RuntimeValidator>(token)
-        // `validateResult` first: rune's `validate()` is the VineJS contract
-        // (async, throwing), and reading `.valid` off a Promise is `undefined`,
-        // which would wave every payload through as invalid.
-        const check = validator.validateResult ?? validator.validate
-        if (typeof check !== 'function') {
+        // `runValidator` picks the async result form first — the synchronous
+        // one cannot run `unique` / `exists` and throws outright when the schema
+        // carries them.
+        let outcome: Awaited<ReturnType<typeof runValidator>>
+        try {
+          outcome = await runValidator(validator, params)
+        } catch (err) {
           return rpcError(
             -32603,
-            `Validator '${def.validator}' exposes neither validateResult() nor validate().`,
+            err instanceof TypeError
+              ? `Validator '${def.validator}' exposes no usable validate method.`
+              : `Validator '${def.validator}' failed: ${err instanceof Error ? err.message : String(err)}`,
             id,
           )
         }
-        const outcome = check.call(validator, params)
         if (!outcome.valid) return rpcError(-32602, 'Invalid params', id, outcome.errors)
         effectiveParams = outcome.data ?? params
       }

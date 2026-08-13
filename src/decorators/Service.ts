@@ -51,11 +51,23 @@ export function Service(options: { scope?: ServiceScope; as?: string } = {}): Cl
  * @implements FR16
  */
 export function Inject(token: ServiceToken): ParameterDecorator {
-  return (target, _propertyKey, parameterIndex) => {
+  return (target, propertyKey, parameterIndex) => {
+    // A constructor parameter reports no property key and lands on the class;
+    // a method parameter lands on the prototype and MUST be keyed by method
+    // name, or every method of the class would share one map and overwrite
+    // each other's tokens.
     const existingTokens: Map<number, ServiceToken> =
-      Reflect.getOwnMetadata(INJECT_METADATA_KEY, target) ?? new Map()
+      (propertyKey === undefined
+        ? Reflect.getOwnMetadata(INJECT_METADATA_KEY, target)
+        : Reflect.getOwnMetadata(INJECT_METADATA_KEY, target, propertyKey)) ?? new Map()
+
     existingTokens.set(parameterIndex, token)
-    Reflect.defineMetadata(INJECT_METADATA_KEY, existingTokens, target)
+
+    if (propertyKey === undefined) {
+      Reflect.defineMetadata(INJECT_METADATA_KEY, existingTokens, target)
+    } else {
+      Reflect.defineMetadata(INJECT_METADATA_KEY, existingTokens, target, propertyKey)
+    }
   }
 }
 
@@ -64,6 +76,19 @@ export function Inject(token: ServiceToken): ParameterDecorator {
  */
 export function getInjectTokens(target: AnyConstructor): Map<number, ServiceToken> {
   return Reflect.getOwnMetadata(INJECT_METADATA_KEY, target) ?? new Map()
+}
+
+/**
+ * Get named injection tokens for one method's parameters.
+ *
+ * `target` is the prototype carrying the method — that is where a parameter
+ * decorator on a method writes.
+ */
+export function getMethodInjectTokens(
+  target: object,
+  propertyKey: string | symbol,
+): Map<number, ServiceToken> {
+  return Reflect.getOwnMetadata(INJECT_METADATA_KEY, target, propertyKey) ?? new Map()
 }
 
 /**

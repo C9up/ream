@@ -24,7 +24,7 @@ export type GetterFn = () => unknown
 export class Macroable {
   /** Attach a method to every instance of this class (AdonisJS `macro`). */
   static macro(name: string, fn: MacroFn): void {
-    Object.defineProperty(this.prototype, name, {
+    Object.defineProperty(Macroable.prototype, name, {
       value: fn,
       writable: true,
       configurable: true,
@@ -37,11 +37,11 @@ export class Macroable {
    */
   static getter(name: string, fn: GetterFn, singleton = false): void {
     if (!singleton) {
-      Object.defineProperty(this.prototype, name, { get: fn, configurable: true })
+      Object.defineProperty(Macroable.prototype, name, { get: fn, configurable: true })
       return
     }
     const cacheKey = Symbol(name)
-    Object.defineProperty(this.prototype, name, {
+    Object.defineProperty(Macroable.prototype, name, {
       configurable: true,
       get(this: Record<symbol, unknown>) {
         if (!(cacheKey in this)) {

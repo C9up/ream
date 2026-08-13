@@ -1,7 +1,13 @@
 {
 	"root": true,
 	"$schema": "https://biomejs.dev/schemas/2.4.10/schema.json",
-	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {
@@ -51,5 +57,19 @@
 			"!**/vitest.config.ts",
 			"!**/scripts/**"
 		]
-	}
+	},
+	"overrides": [
+		{
+			"includes": [
+				"src/console/BaseCommand.ts"
+			],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noThisInStatic": "off"
+					}
+				}
+			}
+		}
+	]
 }

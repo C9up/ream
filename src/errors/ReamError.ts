@@ -7,6 +7,37 @@
  * @implements FR71, FR72, FR73, FR77
  */
 
+/**
+ * Is this a Ream error, and one of these codes?
+ *
+ * The framework carries ONE error type with a `code`, because an error can be
+ * raised in Rust and rebuilt in TypeScript across the NAPI boundary — see
+ * {@link ReamError.fromNapi}. A class per code cannot cross that line, so the
+ * check that replaces `instanceof MyError` is this one.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await ace.exec('provision')
+ * } catch (error) {
+ *   if (isReamError(error, 'E_CONSOLE_MISSING_FLAG', 'E_CONSOLE_MISSING_ARGUMENT')) {
+ *     console.error(error.hint)   // narrowed: `error` IS a ReamError here
+ *     return
+ *   }
+ *   throw error
+ * }
+ * ```
+ */
+export function isReamError(error: unknown): error is ReamError
+export function isReamError<const Code extends string>(
+  error: unknown,
+  ...codes: [Code, ...Code[]]
+): error is ReamError & { code: Code }
+export function isReamError(error: unknown, ...codes: string[]): boolean {
+  if (!(error instanceof ReamError)) return false
+  return codes.length === 0 || codes.includes(error.code)
+}
+
 export class ReamError extends Error {
   /** Error code (e.g., "ATLAS_QUERY_ERROR", "CONTAINER_NOT_FOUND") */
   readonly code: string

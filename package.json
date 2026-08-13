@@ -11,6 +11,14 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./ace": {
+      "types": "./src/console/index.ts",
+      "import": "./src/console/index.ts"
+    },
+    "./services/ace": {
+      "types": "./src/services/ace.ts",
+      "import": "./src/services/ace.ts"
+    },
     "./services/app": {
       "types": "./src/services/app.ts",
       "import": "./src/services/app.ts"
@@ -139,7 +147,8 @@
     "test:rust": "cargo test --all",
     "lint": "biome check src/",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:console-tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "etag": "^1.8.1",
@@ -187,6 +196,14 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
+      },
+      "./ace": {
+        "types": "./dist/console/index.d.ts",
+        "import": "./dist/console/index.js"
+      },
+      "./services/ace": {
+        "types": "./dist/services/ace.d.ts",
+        "import": "./dist/services/ace.js"
       },
       "./services/app": {
         "types": "./dist/services/app.d.ts",

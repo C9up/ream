@@ -29,18 +29,75 @@ export interface RuntimeValidationResult {
 
 /**
  * Structural contract for a route validator. ream stays decoupled from the
- * validation engine — any object exposing a never-throwing, result-returning
- * check works.
+ * validation engine — any object exposing a result-returning check works.
  *
- * Two spellings are accepted because `@c9up/rune` reserves `validate()` for the
- * VineJS contract (async, throwing) and names its result-based form
- * `validateResult()`. `validateResult` is preferred when both exist: reading a
- * `{ valid }` off a Promise yields `undefined`, i.e. a request that silently
- * fails validation.
+ * Three spellings are accepted because `@c9up/rune` follows VineJS: `validate()`
+ * is async and throws, `validateResult()` is synchronous and never throws, and
+ * `validateResultAsync()` is the async result-based form.
+ *
+ * `validateResultAsync` is preferred. The synchronous `validateResult()` cannot
+ * run async rules — with `unique`, `exists` or `useAsync` in the schema it
+ * throws a plain Error, which would surface as a 500 instead of a 422.
  */
 export interface RuntimeValidator {
-  validate?(data: unknown): RuntimeValidationResult
+  validate?(data: unknown): RuntimeValidationResult | Promise<unknown>
   validateResult?(data: unknown): RuntimeValidationResult
+  validateResultAsync?(data: unknown): Promise<RuntimeValidationResult>
+}
+
+/** A thrown validation failure, as raised by rune/VineJS `validate()`. */
+interface ThrownValidationFailure {
+  messages: unknown[]
+}
+
+function isThrownValidationFailure(value: unknown): value is ThrownValidationFailure {
+  return (
+    value instanceof Error && 'messages' in value && Array.isArray(Reflect.get(value, 'messages'))
+  )
+}
+
+function isValidationResult(value: unknown): value is RuntimeValidationResult {
+  return typeof value === 'object' && value !== null && 'valid' in value
+}
+
+/**
+ * Run a validator whatever contract it exposes, and always come back with a
+ * result object.
+ *
+ * Order matters: the async result form first (it is the only one that can run
+ * `unique` / `exists`), then the synchronous one, then VineJS's throwing
+ * `validate()` — awaited, and with its `E_VALIDATION_ERROR` translated back
+ * into a result so callers keep a single shape to handle.
+ */
+export async function runValidator(
+  validator: RuntimeValidator,
+  data: unknown,
+): Promise<RuntimeValidationResult> {
+  if (typeof validator.validateResultAsync === 'function') {
+    return validator.validateResultAsync(data)
+  }
+
+  if (typeof validator.validateResult === 'function') {
+    return validator.validateResult(data)
+  }
+
+  if (typeof validator.validate === 'function') {
+    try {
+      const outcome = await validator.validate(data)
+      // A result-returning `validate()` (not the VineJS contract) is honoured
+      // as-is; the throwing contract resolves to the validated payload.
+      return isValidationResult(outcome) ? outcome : { valid: true, errors: [], data: outcome }
+    } catch (err) {
+      if (isThrownValidationFailure(err)) {
+        return { valid: false, errors: err.messages }
+      }
+      throw err
+    }
+  }
+
+  throw new TypeError(
+    'Route validator exposes none of validateResultAsync(), validateResult() or validate().',
+  )
 }
 
 /** Named middleware registry. */
@@ -188,13 +245,7 @@ function createGuardMiddleware(
 function createValidationMiddleware(validators: RuntimeValidator[]): MiddlewareFunction {
   return async (ctx, next) => {
     for (const validator of validators) {
-      const check = validator.validateResult ?? validator.validate
-      if (typeof check !== 'function') {
-        throw new TypeError(
-          'Route validator exposes neither validateResult() nor validate().'
-        )
-      }
-      const result = check.call(validator, ctx.request.body())
+      const result = await runValidator(validator, ctx.request.body())
       if (!result.valid) {
         throw new E_VALIDATION_ERROR(result.errors)
       }

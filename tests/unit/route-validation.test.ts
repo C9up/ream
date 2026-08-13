@@ -98,3 +98,102 @@ describe('route .validate() — runtime validation', () => {
     expect(String(errors[0])).toContain('E_VALIDATOR_NOT_FOUND')
   })
 })
+
+describe('route .validate() — async validator contracts', () => {
+  /**
+   * The contract rune actually exposes. `validateResult()` is synchronous and
+   * THROWS when the schema carries async rules (unique/exists/useAsync), which
+   * is how a 422 used to surface as a 500 — so it must not be the one picked
+   * when the async form exists.
+   */
+  const asyncValidator = {
+    validateResult() {
+      throw new Error(
+        'rune: this schema has async rules (unique/exists/useAsync) — call validateResultAsync() instead of validate().',
+      )
+    },
+    async validateResultAsync(data: unknown) {
+      if (hasStringName(data) && data.name !== 'taken') {
+        return { valid: true, errors: [], data: { name: data.name.trim() } }
+      }
+      return {
+        valid: false,
+        errors: [{ field: 'name', rule: 'unique', message: 'name is already taken' }],
+      }
+    },
+  }
+
+  it('runs a schema carrying async rules instead of failing with a 500', async () => {
+    const container = new Container()
+    container.singleton('validator:createUser', () => asyncValidator)
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+    let seen: unknown
+
+    router
+      .post('/users', async (ctx) => {
+        seen = ctx.request.validated()
+        ctx.response.json({ ok: true })
+      })
+      .validate('createUser')
+
+    const kernel = createHttpKernel({ router, middleware, container })
+    const res = await postJson(kernel, '/users', { name: '  Ada  ' })
+
+    expect(res.status).toBe(200)
+    expect(seen).toEqual({ name: 'Ada' })
+  })
+
+  it('reports an async rule failure as 422, not 500', async () => {
+    const container = new Container()
+    container.singleton('validator:createUser', () => asyncValidator)
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+
+    router.post('/users', async () => {}).validate('createUser')
+
+    const kernel = createHttpKernel({ router, middleware, container })
+    const res = await postJson(kernel, '/users', { name: 'taken' })
+
+    expect(res.status).toBe(422)
+    expect(JSON.parse(res.body).errors[0].rule).toBe('unique')
+  })
+
+  it('translates a throwing VineJS-style validate() into a 422', async () => {
+    // VineJS's `validate()` resolves to the validated payload and throws
+    // E_VALIDATION_ERROR carrying `messages` — the only contract a plain
+    // `@vinejs/vine` validator exposes.
+    class ValidationFailure extends Error {
+      readonly messages = [{ field: 'name', rule: 'required', message: 'name is required' }]
+    }
+    const vineStyle = {
+      async validate(data: unknown) {
+        if (!hasStringName(data) || data.name.length === 0) throw new ValidationFailure()
+        return { name: data.name }
+      },
+    }
+
+    const container = new Container()
+    container.singleton('validator:createUser', () => vineStyle)
+    const router = new Router()
+    const middleware = new MiddlewareRegistry()
+    let seen: unknown
+
+    router
+      .post('/users', async (ctx) => {
+        seen = ctx.request.validated()
+        ctx.response.json({ ok: true })
+      })
+      .validate('createUser')
+
+    const kernel = createHttpKernel({ router, middleware, container })
+
+    const ok = await postJson(kernel, '/users', { name: 'Ada' })
+    expect(ok.status).toBe(200)
+    expect(seen).toEqual({ name: 'Ada' })
+
+    const ko = await postJson(kernel, '/users', { name: '' })
+    expect(ko.status).toBe(422)
+    expect(JSON.parse(ko.body).errors[0].field).toBe('name')
+  })
+})

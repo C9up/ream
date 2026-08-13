@@ -11,7 +11,12 @@
 
 import 'reflect-metadata'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { getInjectTokens, getServiceMetadata, getServiceRegistry } from '../decorators/Service.js'
+import {
+  getInjectTokens,
+  getMethodInjectTokens,
+  getServiceMetadata,
+  getServiceRegistry,
+} from '../decorators/Service.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
 import type { Binding, ServiceFactory, ServiceToken } from './types.js'
@@ -220,14 +225,27 @@ export class Container {
     const target: Ctor = Object.getPrototypeOf(instance).constructor
     const paramTypes: unknown[] =
       Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
+    // `@Inject('token')` on a method parameter — a named binding the reflected
+    // type cannot express (an interface, or a class registered under a name).
+    const injectTokens = getMethodInjectTokens(target.prototype, method)
 
-    const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0)
+    // `@Inject` counts towards the parameter span too: a method may carry named
+    // tokens without `design:paramtypes` being emitted for it, and computing the
+    // span from the reflected types alone left the loop at zero iterations —
+    // the tokens were read and then never used.
+    const injectSpan = injectTokens.size === 0 ? 0 : Math.max(...injectTokens.keys()) + 1
+    const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0, injectSpan)
     // Sequential resolution keeps the shared cycle-detection stack consistent.
     const args: unknown[] = []
     for (let index = 0; index < len; index += 1) {
       // Runtime values take precedence (and fill slots beyond paramTypes).
       if (runtimeValues && index < runtimeValues.length) {
         args.push(runtimeValues[index])
+        continue
+      }
+      const named = injectTokens.get(index)
+      if (named !== undefined) {
+        args.push(await this.resolve(named))
         continue
       }
       const type = paramTypes[index]

@@ -169,8 +169,27 @@ export { resolveMiddlewareEntry, Server } from './server/Server.js'
 
 // ─── Ignitor ────────────────────────────────────────────────
 
-export type { Command } from './console/CommandRunner.js'
-export { CommandRunner } from './console/CommandRunner.js'
+export { BaseCommand } from './console/BaseCommand.js'
+export { Logger, Ui } from './console/cliui.js'
+export { args, flags } from './console/decorators.js'
+// Renamed at the root: Ream already exports an HTTP `ExceptionHandler`, and
+// two different things under one name is worse than a longer one. It keeps its
+// Ace name on the console entry point.
+export { ExceptionHandler as ConsoleExceptionHandler } from './console/ExceptionHandler.js'
+export { default as HelpCommand } from './console/HelpCommand.js'
+export { IndexGenerator } from './console/IndexGenerator.js'
+export { Kernel } from './console/Kernel.js'
+export { default as ListCommand } from './console/ListCommand.js'
+export { FsLoader, ListLoader } from './console/loaders.js'
+export { Parser } from './console/parser.js'
+export { Prompt, PromptTrap } from './console/prompts.js'
+export type {
+  ArgumentMetaData,
+  CommandClass,
+  CommandInstance,
+  CommandOptions,
+  FlagMetaData,
+} from './console/types.js'
 export type {
   AppEnvironment,
   HyperServerLike,
@@ -212,7 +231,7 @@ export {
   PIPELINE_STAGES,
   validatePipelineConfig,
 } from './errors/PipelineStageError.js'
-export { ReamError } from './errors/ReamError.js'
+export { isReamError, ReamError } from './errors/ReamError.js'
 
 // ─── Utilities ──────────────────────────────────────────────
 
