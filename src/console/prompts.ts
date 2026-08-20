@@ -10,7 +10,7 @@
  */
 
 import { stdin, stdout } from 'node:process'
-import { createInterface } from 'node:readline'
+import { clearLine, createInterface, cursorTo } from 'node:readline'
 import { ReamError } from '../errors/ReamError.js'
 import { colourise } from './ui.js'
 
@@ -513,10 +513,18 @@ export class Prompt {
     const rl = createInterface({ input: stdin, output: stdout, terminal: true })
 
     // readline echoes each keystroke through _writeToOutput; replacing it is
-    // the dependency-free way to hide what is typed.
+    // the dependency-free way to control what is shown. One asterisk per
+    // character typed — enquirer's `password` prompt, which is what Ace's
+    // secure() maps to; showing nothing at all is its `invisible` prompt, and
+    // leaves the user unsure the keystroke registered.
+    //
+    // The whole line is redrawn from `rl.line` rather than echoing per
+    // keystroke, so a backspace removes an asterisk instead of adding one.
     if (masked && isEchoing(rl)) {
-      rl._writeToOutput = (text: string): void => {
-        stdout.write(text.includes(query) ? query : '')
+      rl._writeToOutput = (): void => {
+        cursorTo(stdout, 0)
+        clearLine(stdout, 0)
+        stdout.write(query + '*'.repeat(rl.line.length))
       }
     }
 
