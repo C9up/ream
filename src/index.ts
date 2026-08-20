@@ -54,6 +54,12 @@ export { type GetterFn, Macroable, type MacroFn } from './utils/Macroable.js'
 
 export { CookieDriver as SessionCookieDriver } from './session/drivers/CookieDriver.js'
 export { MemoryDriver as SessionMemoryDriver } from './session/drivers/MemoryDriver.js'
+export type {
+  RedisSessionOptions,
+  SessionRedisClient,
+  SessionRedisClientSource,
+} from './session/drivers/RedisDriver.js'
+export { RedisDriver as SessionRedisDriver } from './session/drivers/RedisDriver.js'
 export type { SessionConfig, SessionDriver } from './session/Session.js'
 export { Session } from './session/Session.js'
 export { default as SessionMiddleware } from './session/SessionMiddleware.js'

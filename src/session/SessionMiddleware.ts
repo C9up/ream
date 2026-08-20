@@ -9,6 +9,8 @@ import { randomBytes } from 'node:crypto'
 import type { HttpContext } from '../http/HttpContext.js'
 import { CookieDriver } from './drivers/CookieDriver.js'
 import { MemoryDriver } from './drivers/MemoryDriver.js'
+import { RedisDriver } from './drivers/RedisDriver.js'
+import { quasarConnection } from './quasar.js'
 import type { SessionConfig, SessionDriver } from './Session.js'
 import { Session } from './Session.js'
 
@@ -44,6 +46,12 @@ export default class SessionMiddleware {
       this.#driver = this.#cookieDriver
     } else if (this.#config.driver === 'memory') {
       this.#driver = new MemoryDriver()
+    } else if (this.#config.driver === 'redis') {
+      // Either the app hands a client in, or it names a quasar connection —
+      // the same choice echo, bay and warden offer. Nothing is dialled here:
+      // the driver resolves on the first request that reads a session.
+      const source = config?.client ?? quasarConnection(config?.connection)
+      this.#driver = new RedisDriver(source, { prefix: config?.prefix })
     } else {
       throw new Error(`Unknown session driver: ${this.#config.driver}`)
     }

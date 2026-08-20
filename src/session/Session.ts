@@ -10,6 +10,8 @@
  * Backed by pluggable drivers (cookie, memory, redis).
  */
 
+import type { SessionRedisClientSource } from './drivers/RedisDriver.js'
+
 export interface SessionDriver {
   read(sessionId: string): Promise<Record<string, unknown>>
   write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void>
@@ -30,6 +32,19 @@ export interface SessionConfig {
    * behaviour. Express-session and AdonisJS expose the same toggle.
    */
   rolling?: boolean
+  /**
+   * `redis` driver only — the quasar connection to store sessions on. Left
+   * unset, the default connection is used.
+   */
+  connection?: string
+  /**
+   * `redis` driver only — a client to use instead of resolving one through
+   * quasar. Anything carrying get/set/del/expire satisfies it, so an app can
+   * share the client it already has.
+   */
+  client?: SessionRedisClientSource
+  /** `redis` driver only — key prefix. Defaults to `ream:session:`. */
+  prefix?: string
 }
 
 /**
