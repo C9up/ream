@@ -17,7 +17,6 @@
  *   await client.close()
  */
 
-import type { Plugin } from '@c9up/helix'
 import type { Dict } from '../types/helpers.js'
 import {
   type AuthStrategy,
@@ -190,54 +189,6 @@ export async function createTestClient(
   const client = new TestClient(bootFn, options)
   await client.boot()
   return client
-}
-
-/** Configuration for the {@link apiClient} helix plugin. */
-export interface ApiClientConfig {
-  /** Boot the app under test on the given port; return the port + a close fn. */
-  boot: (port: number) => Promise<{ port: number; close: () => Promise<void> | void }>
-  /** Warden auth strategy for `client.withAuth()`/`asUser()`. */
-  auth?: AuthStrategy
-  /** Named-route manifest (`router.namedManifest()`) for `client.visit()`. */
-  routes?: RouteManifest
-}
-
-/**
- * `apiClient()` — a helix plugin (Japa `@japa/api-client` parity) that injects a
- * booted {@link TestClient} on the test context as `ctx.client`:
- *
- *   // tests/bootstrap.ts
- *   import { configure } from '@c9up/helix'
- *   import { apiClient } from '@c9up/ream/testing'
- *   await configure({ plugins: [apiClient({ boot: () => bootApp() })] })
- *
- *   // a test
- *   test('health', async ({ client }) => {
- *     await client.get('/health').assertOk()
- *   })
- *
- * The server is booted once at `configure()` time, shared across the run, and
- * closed via `api.cleanup` after the run finishes (proper lifecycle — no
- * reliance on process exit).
- */
-export function apiClient(config: ApiClientConfig): Plugin {
-  return async (api) => {
-    const client = new TestClient(config.boot, {
-      auth: config.auth,
-      routes: config.routes,
-    })
-    await client.boot()
-    api.context.macro('client', client)
-    api.cleanup(() => client.close())
-  }
-}
-
-// Typing side of the plugin — importing `@c9up/ream/testing` augments the helix
-// test context with `client` (the Japa pattern).
-declare module '@c9up/helix' {
-  interface TestContext {
-    client: TestClient
-  }
 }
 
 export {

@@ -1,7 +1,7 @@
 {
   "name": "@c9up/ream",
   "version": "0.1.27",
-  "description": "Ream \u2014 Rust-powered Node.js application framework",
+  "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -14,6 +14,10 @@
     "./console": {
       "types": "./src/console/index.ts",
       "import": "./src/console/index.ts"
+    },
+    "./env": {
+      "types": "./src/env/loadEnvFiles.ts",
+      "import": "./src/env/loadEnvFiles.ts"
     },
     "./services/console": {
       "types": "./src/services/console.ts",
@@ -62,10 +66,6 @@
     "./testing": {
       "types": "./src/testing/TestClient.ts",
       "import": "./src/testing/TestClient.ts"
-    },
-    "./test-runner": {
-      "types": "./src/testing/runTests.ts",
-      "import": "./src/testing/runTests.ts"
     },
     "./bootstrap": {
       "types": "./src/bootstrap/hyper-server.ts",
@@ -157,21 +157,16 @@
     "reflect-metadata": "^0.2"
   },
   "peerDependencies": {
-    "@c9up/comet": "^0.1.0",
-    "@c9up/helix": "^0.1.0"
+    "@c9up/comet": "^0.1.0"
   },
   "peerDependenciesMeta": {
     "@c9up/comet": {
-      "optional": true
-    },
-    "@c9up/helix": {
       "optional": true
     }
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
     "@c9up/comet": "^0.1.0",
-    "@c9up/helix": "^0.1.0",
     "@types/etag": "^1.8.4",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^22.19.15",
@@ -200,6 +195,10 @@
       "./console": {
         "types": "./dist/console/index.d.ts",
         "import": "./dist/console/index.js"
+      },
+      "./env": {
+        "types": "./dist/env/loadEnvFiles.d.ts",
+        "import": "./dist/env/loadEnvFiles.js"
       },
       "./services/console": {
         "types": "./dist/services/console.d.ts",
@@ -300,10 +299,6 @@
       "./testing": {
         "types": "./dist/testing/TestClient.d.ts",
         "import": "./dist/testing/TestClient.js"
-      },
-      "./test-runner": {
-        "types": "./dist/testing/runTests.d.ts",
-        "import": "./dist/testing/runTests.js"
       },
       "./bootstrap": {
         "types": "./dist/bootstrap/hyper-server.d.ts",
