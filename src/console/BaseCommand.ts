@@ -1,5 +1,5 @@
 /**
- * BaseCommand — the class application commands extend (Ace parity).
+ * BaseCommand — the class application commands extend (Console parity).
  *
  * Everything the kernel needs sits on the STATIC side (`commandName`,
  * `description`, `options`, and the `args` / `flags` metadata written by the
@@ -50,7 +50,7 @@ export abstract class BaseCommand {
   static description = ''
 
   /**
-   * Alternative names this command answers to (Ace `static aliases`). Unlike
+   * Alternative names this command answers to (Console `static aliases`). Unlike
    * `commandsAliases` in the rc file, these travel with the command itself.
    */
   static aliases: readonly string[] = []
@@ -88,7 +88,7 @@ export abstract class BaseCommand {
   declare app: Application
 
   /**
-   * The kernel that dispatched this command (Ace parity).
+   * The kernel that dispatched this command (Console parity).
    *
    * Assigned for every command, booted app or not: it is the registry, and a
    * command that inspects or lists its siblings — `list` is the built-in
@@ -97,7 +97,7 @@ export abstract class BaseCommand {
   declare kernel: Kernel
 
   /**
-   * Every parsed input, as Ace exposes it: `this.parsed.args` /
+   * Every parsed input, as Console exposes it: `this.parsed.args` /
    * `this.parsed.flags`. The declared ones are also assigned to their
    * properties; this is the whole picture, including flags accepted through
    * `allowUnknownFlags`.
@@ -107,12 +107,12 @@ export abstract class BaseCommand {
   /** Set it to make the process exit non-zero without throwing. */
   exitCode?: number
 
-  /** What `run()` returned — filled by the kernel (Ace `command.result`). */
+  /** What `run()` returned — filled by the kernel (Console `command.result`). */
   result?: unknown
 
   /**
    * The error thrown by `prepare` / `interact` / `run`, assigned before
-   * `completed()` runs so the hook can inspect it (Ace parity).
+   * `completed()` runs so the hook can inspect it (Console parity).
    */
   error?: unknown
 
@@ -129,7 +129,7 @@ export abstract class BaseCommand {
   // lifecycle method), and a no-arg signature rejects those commands.
   prepare?(...args: never[]): void | Promise<void>
   interact?(...args: never[]): void | Promise<void>
-  // biome-ignore lint/suspicious/noConfusingVoidType: Ace contract — returning `true` marks the error handled, returning nothing is the normal case
+  // biome-ignore lint/suspicious/noConfusingVoidType: Console contract — returning `true` marks the error handled, returning nothing is the normal case
   completed?(...args: never[]): boolean | void | Promise<boolean | void>
 
   /**
@@ -146,17 +146,17 @@ export abstract class BaseCommand {
 
   /**
    * Give this class its OWN copy of the inherited static declarations
-   * (Ace `boot`).
+   * (Console `boot`).
    *
    * Without it, `Child.args.push(...)` would append to the array the parent
    * declared, and every command in the hierarchy would share one list. Called
    * by everything that reads or writes those statics, so it is normally
-   * invisible; it is public because ported Ace code calls it directly.
+   * invisible; it is public because ported Console code calls it directly.
    */
   static boot(): void {
     if (Object.hasOwn(this, 'booted') && this.booted === true) return
     this.booted = true
-    // Only the mutable declarations are copied. Ace also re-assigns the scalar
+    // Only the mutable declarations are copied. Console also re-assigns the scalar
     // statics (name, description, help); for a string, an own copy and an
     // inherited one are indistinguishable — the line would read as a bug.
     this.args = [...this.args]
@@ -166,7 +166,7 @@ export abstract class BaseCommand {
   }
 
   /**
-   * Declare an argument without a decorator (Ace `defineArgument`).
+   * Declare an argument without a decorator (Console `defineArgument`).
    *
    * The decorators are the ergonomic form, but a command built at runtime — or
    * one in a package that must not import the framework — needs a plain call.
@@ -178,7 +178,7 @@ export abstract class BaseCommand {
     // and forgotten on the other is a silent divergence, not a compile error.
     const argument = buildArgument(name, options)
 
-    // Ace's two ordering rules, shared with the decorators — see
+    // Console's two ordering rules, shared with the decorators — see
     // `assertArgumentOrder`. They are not pedantry: a spread argument eats the
     // tail, so nothing after it can ever be filled, and a required argument
     // behind an optional one can only be reached by passing the optional one,
@@ -189,7 +189,7 @@ export abstract class BaseCommand {
     this.args = list
   }
 
-  /** Declare a flag without a decorator (Ace `defineFlag`). */
+  /** Declare a flag without a decorator (Console `defineFlag`). */
   static defineFlag(name: string, options: Partial<FlagMetaData> = {}): void {
     this.boot()
     const list: FlagMetaData[] = [...this.flags]
@@ -198,7 +198,7 @@ export abstract class BaseCommand {
   }
 
   /**
-   * The command's metadata as plain data (Ace `serialize`).
+   * The command's metadata as plain data (Console `serialize`).
    *
    * What `ream list --json` and any tooling reads, without having to know how
    * the decorators stored it.
@@ -227,11 +227,11 @@ export abstract class BaseCommand {
   }
 
   /**
-   * How this command's inputs are parsed, grouped by type (Ace
+   * How this command's inputs are parsed, grouped by type (Console
    * `getParserOptions`).
    *
    * Ream's parser reads the declarations directly, so nothing internal calls
-   * this; it exists because Ace code inspects the shape — and it is derived
+   * this; it exists because Console code inspects the shape — and it is derived
    * from the same metadata, so it cannot describe something the parser would
    * not do.
    */
@@ -275,13 +275,13 @@ export abstract class BaseCommand {
   }
 
   /**
-   * Check a parsed input against this command's declarations (Ace `validate`).
+   * Check a parsed input against this command's declarations (Console `validate`).
    *
    * The parser enforces the same rules while parsing, so calling this on its
-   * output always passes. It is here for the case Ace documents: an input built
+   * output always passes. It is here for the case Console documents: an input built
    * by hand, which has never been through a parser.
    *
-   * Positional values are accepted as a list (Ace's shape) or keyed by property
+   * Positional values are accepted as a list (Console's shape) or keyed by property
    * name (what `this.parsed.args` holds), so the same call works from both.
    */
   static validate(parsed: {
@@ -302,7 +302,7 @@ export abstract class BaseCommand {
   }
 
   /**
-   * Assign the parsed values to their properties (Ace `hydrate`).
+   * Assign the parsed values to their properties (Console `hydrate`).
    *
    * Idempotent: the kernel calls it before `run()`, and a ported command may
    * call it again without the values being recomputed.
@@ -327,7 +327,7 @@ export abstract class BaseCommand {
   protected hydrated = false
 
   /**
-   * Hydrate, then run — Ace's instance-level `exec()`.
+   * Hydrate, then run — Console's instance-level `exec()`.
    *
    * Deliberately NOT the kernel's `exec()`: this one runs `run()` alone and
    * rethrows, while the kernel drives the whole lifecycle (`prepare`,
@@ -346,7 +346,7 @@ export abstract class BaseCommand {
     }
   }
 
-  /** The statics, readable from the instance (Ace parity). */
+  /** The statics, readable from the instance (Console parity). */
   get commandName(): string {
     return Object.getPrototypeOf(this).constructor.commandName
   }
@@ -364,7 +364,7 @@ export abstract class BaseCommand {
   }
 
   /**
-   * A snapshot of THIS execution (Ace `toJSON`): what the command received and
+   * A snapshot of THIS execution (Console `toJSON`): what the command received and
    * what it produced.
    *
    * Distinct from the static {@link serialize}, which describes the command's
@@ -382,7 +382,7 @@ export abstract class BaseCommand {
     return {
       commandName: meta.commandName,
       options: meta.options,
-      // Positional VALUES as a list (Ace's shape); flags stay keyed.
+      // Positional VALUES as a list (Console's shape); flags stay keyed.
       args: [...(this.parsed?.args ?? [])],
       flags: this.parsed?.flags ?? {},
       error: this.error,
@@ -393,13 +393,13 @@ export abstract class BaseCommand {
 
   /**
    * Was this command the one invoked on the command line, rather than one
-   * another command called through `ace.exec()`? Assigned by the kernel.
+   * another command called through `consoleApp.exec()`? Assigned by the kernel.
    */
   declare isMain: boolean
 
   abstract run(...args: never[]): unknown
 
-  // ─── Test assertions (Ace parity) ───────────────────────────
+  // ─── Test assertions (Console parity) ───────────────────────────
   //
   // They live on the command because that is where a test holds the result,
   // but the implementation is the kernel's: a command the kernel ran carries
@@ -437,7 +437,7 @@ export abstract class BaseCommand {
     createAssertions(this, this.ui).assertLogMatches(pattern, stream)
   }
 
-  /** Every expected row was rendered — the header counts as one (Ace). */
+  /** Every expected row was rendered — the header counts as one (Console). */
   assertTableRows(expected: readonly (readonly string[])[]): void {
     createAssertions(this, this.ui).assertTableRows(expected)
   }

@@ -1,5 +1,5 @@
 /**
- * The loaders and the manifest generator (Ace's `FsLoader`, `ListLoader`,
+ * The loaders and the manifest generator (Console's `FsLoader`, `ListLoader`,
  * `IndexGenerator`).
  */
 

@@ -1,5 +1,5 @@
 /**
- * The helpers Ace exposes around commands (`@adonisjs/ace` utils).
+ * The helpers Console exposes around commands (`@adonisjs/consoleApp` utils).
  *
  * They exist as exports because a custom loader needs them: validating what a
  * module exported, and reporting a name that resolved to nothing.

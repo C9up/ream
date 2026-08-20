@@ -1,14 +1,14 @@
 /**
- * `ace` — the programmatic face of the console (Ace's `ace` service).
+ * `consoleApp` — the programmatic face of the console.
  *
  * The CLI is not the only caller: a test wants to run a command and inspect the
  * result, a controller may want to trigger one, a script may want to check a
  * command exists before calling it. Spawning a process for that is both slow
  * and untestable.
  *
- *   import ace from '@c9up/ream/services/ace'
+ *   import consoleApp from '@c9up/ream/services/console'
  *
- *   const command = await ace.exec('make:controller', ['user', '--resource'])
+ *   const command = await consoleApp.exec('make:controller', ['user', '--resource'])
  *   command.exitCode  // 0 on success, 1 on an unhandled failure
  *   command.result    // whatever run() returned
  *   command.error     // the failure, when one survived completed()
@@ -19,7 +19,7 @@ import type { Ui } from './cliui.js'
 import type { Kernel, KernelState } from './Kernel.js'
 import type { CommandClass, CommandInstance, ExecutedCommand, SerializedCommand } from './types.js'
 
-export interface AceOptions {
+export interface ConsoleOptions {
   kernel: Kernel
   /**
    * Loads the application's commands into the kernel. Called once, on first
@@ -29,13 +29,13 @@ export interface AceOptions {
   load: () => Promise<void>
 }
 
-export class Ace {
+export class Console {
   readonly #kernel: Kernel
   readonly #load: () => Promise<void>
   #booting: Promise<void> | undefined
   #booted = false
 
-  constructor(options: AceOptions) {
+  constructor(options: ConsoleOptions) {
     this.#kernel = options.kernel
     this.#load = options.load
   }
@@ -66,7 +66,7 @@ export class Ace {
   /**
    * Does a command (or alias) by this name exist?
    *
-   * Synchronous, as in Ace — `await ace.boot()` then `if (ace.hasCommand(…))`.
+   * Synchronous, as in Console — `await consoleApp.boot()` then `if (consoleApp.hasCommand(…))`.
    * An async version would be a trap: a Promise is always truthy, so Adonis
    * code copied over would take every branch.
    *
@@ -86,7 +86,7 @@ export class Ace {
   }
 
   /**
-   * The rest of Ace's introspection surface, relayed as-is.
+   * The rest of Console's introspection surface, relayed as-is.
    *
    * All of it reads the registry, so all of it needs {@link boot} first —
    * answering from an empty registry would be worse than the error, since
@@ -133,7 +133,7 @@ export class Ace {
     return this.#kernel.getNamespaceSuggestions(name)
   }
 
-  /** The kernel's lifecycle stage — Ace `getState()`. */
+  /** The kernel's lifecycle stage — Console `getState()`. */
   getState(): KernelState {
     return this.#kernel.getState()
   }
@@ -162,8 +162,8 @@ export class Ace {
     if (this.#booted) return
     throw new ReamError(
       'E_CONSOLE_NOT_BOOTED',
-      `ace.${method}() was called before the commands were loaded.`,
-      { hint: 'Await ace.boot() first — ace.exec() does it for you.' },
+      `consoleApp.${method}() was called before the commands were loaded.`,
+      { hint: 'Await consoleApp.boot() first — consoleApp.exec() does it for you.' },
     )
   }
 

@@ -18,7 +18,7 @@
  * @example
  * ```ts
  * try {
- *   await ace.exec('provision')
+ *   await consoleApp.exec('provision')
  * } catch (error) {
  *   if (isReamError(error, 'E_CONSOLE_MISSING_FLAG', 'E_CONSOLE_MISSING_ARGUMENT')) {
  *     console.error(error.hint)   // narrowed: `error` IS a ReamError here

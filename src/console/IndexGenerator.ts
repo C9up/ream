@@ -1,5 +1,5 @@
 /**
- * Writes a commands manifest next to the built commands (Ace's
+ * Writes a commands manifest next to the built commands (Console's
  * `IndexGenerator`).
  *
  * What it buys: listing the commands, or checking that one exists, without

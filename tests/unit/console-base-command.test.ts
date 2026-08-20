@@ -1,7 +1,7 @@
 /**
- * The static and instance surface Ace's `BaseCommand` exposes.
+ * The static and instance surface Console's `BaseCommand` exposes.
  *
- * Checked against @adonisjs/ace 14.1.0: `boot`, `getParserOptions`, `validate`,
+ * Checked against @adonisjs/consoleApp 14.1.0: `boot`, `getParserOptions`, `validate`,
  * `hydrate`, `exec` and the instance getters are part of the class, not of the
  * kernel — code ported from Adonis calls them directly.
  */
@@ -63,7 +63,7 @@ describe('BaseCommand — static contract', () => {
   })
 
   it('validates an input built by hand', () => {
-    // Ace's use case: nothing here has been through a parser.
+    // Console's use case: nothing here has been through a parser.
     expect(() => Greet.validate({ args: [], flags: {}, unknownFlags: [] })).toThrow(
       /Missing required argument "name"/,
     )
@@ -135,7 +135,7 @@ describe('BaseCommand — static contract', () => {
       run(): void {}
     }
 
-    // Ace's `allowEmptyValue`: without it both of these are reported.
+    // Console's `allowEmptyValue`: without it both of these are reported.
     expect(() => Note.validate({ args: [''], flags: { tag: '' } })).not.toThrow()
 
     class Strict extends BaseCommand {
@@ -217,9 +217,9 @@ describe('BaseCommand — instance contract', () => {
     expect(command.name).toBe('Ada')
   })
 
-  it('hydrates an Ace-shaped input, where positionals are a list', () => {
+  it('hydrates an Console-shaped input, where positionals are a list', () => {
     const command = new (class extends Greet {})()
-    // Ace hands `args` as a list and keys flags by their CLI name. Copying the
+    // Console hands `args` as a list and keys flags by their CLI name. Copying the
     // bag would have set `this[0]` and left `this.name` undefined.
     Object.assign(command, { parsed: { args: ['Ada'], flags: { loud: true } } })
 
@@ -248,7 +248,7 @@ describe('BaseCommand — instance contract', () => {
     const command = new (class extends Boom {})()
     Object.assign(command, { parsed: { args: {}, flags: {} } })
 
-    // Unlike the kernel, which reports the failure on the instance, Ace's
+    // Unlike the kernel, which reports the failure on the instance, Console's
     // instance-level exec() rethrows.
     await expect(command.exec()).rejects.toThrow('nope')
     expect(command.exitCode).toBe(1)
@@ -259,7 +259,7 @@ describe('BaseCommand — instance contract', () => {
     Greet.boot()
     const command = new (class extends Greet {})()
 
-    // Read off the instance, not the class — that is how Ace code reads them.
+    // Read off the instance, not the class — that is how Console code reads them.
     // `exec()` deliberately does not promise these: a command declared
     // structurally by an agnostic package has no getters, and a type claiming
     // otherwise would be false for it.

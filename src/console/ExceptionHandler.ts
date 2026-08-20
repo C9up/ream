@@ -1,5 +1,5 @@
 /**
- * The default renderer for a failure of the command line (Ace's
+ * The default renderer for a failure of the command line (Console's
  * `ExceptionHandler`).
  *
  * A class rather than a function so an application can extend it and override

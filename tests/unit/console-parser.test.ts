@@ -266,7 +266,7 @@ describe('decorators', () => {
     }
 
     // `ream note "$MESSAGE"` with MESSAGE unset is a mistake worth reporting,
-    // not an empty note — that is Ace's rule, and `allowEmptyValue` opts out.
+    // not an empty note — that is Console's rule, and `allowEmptyValue` opts out.
     expect(() => parseArgv([''], { args: Strict.args, commandName: 'note' })).toThrow(
       /Missing value for argument "body"/,
     )

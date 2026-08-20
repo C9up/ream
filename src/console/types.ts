@@ -1,7 +1,7 @@
 /**
  * Console command contract — the STATIC shape the kernel dispatches against.
  *
- * Ace parity: a command is a class carrying its own metadata as statics
+ * Console parity: a command is a class carrying its own metadata as statics
  * (`commandName`, `description`, `options`) plus the argument/flag metadata
  * collected by the `@args` / `@flags` decorators. The kernel never requires the
  * class to extend {@link BaseCommand}: ANY class exposing these statics is
@@ -14,12 +14,12 @@
  * dependency-free.
  */
 
-/** Per-command behaviour switches. Mirrors Ace's `CommandOptions`. */
+/** Per-command behaviour switches. Mirrors Console's `CommandOptions`. */
 export interface CommandOptions {
   /**
    * Boot the application (providers, DB, container) before `run()`.
    *
-   * Defaults to `false`, as in Ace: a scaffolding command has no business
+   * Defaults to `false`, as in Console: a scaffolding command has no business
    * opening a database connection. Commands that resolve services from the
    * container must opt in.
    */
@@ -50,11 +50,11 @@ export interface ArgumentMetaData {
   required: boolean
   default?: string | string[]
   /**
-   * Accept an empty value (`ream greet ""`). Rejected by default, as in Ace: an
+   * Accept an empty value (`ream greet ""`). Rejected by default, as in Console: an
    * empty positional is nearly always a shell variable that did not expand.
    */
   allowEmptyValue?: boolean
-  /** Transforms/validates the raw value before it is assigned (Ace `parse`). */
+  /** Transforms/validates the raw value before it is assigned (Console `parse`). */
   parse?: (value: string | string[]) => unknown
 }
 
@@ -72,10 +72,10 @@ export interface FlagMetaData {
   required: boolean
   /**
    * Accept `--name` with nothing behind it, as an empty value rather than an
-   * error (Ace `allowEmptyValue`).
+   * error (Console `allowEmptyValue`).
    */
   allowEmptyValue?: boolean
-  /** Transforms/validates the coerced value before it is assigned (Ace `parse`). */
+  /** Transforms/validates the coerced value before it is assigned (Console `parse`). */
   parse?: (value: string | string[] | number | boolean) => unknown
   /** List `--no-<flag>` alongside the flag in help (booleans only). */
   showNegatedVariantInHelp?: boolean
@@ -83,7 +83,7 @@ export interface FlagMetaData {
 
 /** What the kernel produces from argv and assigns onto the command instance. */
 /**
- * The parsed CLI input, in the shape Ace publishes it.
+ * The parsed CLI input, in the shape Console publishes it.
  *
  * Positionals are a LIST, in declaration order, and flags are keyed by their
  * COMMAND-LINE name — `parsed.flags['user-email']`, not `parsed.flags.userEmail`.
@@ -94,7 +94,7 @@ export interface ParsedInput {
   args: unknown[]
   flags: Record<string, unknown>
   /**
-   * Names of the flags that were passed but not declared (Ace
+   * Names of the flags that were passed but not declared (Console
    * `this.parsed.unknownFlags`). Their values are in {@link flags}; this is the
    * list a command inspects to know what it was handed but does not know about.
    */
@@ -107,10 +107,10 @@ export interface ParsedInput {
    * dropped — forwarding them is the whole point of such a command.
    */
   extraArgs: string[]
-  /** Ace's name for {@link extraArgs} — the same array, not a copy. */
+  /** Console's name for {@link extraArgs} — the same array, not a copy. */
   _: string[]
   /**
-   * The arguments node itself was started with (Ace `nodeArgs`), filled only
+   * The arguments node itself was started with (Console `nodeArgs`), filled only
    * for the command invoked from the command line.
    */
   nodeArgs: string[]
@@ -120,21 +120,21 @@ export interface ParsedInput {
  * The instance side of a command.
  *
  * Only `run()` is required. The lifecycle hooks are optional: the kernel calls
- * whichever the command defines, in Ace's order — prepare, interact, run,
+ * whichever the command defines, in Console's order — prepare, interact, run,
  * completed.
  */
 export interface CommandInstance {
   /**
    * Whatever it returns becomes `result` on the executed command.
    *
-   * Parameters are allowed: the container injects them (Ace `@inject()` on a
+   * Parameters are allowed: the container injects them (Console `@inject()` on a
    * lifecycle method), and a no-arg signature would reject those commands.
    */
   run(...args: never[]): unknown
   prepare?(...args: never[]): void | Promise<void>
   interact?(...args: never[]): void | Promise<void>
   /** Returning `true` marks the error handled, stopping its propagation. */
-  // biome-ignore lint/suspicious/noConfusingVoidType: Ace contract — returning `true` marks the error handled, returning nothing is the normal case
+  // biome-ignore lint/suspicious/noConfusingVoidType: Console contract — returning `true` marks the error handled, returning nothing is the normal case
   completed?(...args: never[]): boolean | void | Promise<boolean | void>
   /** Set by the command to force a code; the kernel fills it in otherwise. */
   exitCode?: number
@@ -145,18 +145,18 @@ export interface CommandInstance {
 }
 
 /**
- * A command's metadata as plain data (Ace `serialize`).
+ * A command's metadata as plain data (Console `serialize`).
  *
  * JSON-safe on purpose: the `parse` callbacks carried by the live metadata are
  * dropped, so this can be printed, cached or sent over a wire without a
  * function silently disappearing at the boundary.
  */
 /**
- * How one positional argument is parsed (Ace `ArgumentsParserOptions`).
+ * How one positional argument is parsed (Console `ArgumentsParserOptions`).
  *
  * Derived from the declarations by `BaseCommand.getParserOptions()`. Ream's own
  * parser reads the declarations directly; this shape exists so code ported from
- * Ace — which inspects it — keeps working.
+ * Console — which inspects it — keeps working.
  */
 export interface ArgumentsParserOptions {
   type: 'string' | 'spread'
@@ -164,7 +164,7 @@ export interface ArgumentsParserOptions {
   parse?: (value: string | string[]) => unknown
 }
 
-/** How the flags are parsed, grouped by type (Ace `FlagsParserOptions`). */
+/** How the flags are parsed, grouped by type (Console `FlagsParserOptions`). */
 export interface FlagsParserOptions {
   all: string[]
   string: string[]
@@ -199,7 +199,7 @@ export interface SerializedCommand {
 }
 
 /**
- * A snapshot of a command that has run (Ace `toJSON`).
+ * A snapshot of a command that has run (Console `toJSON`).
  *
  * Unlike {@link SerializedCommand} this is about one execution: the values it
  * received and what it produced. `args` / `flags` are the parsed VALUES, not
@@ -208,7 +208,7 @@ export interface SerializedCommand {
 export interface CommandSnapshot {
   commandName: string
   options: CommandOptions
-  /** Positional VALUES in declaration order — Ace exposes a list here. */
+  /** Positional VALUES in declaration order — Console exposes a list here. */
   args: unknown[]
   flags: Record<string, unknown>
   error: unknown
@@ -245,7 +245,7 @@ export interface ExecutedCommand extends CommandInstance, CommandAssertions {
   exitCode: number
   error: unknown
   result: unknown
-  /** A snapshot of this execution (Ace `toJSON`). */
+  /** A snapshot of this execution (Console `toJSON`). */
   toJSON(): CommandSnapshot
 }
 
@@ -259,7 +259,7 @@ export interface CommandClass {
   new (...args: never[]): CommandInstance
   commandName: string
   description: string
-  /** Alternative names the command also answers to (Ace `static aliases`). */
+  /** Alternative names the command also answers to (Console `static aliases`). */
   aliases?: readonly string[]
   options?: CommandOptions
   args?: readonly ArgumentMetaData[]

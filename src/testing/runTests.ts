@@ -31,7 +31,7 @@ export interface RunTestsOptions {
   root?: string
   /**
    * Suite names to run. Empty (the default) runs every declared suite, in
-   * order — the AdonisJS behaviour for `node ace test` with no argument.
+   * order — the AdonisJS behaviour for `node consoleApp test` with no argument.
    */
   suites?: string[]
   /** Concurrent worker processes. */

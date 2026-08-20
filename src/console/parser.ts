@@ -7,7 +7,7 @@
  * every `--flag` as `true` and let the value fall through to the positionals —
  * which is exactly how the previous implementation silently dropped arguments.
  *
- * Supported forms (Ace parity):
+ * Supported forms (Console parity):
  *   --flag=value   --flag value   --flag (boolean)   --no-flag (boolean false)
  *   -f value       -f             -abc (grouped boolean aliases)
  *   --             everything after it is positional, never a flag
@@ -27,7 +27,7 @@ export interface ParseOptions {
    * Check the required inputs while parsing. `false` parses leniently and
    * leaves that to {@link validateParsed}.
    *
-   * The kernel parses leniently on purpose: Ace validates AFTER the global-flag
+   * The kernel parses leniently on purpose: Console validates AFTER the global-flag
    * listeners have run, which is what lets `--help` work on a command whose
    * flags are required.
    */
@@ -42,10 +42,10 @@ interface RawFlag {
 }
 
 /**
- * The parser as an object (Ace `Parser`).
+ * The parser as an object (Console `Parser`).
  *
  * Same work as {@link parseArgv}, held in a shape that can be passed around and
- * reused — which is how Ace's kernel and its ported code hold it.
+ * reused — which is how Console's kernel and its ported code hold it.
  */
 export class Parser {
   readonly #options: ParseOptions
@@ -217,7 +217,7 @@ export function parseArgv(argv: readonly string[], options: ParseOptions = {}): 
     ),
   )
 
-  // Rekeyed into Ace's shape only here: defaults and `parse` are applied per
+  // Rekeyed into Console's shape only here: defaults and `parse` are applied per
   // DECLARATION, which needs the property name, while what comes out describes
   // what was typed — positionals as a list, flags under their CLI name.
   const byFlagName: Record<string, unknown> = { ...unknown }
@@ -299,7 +299,7 @@ function consume(
   // worth reporting, not an email of "--name".
   const next = argv[index + 1]
   if (next === undefined || (next.startsWith('-') && next !== '-')) {
-    // Unless the flag says an empty value is meaningful (Ace
+    // Unless the flag says an empty value is meaningful (Console
     // `allowEmptyValue`), in which case the mention itself is the value.
     if (meta.allowEmptyValue === true) {
       // An array flag with nothing behind it is an EMPTY list, not a list
@@ -388,7 +388,7 @@ function materialiseArgs(
       cursor = positionals.length
       if (rest.length === 0) {
         // No default and nothing to collect: the argument is UNDEFINED, not an
-        // empty list (Ace). A command that distinguishes "not given" from
+        // empty list (Console). A command that distinguishes "not given" from
         // "given empty" must be able to tell them apart.
         if (meta.default !== undefined) out[meta.propertyName] = meta.default
         else if (meta.required && strict) throw missingArgument(meta, where)
@@ -406,7 +406,7 @@ function materialiseArgs(
       continue
     }
     // An empty positional is nearly always a shell variable that did not
-    // expand, so it is reported rather than accepted (Ace) — unless the
+    // expand, so it is reported rather than accepted (Console) — unless the
     // argument declares that an empty value means something.
     if (value === '' && meta.allowEmptyValue !== true && strict) {
       throw new ReamError(
@@ -445,14 +445,14 @@ function materialiseArgs(
 }
 
 /**
- * Check a parsed input against a command's declarations (Ace `validate`).
+ * Check a parsed input against a command's declarations (Console `validate`).
  *
- * Separate from parsing because the ORDER matters: Ace runs the global-flag
+ * Separate from parsing because the ORDER matters: Console runs the global-flag
  * listeners between the two, which is what lets `--help` work on a command
  * whose flags are required. One implementation, called by the kernel and by
  * `BaseCommand.validate()`.
  *
- * Positionals are accepted as a list (Ace's shape) or keyed by property name
+ * Positionals are accepted as a list (Console's shape) or keyed by property name
  * (what a hand-built Ream input holds).
  */
 export function validateParsed(
@@ -496,7 +496,7 @@ export function validateParsed(
 
   const flags: Record<string, unknown> = parsed.flags ?? {}
   for (const flag of declarations.flags ?? []) {
-    // Keyed by flag name (Ace, and what the parser returns) or by property
+    // Keyed by flag name (Console, and what the parser returns) or by property
     // name — a hand-built input must validate whichever shape it was written in.
     const key = Object.hasOwn(flags, flag.flagName) ? flag.flagName : flag.propertyName
     const mentioned = Object.hasOwn(flags, key)
@@ -538,7 +538,7 @@ export function validateParsed(
  * The single hydration path: `BaseCommand.hydrate()` calls it, and so does the
  * kernel for a command declared structurally, which has no `hydrate()` of its
  * own. Both input shapes are accepted — positionals as a list (what the parser
- * now returns, and Ace's shape) or keyed by property name, flags under their
+ * now returns, and Console's shape) or keyed by property name, flags under their
  * flag name or their property name — because a hand-built input is a documented
  * use case.
  */
@@ -561,7 +561,7 @@ export function assignParsedValues(
   }
 }
 
-/** Writable and enumerable, as Ace's `hydrate` defines them. */
+/** Writable and enumerable, as Console's `hydrate` defines them. */
 function define(target: object, property: string, value: unknown): void {
   Object.defineProperty(target, property, {
     value,

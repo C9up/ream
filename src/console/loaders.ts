@@ -1,5 +1,5 @@
 /**
- * The two loaders Ace ships — `ListLoader` and `FsLoader`.
+ * The two loaders Console ships — `ListLoader` and `FsLoader`.
  *
  * A loader answers in two steps: the metadata of everything it offers, then the
  * class for one of them. The kernel reads the first at boot and the second only
@@ -14,7 +14,7 @@ import { serializeCommand } from './Kernel.js'
 import { type CommandClass, isCommandClass, type SerializedCommand } from './types.js'
 
 /**
- * Commands given as classes (Ace `ListLoader`).
+ * Commands given as classes (Console `ListLoader`).
  *
  * The form a package uses to ship its commands: they are already imported, so
  * there is nothing to defer.
@@ -36,10 +36,10 @@ export class ListLoader implements CommandLoader {
 }
 
 /**
- * Commands found in a directory (Ace `FsLoader`).
+ * Commands found in a directory (Console `FsLoader`).
  *
  * Reading the metadata imports each file — without a manifest there is no other
- * way to know what a file declares, and Ace's own `FsLoader` does the same. The
+ * way to know what a file declares, and Console's own `FsLoader` does the same. The
  * gain is elsewhere: `getCommand()` never imports anything twice.
  */
 export class FsLoader implements CommandLoader {

@@ -1,5 +1,5 @@
 /**
- * Console UI — `this.logger` and `this.prompt` on every command (Ace parity).
+ * Console UI — `this.logger` and `this.prompt` on every command (Console parity).
  *
  * Kept dependency-free: the framework ships no colour or prompt library, and
  * pulling one in for the CLI surface alone is not worth the install weight.

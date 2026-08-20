@@ -36,13 +36,13 @@ import { renderErrorWithSuggestions } from './utils.js'
  * Called when a global flag was passed to the command invoked from the command
  * line. Returning `true` stops the dispatch before the command runs.
  */
-/** The kernel's lifecycle stage — Ace `getState()`. */
+/** The kernel's lifecycle stage — Console `getState()`. */
 export type KernelState = 'idle' | 'booted' | 'running' | 'completed'
 
 /**
- * A source of commands (Ace `LoadersContract`).
+ * A source of commands (Console `LoadersContract`).
  *
- * Two steps, as in Ace: the metadata of everything it offers, then the class
+ * Two steps, as in Console: the metadata of everything it offers, then the class
  * for one of them — a loader that reads a directory can answer the first from
  * a manifest without importing anything.
  */
@@ -52,7 +52,7 @@ export interface CommandLoader {
 }
 
 /**
- * How a command is built and run (Ace `ExecutorContract`).
+ * How a command is built and run (Console `ExecutorContract`).
  *
  * `create` returns the instance, ready but untouched; `run` drives its
  * lifecycle and returns what `run()` produced.
@@ -61,7 +61,7 @@ export interface CommandExecutor {
   /**
    * The fourth argument is Ream's: which UI the command writes through, and
    * whether it is the one the command line invoked. An executor ported from
-   * Ace simply ignores it.
+   * Console simply ignores it.
    */
   create(
     Command: CommandClass,
@@ -73,7 +73,7 @@ export interface CommandExecutor {
   run(command: CommandInstance, kernel: Kernel): unknown
 }
 
-/** Renders the failure of the command line (Ace `ExceptionHandler`). */
+/** Renders the failure of the command line (Console `ExceptionHandler`). */
 export interface ErrorRenderer {
   render(error: unknown, kernel: Kernel): void | Promise<void>
 }
@@ -82,7 +82,7 @@ export type GlobalFlagListener = (
   command: CommandClass,
   kernel: Kernel,
   parsed: ParsedInput,
-  // biome-ignore lint/suspicious/noConfusingVoidType: Ace contract — returning `true` ends the dispatch, returning nothing is the normal case
+  // biome-ignore lint/suspicious/noConfusingVoidType: Console contract — returning `true` ends the dispatch, returning nothing is the normal case
 ) => boolean | void | Promise<boolean | void>
 
 import { colourise } from './ui.js'
@@ -120,7 +120,7 @@ export class Kernel {
   /**
    * Commands a loader announced but whose class has not been imported yet.
    *
-   * Booting reads metadata only, as Ace does: listing the commands, answering
+   * Booting reads metadata only, as Console does: listing the commands, answering
    * `hasCommand()` or printing help must not run the module of a command
    * nobody asked for.
    */
@@ -131,7 +131,7 @@ export class Kernel {
    * replace — see {@link register}.
    */
   readonly #defaults = new Set<string>()
-  /** Flags every command accepts — Ace's global command. */
+  /** Flags every command accepts — Console's global command. */
   readonly #globalFlags: FlagMetaData[] = []
   readonly #flagListeners = new Map<string, GlobalFlagListener>()
   readonly #loaders: Array<CommandLoader | (() => Promise<CommandLoader>)> = []
@@ -158,12 +158,12 @@ export class Kernel {
 
   /**
    * The command a kernel runs when none is named. Replace it to ship a
-   * different landing command (Ace `Kernel.defaultCommand`).
+   * different landing command (Console `Kernel.defaultCommand`).
    */
   static defaultCommand: CommandClass = ListCommand
 
   /**
-   * How a command is built and run (Ace `Kernel.commandExecutor`).
+   * How a command is built and run (Console `Kernel.commandExecutor`).
    *
    * The seam AdonisJS itself uses to add dependency injection; Ream's default
    * already does it — the container builds the command and invokes its hooks,
@@ -181,12 +181,12 @@ export class Kernel {
 
   /**
    * What the CLI says about itself — binary name, versions. Printed above the
-   * command listing when it holds anything (Ace `kernel.info`).
+   * command listing when it holds anything (Console `kernel.info`).
    */
   readonly info = new Map<string, string | number | boolean>()
 
   /**
-   * Renders the failure of the command line (Ace `kernel.errorHandler`).
+   * Renders the failure of the command line (Console `kernel.errorHandler`).
    *
    * Replaceable: an application that wants its own reporting sets it here
    * rather than wrapping `handle()`, which is what owns the process.
@@ -194,13 +194,13 @@ export class Kernel {
   errorHandler: ErrorRenderer = new ExceptionHandler()
 
   /**
-   * The exit code the command line ended on (Ace `kernel.exitCode`). Set once
+   * The exit code the command line ended on (Console `kernel.exitCode`). Set once
    * the dispatch is over: 1 for a failure, otherwise the command's own.
    */
   exitCode: number | undefined
 
   /**
-   * Ace's factory — `Kernel.create()` reads better than `new Kernel()`.
+   * Console's factory — `Kernel.create()` reads better than `new Kernel()`.
    *
    * Built through `this`, so a subclass overriding `defaultCommand` or
    * `commandExecutor` gets its own from the factory as well as from `new`.
@@ -214,11 +214,11 @@ export class Kernel {
     this.#onTerminate = options.onTerminate
     this.#prompt = options.prompt
     this.#binaryName = options.binaryName ?? 'ream'
-    // `list` is a command, not a branch in the dispatcher — Ace registers it the
+    // `list` is a command, not a branch in the dispatcher — Console registers it the
     // same way, which is what makes `hasCommand('list')`, `exec('list')` and
     // `help list` true statements instead of special cases.
     // Read off `new.target`, so a subclass overriding `static defaultCommand`
-    // gets its own (Ace's customisation point).
+    // gets its own (Console's customisation point).
     this.#defaultCommand = new.target.defaultCommand
     this.#executor = new.target.commandExecutor
     this.register(this.#defaultCommand)
@@ -229,7 +229,7 @@ export class Kernel {
     this.register(HelpCommand)
     this.#defaults.add(HelpCommand.commandName)
 
-    // Ace's `--help`, a global flag whose listener runs the help command.
+    // Console's `--help`, a global flag whose listener runs the help command.
     this.defineFlag('help', {
       type: 'boolean',
       alias: ['h'],
@@ -244,7 +244,7 @@ export class Kernel {
       return true
     })
 
-    // Ace's `--ansi` / `--no-ansi`, declared as what they are: a global flag.
+    // Console's `--ansi` / `--no-ansi`, declared as what they are: a global flag.
     // Declaring them makes them visible in help and rejected nowhere, instead
     // of being intercepted by a special case in the dispatcher.
     this.defineFlag('ansi', {
@@ -269,7 +269,7 @@ export class Kernel {
   }
 
   /**
-   * Declare a flag every command accepts (Ace `kernel.defineFlag`).
+   * Declare a flag every command accepts (Console `kernel.defineFlag`).
    *
    * Global flags steer the CLI, not the command: they are merged into the
    * parser so no command has to redeclare them, and they are NOT assigned to
@@ -288,13 +288,13 @@ export class Kernel {
     return this
   }
 
-  /** The global flags — Ace `kernel.flags`. */
+  /** The global flags — Console `kernel.flags`. */
   get flags(): readonly FlagMetaData[] {
     return [...this.#globalFlags]
   }
 
   /**
-   * React to a global flag (Ace `kernel.on`). One listener per flag, the last
+   * React to a global flag (Console `kernel.on`). One listener per flag, the last
    * one registered winning, and only for the command invoked from the command
    * line. Returning `true` stops there, without running the command — that is
    * how `--help` short-circuits.
@@ -351,7 +351,7 @@ export class Kernel {
 
   /**
    * Register a shorthand expanding to a command and, optionally, its flags —
-   * Ace's `commandsAliases`. `resource` → `make:controller --resource` means
+   * Console's `commandsAliases`. `resource` → `make:controller --resource` means
    * `ream resource users` runs `ream make:controller --resource users`.
    */
   addAlias(alias: string, expansion: string): this {
@@ -366,9 +366,9 @@ export class Kernel {
   }
 
   /**
-   * Resolve a command by name or alias — Ace's `find()`.
+   * Resolve a command by name or alias — Console's `find()`.
    *
-   * Async and throwing, as in Ace: a name that resolves to nothing is a call
+   * Async and throwing, as in Console: a name that resolves to nothing is a call
    * error, and returning `undefined` pushes every caller into a check it
    * usually forgets. `await` works even though Ream's registry answers
    * immediately.
@@ -411,9 +411,9 @@ export class Kernel {
   }
 
   /**
-   * Register a source of commands (Ace `kernel.addLoader`).
+   * Register a source of commands (Console `kernel.addLoader`).
    *
-   * Consumed by {@link boot}, once. Unlike Ace, the classes are resolved there
+   * Consumed by {@link boot}, once. Unlike Console, the classes are resolved there
    * and then rather than on first use: Ream's registry holds classes, which is
    * what lets `find()` and `hasCommand()` answer without waiting on a loader.
    */
@@ -454,7 +454,7 @@ export class Kernel {
     }
   }
 
-  /** The kernel's lifecycle stage — Ace `getState()`. */
+  /** The kernel's lifecycle stage — Console `getState()`. */
   getState(): KernelState {
     return this.#state
   }
@@ -472,19 +472,19 @@ export class Kernel {
     return this.#mainCommand
   }
 
-  /** Before a command name is resolved (Ace hook). */
+  /** Before a command name is resolved (Console hook). */
   finding(callback: (commandName: string) => void | Promise<void>): this {
     this.#hooks.finding.push(callback)
     return this
   }
 
-  /** Before a command class is read from its loader (Ace hook). */
+  /** Before a command class is read from its loader (Console hook). */
   loading(callback: (metadata: SerializedCommand) => void | Promise<void>): this {
     this.#hooks.loading.push(callback)
     return this
   }
 
-  /** After a command class has been loaded (Ace hook). */
+  /** After a command class has been loaded (Console hook). */
   loaded(callback: (command: CommandClass) => void | Promise<void>): this {
     this.#hooks.loaded.push(callback)
     return this
@@ -496,14 +496,14 @@ export class Kernel {
     return this
   }
 
-  /** After a command has run — not when it failed, as in Ace. */
+  /** After a command has run — not when it failed, as in Console. */
   executed(callback: (command: CommandInstance, isMain: boolean) => void | Promise<void>): this {
     this.#hooks.executed.push(callback)
     return this
   }
 
   /**
-   * The metadata of every registered command, as Ace exposes it.
+   * The metadata of every registered command, as Console exposes it.
    *
    * Metadata rather than the classes themselves: this is the introspection
    * surface (help, completions, a command palette), and handing out the
@@ -515,7 +515,7 @@ export class Kernel {
     return this.#allMetadata()
   }
 
-  /** One command's metadata, or null — Ace's `getCommand()`. */
+  /** One command's metadata, or null — Console's `getCommand()`. */
   getCommand(commandName: string): SerializedCommand | null {
     const command = this.#commands.get(commandName)
     if (command !== undefined) return this.#metadataFor(command)
@@ -530,7 +530,7 @@ export class Kernel {
   /**
    * The commands of one namespace. Called without one — or with an empty
    * string — it answers with the commands that have no namespace at all, which
-   * is the group Ace's own listing prints first.
+   * is the group Console's own listing prints first.
    */
   getNamespaceCommands(namespace?: string): SerializedCommand[] {
     const wanted = namespace === undefined || namespace === '' ? null : namespace
@@ -565,7 +565,7 @@ export class Kernel {
   }
 
   /**
-   * Names close enough to this one to be what the user meant — Ace's
+   * Names close enough to this one to be what the user meant — Console's
    * suggestions. Aliases are included: they are names one can legitimately
    * type, so a typo on one deserves the same help.
    */
@@ -602,7 +602,7 @@ export class Kernel {
       return await this.#dispatch(rawArgv, nodeArgs)
     } catch (error) {
       // The command line owns the process, so a failure is REPORTED here rather
-      // than thrown at a caller who has nothing better to do with it — Ace's
+      // than thrown at a caller who has nothing better to do with it — Console's
       // rule. `exec()` is the path that rethrows.
       this.exitCode = 1
       process.exitCode = 1
@@ -620,7 +620,7 @@ export class Kernel {
     const argv = this.#expandAlias(this.#hoistGlobalFlags(rawArgv))
     const [name, ...rest] = argv
 
-    // Resolved through `find()`, like Ace's own CLI path: it is what runs the
+    // Resolved through `find()`, like Console's own CLI path: it is what runs the
     // finding/loading/loaded hooks, and a tool listening to them must see the
     // command line, not only `exec()`.
     //
@@ -672,7 +672,7 @@ export class Kernel {
    * Read argv against a command's declarations, global flags included.
    *
    * Separate from {@link #runCommand} because the main command's parsed input
-   * is needed BEFORE the command is built: Ace's global-flag listeners see it,
+   * is needed BEFORE the command is built: Console's global-flag listeners see it,
    * and one of them may end the dispatch.
    */
   #parse(
@@ -684,7 +684,7 @@ export class Kernel {
     const parsed = parseArgv(argv, {
       args: Command.args,
       // Global flags belong to the command line: they are merged for the
-      // command invoked there, and NOT for `exec()`, as in Ace. A caller
+      // command invoked there, and NOT for `exec()`, as in Console. A caller
       // passing `--no-ansi` to exec() is passing a flag the command does not
       // accept, and hearing so is the point.
       flags: withGlobalFlags ? this.#flagsFor(Command) : (Command.flags ?? []),
@@ -692,7 +692,7 @@ export class Kernel {
       commandName: Command.commandName,
       // Leniently: the required inputs are checked AFTER the global-flag
       // listeners have had their say, which is what makes `--help` work on a
-      // command whose flags are required (Ace's order).
+      // command whose flags are required (Console's order).
       validate: false,
     })
     parsed.nodeArgs = [...nodeArgs]
@@ -713,7 +713,7 @@ export class Kernel {
    * Run the listeners of the global flags that were passed. Returns whether one
    * of them ended the dispatch.
    *
-   * Ace runs them for the main command only, and before it is built: a command
+   * Console runs them for the main command only, and before it is built: a command
    * that will not run must not boot the application first.
    */
   async #runFlagListeners(Command: CommandClass, parsed: ParsedInput): Promise<boolean> {
@@ -740,7 +740,7 @@ export class Kernel {
   ): Promise<{ instance: CommandInstance; app: Application | undefined }> {
     // The application is resolved BEFORE the command is built: with one
     // available, the command goes through the container so constructor
-    // dependencies are injected (Ace parity), and its lifecycle hooks are
+    // dependencies are injected (Console parity), and its lifecycle hooks are
     // invoked through `container.call` so `@inject()` works on them too.
     const app = await this.#resolveApp(Command)
     const instance: CommandInstance =
@@ -754,13 +754,13 @@ export class Kernel {
       // `handle()` is the command line; `exec()` is another caller.
       isMain,
       prompt: this.#prompt ?? new Prompt(),
-      // Ace exposes every parsed input, not only the declared ones.
+      // Console exposes every parsed input, not only the declared ones.
       parsed,
       onTerminate: this.#onTerminate,
     })
     this.#attachApp(instance, Command, app)
 
-    // Values after the plumbing, as Ace does: the command's own `hydrate()`
+    // Values after the plumbing, as Console does: the command's own `hydrate()`
     // when it has one — a ported command may call it again, it is idempotent —
     // and a plain assignment for a class declared structurally, which has none.
     const hydrate = Reflect.get(instance, 'hydrate')
@@ -825,7 +825,7 @@ export class Kernel {
     const instance = await this.#executor.create(Command, parsed, this, { isMain, ui })
     const invoke = (hook: 'completed'): Promise<unknown> => this.#invoke(instance, hook)
 
-    // Ace's order: prepare → interact → run → completed. `completed` runs even
+    // Console's order: prepare → interact → run → completed. `completed` runs even
     // when an earlier stage threw, and can mark the error handled.
     let failure: unknown
     let result: unknown
@@ -864,13 +864,13 @@ export class Kernel {
       }
     }
 
-    // Ace's convention: a command that failed without setting its own code
+    // Console's convention: a command that failed without setting its own code
     // exits 1.
     const scored = Object.assign(ran, {
       exitCode: typeof ran.exitCode === 'number' ? ran.exitCode : ran.error === undefined ? 0 : 1,
     })
 
-    // Only when it finished: Ace runs `executed` after the executor returns, so
+    // Only when it finished: Console runs `executed` after the executor returns, so
     // a throw skips it. A hook counting successes must not see a failure —
     // and `completed()` marking the error handled IS a finish.
     if (scored.error === undefined) {
@@ -887,9 +887,9 @@ export class Kernel {
   }
 
   /**
-   * Run a command programmatically — Ace's `ace.exec()`.
+   * Run a command programmatically — Console's `consoleApp.exec()`.
    *
-   * It REJECTS when the command fails, as Ace does: the error is recorded on
+   * It REJECTS when the command fails, as Console does: the error is recorded on
    * the command (`error`, `exitCode` 1) and then rethrown, so a caller cannot
    * mistake a failure for a success by forgetting to look. `process.exitCode`
    * is left alone — only the command line owns that.
@@ -917,7 +917,7 @@ export class Kernel {
     const Command = await this.find(name ?? commandName)
 
     // A caller-supplied UI is what silences a command, or captures its output
-    // without touching the kernel's own (Ace `exec(..., { ui })`).
+    // without touching the kernel's own (Console `exec(..., { ui })`).
     const parsed = this.#parse(Command, rest, [], false)
     this.#validate(Command, parsed)
     const command = await this.#runCommand(Command, parsed, false, options.ui)
@@ -926,7 +926,7 @@ export class Kernel {
   }
 
   /**
-   * Build a command instance without running it (Ace `kernel.create`).
+   * Build a command instance without running it (Console `kernel.create`).
    *
    * Parsed, injected and hydrated — everything `exec()` does up to the
    * lifecycle. The escape hatch for driving a command by hand: run it with
@@ -949,7 +949,7 @@ export class Kernel {
     return instance as InstanceType<T>
   }
 
-  /** Is this name — or alias — dispatchable? Ace's `ace.hasCommand()`. */
+  /** Is this name — or alias — dispatchable? Console's `consoleApp.hasCommand()`. */
   hasCommand(name: string): boolean {
     const known = (commandName: string): boolean =>
       this.#commands.has(commandName) || this.#pending.has(commandName)
@@ -1077,7 +1077,7 @@ export class Kernel {
   }
 
   /**
-   * `list` — commands grouped by namespace, as Ace does.
+   * `list` — commands grouped by namespace, as Console does.
    *
    * `namespaces` narrows the output to those groups; an empty list shows
    * everything. `make` selects `make:*`, and the empty string the commands that
@@ -1101,7 +1101,7 @@ export class Kernel {
 
     this.logger.log(`\n${colourise('Usage:', 'yellow')} ${this.#binaryName} <command> [options]\n`)
 
-    // What the CLI says about itself, when it was told anything (Ace
+    // What the CLI says about itself, when it was told anything (Console
     // `kernel.info`): binary name, framework and app versions.
     if (this.info.size > 0) {
       for (const [label, value] of this.info) {
@@ -1203,7 +1203,7 @@ export class Kernel {
 
     const help = meta.help
     if (help !== undefined) {
-      // Ace substitutes `{{ binaryName }}` so a help block can show a runnable
+      // Console substitutes `{{ binaryName }}` so a help block can show a runnable
       // example without hardcoding the binary's name.
       for (const line of Array.isArray(help) ? help : [help]) {
         this.logger.log(`  ${line.replace(/\{\{\s*binaryName\s*\}\}/g, this.#binaryName)}`)

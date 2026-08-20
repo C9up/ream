@@ -23,7 +23,7 @@ function bootedApp(): Application {
   return app
 }
 
-describe('command dependency injection (Ace parity)', () => {
+describe('command dependency injection (Console parity)', () => {
   it('injects constructor dependencies through the container', async () => {
     let received: unknown
 

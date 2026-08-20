@@ -1,5 +1,5 @@
 /**
- * Diagnostics channels for the console (Ace `tracingChannels`).
+ * Diagnostics channels for the console (Console `tracingChannels`).
  *
  * `diagnostics_channel` is Node's built-in tracing hook: an APM agent, or a
  * test, subscribes without the framework knowing about it and without paying

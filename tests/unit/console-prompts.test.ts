@@ -8,7 +8,7 @@ function silence(): () => void {
   return () => stdout.mockRestore()
 }
 
-describe('Prompt — scripted answers (Ace traps)', () => {
+describe('Prompt — scripted answers (Console traps)', () => {
   it('answers ask() and secure() from a trap', async () => {
     const prompt = new Prompt()
     prompt.trap('Model name').replyWith('User')
@@ -69,7 +69,7 @@ describe('Prompt — scripted answers (Ace traps)', () => {
 
     const value = await prompt.ask('Name', {
       name: 'name',
-      // Ace: `format` shapes the echoed input only, it never changes what the
+      // Console: `format` shapes the echoed input only, it never changes what the
       // prompt returns. A ported command must not receive a different value.
       format: (raw) => raw.toUpperCase(),
       result: (clean) => `<${clean}>`,
@@ -240,7 +240,7 @@ describe('Prompt — default values on the interactive path', () => {
   })
 })
 
-describe('Prompt — Ace option contracts', () => {
+describe('Prompt — Console option contracts', () => {
   it('gives multiple() the whole selection in validate and result', async () => {
     const prompt = new Prompt()
     prompt.trap('drivers').chooseOptions([0, 2])
@@ -252,7 +252,7 @@ describe('Prompt — Ace option contracts', () => {
         seen = values
         return values.length >= 2 ? true : 'Pick at least two'
       },
-      // Ace hands the array to `result` for a multiselect — a per-item call
+      // Console hands the array to `result` for a multiselect — a per-item call
       // would make a rule like "at least two" impossible to express.
       result: (values) => values.join('+'),
     })

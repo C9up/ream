@@ -1,14 +1,15 @@
 /**
- * `@c9up/ream/ace` — the console command surface.
+ * `@c9up/ream/console` — the console command surface.
  *
- * Mirrors Ace's import path so a command reads the same way it does in Adonis:
+ * The SDK is ours — only the shape is borrowed: a command declares its name,
+ * its args and its flags, then runs.
  *
- *   import { BaseCommand, args, flags } from '@c9up/ream/ace'
+ *   import { BaseCommand, args, flags } from '@c9up/ream/console'
  */
 
-export type { AceOptions } from './Ace.js'
-export { Ace } from './Ace.js'
 export { BaseCommand } from './BaseCommand.js'
+export type { ConsoleOptions } from './Console.js'
+export { Console } from './Console.js'
 export type { Colors, StyleName, TaskOutcome } from './cliui.js'
 export {
   Action,

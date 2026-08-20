@@ -1,10 +1,10 @@
 /**
- * Interactive prompts (Ace / `@poppinss/prompts` surface).
+ * Interactive prompts (Console / `@poppinss/prompts` surface).
  *
  * Dependency-free, which sets one deliberate boundary: selection prompts are
  * answered by typing a number or a name, not by arrow-key navigation. Doing
  * that properly means raw mode, cursor control and redraw handling — a terminal
- * widget toolkit, which is what enquirer is. Everything else matches Ace: the
+ * widget toolkit, which is what enquirer is. Everything else matches Console: the
  * method names, the option bag (`validate` / `default` / `hint` / `name` /
  * `result` / `format`), and the trap API that makes prompts testable.
  */
@@ -54,7 +54,7 @@ export interface PromptOptions<T = string> {
   /**
    * Formats what is echoed as the user types — display only.
    *
-   * It does NOT change the value the prompt returns: Ace documents it as
+   * It does NOT change the value the prompt returns: Console documents it as
    * "affecting only the CLI output", and treating it as a transform would make
    * a ported command receive a different value. Use `result` to transform.
    */
@@ -62,7 +62,7 @@ export interface PromptOptions<T = string> {
 }
 
 /**
- * Scripted answer builder — Ace's `prompt.trap(name)`.
+ * Scripted answer builder — Console's `prompt.trap(name)`.
  *
  * Without it a command that asks anything is untestable: the test would either
  * hang on a prompt or need a fake terminal.
@@ -102,7 +102,7 @@ export class PromptTrap {
 
 /**
  * Options for `confirm` / `toggle`. `result` may map the boolean to something
- * else, which is why the return type follows it (Ace documents `result` for
+ * else, which is why the return type follows it (Console documents `result` for
  * every prompt).
  */
 export interface BooleanPromptOptions<R = boolean>
@@ -148,7 +148,7 @@ export class Prompt {
     return this.toggle(message, ['y', 'n'], options)
   }
 
-  /** Two custom labels instead of yes/no (Ace `toggle`). */
+  /** Two custom labels instead of yes/no (Console `toggle`). */
   async toggle(
     message: string,
     labels?: readonly [string, string],
@@ -206,7 +206,7 @@ export class Prompt {
     }
   }
 
-  /** Pick one option (Ace `choice`). */
+  /** Pick one option (Console `choice`). */
   async choice(
     message: string,
     choices: readonly PromptChoice[],
@@ -216,7 +216,7 @@ export class Prompt {
     return picked[0]
   }
 
-  /** Pick several options (Ace `multiple`). */
+  /** Pick several options (Console `multiple`). */
   async multiple(
     message: string,
     choices: readonly PromptChoice[],
@@ -227,7 +227,7 @@ export class Prompt {
   }
 
   /**
-   * Pick one option by typing part of its name (Ace `autocomplete`).
+   * Pick one option by typing part of its name (Console `autocomplete`).
    *
    * Substring matching rather than fuzzy scoring — predictable, and enough for
    * the "too many options to list" case it exists for.
@@ -281,7 +281,7 @@ export class Prompt {
 
     for (;;) {
       const raw = await this.readLine(this.#label(message, options), masked)
-      // `format` is display-only (Ace): the returned value is what was typed,
+      // `format` is display-only (Console): the returned value is what was typed,
       // with the default filled in when the line was empty.
       const value = raw === '' && options.default !== undefined ? options.default : raw
 
@@ -375,7 +375,7 @@ export class Prompt {
 
   /**
    * Validation subject for a selection: the whole array for `multiple`, the
-   * single value otherwise — so an Ace rule written `validate(values: string[])`
+   * single value otherwise — so an Console rule written `validate(values: string[])`
    * behaves the same here.
    */
   async #selectionProblem(

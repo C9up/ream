@@ -1,8 +1,8 @@
 /**
- * `list` — the built-in command listing every other one (Ace's `ListCommand`).
+ * `list` — the built-in command listing every other one (Console's `ListCommand`).
  *
  * A real registered command rather than a branch inside the kernel: that is
- * what makes `ace.hasCommand('list')` true, `ace.exec('list')` work, and
+ * what makes `consoleApp.hasCommand('list')` true, `consoleApp.exec('list')` work, and
  * `list --bad` fail the same way any other unknown flag does. A hand-rolled
  * `argv.includes('--json')` inside the dispatcher answers none of those.
  */

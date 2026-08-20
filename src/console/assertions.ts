@@ -65,10 +65,10 @@ export function createAssertions(command: Subject, ui: Ui): CommandAssertions {
     },
 
     /**
-     * Ace's semantics: every expected row must be PRESENT among the rendered
+     * Console's semantics: every expected row must be PRESENT among the rendered
      * ones — a subset check, not an equality. The header counts as a row, so
      * `[['Name', 'Email'], ['Ada', '…']]` and `[['Ada', '…']]` are both valid
-     * assertions, exactly as in Ace, where a table row is logged as its cells
+     * assertions, exactly as in Console, where a table row is logged as its cells
      * joined by `|` and the head goes through the same path.
      */
     assertTableRows(expected: readonly (readonly string[])[]): void {
@@ -90,7 +90,7 @@ export function createAssertions(command: Subject, ui: Ui): CommandAssertions {
   }
 }
 
-/** The execution snapshot (Ace `toJSON`), for a command built structurally. */
+/** The execution snapshot (Console `toJSON`), for a command built structurally. */
 export function createSnapshot(
   command: Subject,
   commandName: string,
@@ -99,7 +99,7 @@ export function createSnapshot(
   return () => ({
     commandName,
     options,
-    // Ace exposes the positional values as a list; flags stay keyed.
+    // Console exposes the positional values as a list; flags stay keyed.
     args: [...(Reflect.get(command, 'parsed')?.args ?? [])],
     flags: Reflect.get(command, 'parsed')?.flags ?? {},
     error: command.error,

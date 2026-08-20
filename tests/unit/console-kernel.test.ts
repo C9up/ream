@@ -107,7 +107,7 @@ describe('Kernel', () => {
     const kernel = new Kernel().register(Provision)
     const provision = kernel.getCommand('provision')
 
-    // Metadata, as Ace does: a caller introspecting the registry must not be
+    // Metadata, as Console does: a caller introspecting the registry must not be
     // handed a constructor it could instantiate outside the kernel.
     expect(provision?.commandName).toBe('provision')
     expect(provision?.namespace).toBeNull()
@@ -391,7 +391,7 @@ describe('Kernel', () => {
 
   it('answers --help even when the command declares required inputs', async () => {
     const captured = captureOutput()
-    // The order Ace uses: parse, run the flag listeners, THEN validate. Checking
+    // The order Console uses: parse, run the flag listeners, THEN validate. Checking
     // the required flag first would make `--help` unusable on the very commands
     // whose help one needs most.
     await new Kernel().register(Provision).handle(['provision', '--help'])
@@ -491,7 +491,7 @@ describe('Kernel', () => {
   })
 })
 
-describe('Kernel — Ace lifecycle and contracts', () => {
+describe('Kernel — Console lifecycle and contracts', () => {
   const originalExitCode = process.exitCode
 
   afterEach(() => {
@@ -501,7 +501,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     vi.restoreAllMocks()
   })
 
-  it('runs prepare, interact, run and completed in Ace order', async () => {
+  it('runs prepare, interact, run and completed in Console order', async () => {
     const order: string[] = []
     class Staged extends BaseCommand {
       static override commandName = 'staged'
@@ -570,7 +570,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     }
 
     await new Kernel().register(Inspect).handle(['inspect', 'Ada', '--force'])
-    // Ace's shape: positionals as a LIST, flags under their COMMAND-LINE name.
+    // Console's shape: positionals as a LIST, flags under their COMMAND-LINE name.
     expect(parsed).toEqual({
       args: ['Ada'],
       flags: { force: true },
@@ -642,7 +642,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     const kernel = new Kernel().register(Plain)
     await kernel.handle(['plain', '--no-ansi'])
     expect(process.env.NO_COLOR).toBe('1')
-    // Visible in the parsed input, as in Ace — but never assigned to the
+    // Visible in the parsed input, as in Console — but never assigned to the
     // command, which did not declare them.
     expect(flags).toEqual({ ansi: false })
 
@@ -688,7 +688,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     }
 
     // Returning true ends the dispatch before the command is even built — how
-    // Ace short-circuits on --help. One kernel drives one command line, so the
+    // Console short-circuits on --help. One kernel drives one command line, so the
     // comparison runs on a second one.
     await build().handle(['deploy', '--dry-run'])
     expect(ran).toBe(false)
@@ -838,7 +838,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     })
 
     await kernel.handle(['fails'])
-    // Ace runs `executed` after the executor RETURNS, so a throw skips it — a
+    // Console runs `executed` after the executor RETURNS, so a throw skips it — a
     // hook counting completions must not see a failure.
     expect(seen).toEqual(['executing'])
     expect(String(failure())).toContain('boom')
@@ -871,7 +871,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     })
 
     // A tool listening to these must see `ream <cmd>` too — the CLI path goes
-    // through find(), like Ace's.
+    // through find(), like Console's.
     await kernel.handle(['provision', '--email', 'ada@example.ch'])
     expect(seen).toEqual(['finding:provision', 'loaded:provision', 'executing:true'])
   })
@@ -972,7 +972,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
   it('finds a command through its alias, and throws on an unknown name', async () => {
     const kernel = new Kernel().register(Provision).addAlias('setup', 'provision')
 
-    // Async and throwing, as in Ace — `await` on a synchronous answer is fine.
+    // Async and throwing, as in Console — `await` on a synchronous answer is fine.
     expect((await kernel.find('setup')).commandName).toBe('provision')
     await expect(kernel.find('nope')).rejects.toThrow(/Unknown command "nope"/)
   })
@@ -1140,7 +1140,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
     }
 
     // Global flags belong to the command line. Through exec() the caller is
-    // passing a flag the command does not accept, and Ace says so.
+    // passing a flag the command does not accept, and Console says so.
     await expect(new Kernel().register(Plain).exec('plain', ['--no-ansi'])).rejects.toThrow(
       /Unknown flag "--no-ansi"/,
     )
@@ -1185,7 +1185,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
       }
     }
 
-    // Ace leaves it undefined: a command distinguishing "no target given" from
+    // Console leaves it undefined: a command distinguishing "no target given" from
     // "an empty list of targets" cannot do it against a silent [].
     await new Kernel().register(Deploy).handle(['deploy'])
     expect(seen).toBeUndefined()
@@ -1211,7 +1211,7 @@ describe('Kernel — Ace lifecycle and contracts', () => {
   })
 })
 
-describe('Kernel — remaining Ace contracts', () => {
+describe('Kernel — remaining Console contracts', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -1315,7 +1315,7 @@ describe('Kernel — proxy mode and alias visibility', () => {
 
     await new Kernel().register(Proxy).handle(['proxy', 'run', 'build', '--foo', 'bar'])
     expect(parsed?.flags).toEqual({ foo: 'bar' })
-    // Ace exposes the NAMES of undeclared flags; their values stay in `flags`.
+    // Console exposes the NAMES of undeclared flags; their values stay in `flags`.
     expect(parsed?.unknownFlags).toEqual(['foo'])
     // Without this they were accepted and then silently lost.
     expect(parsed?.extraArgs).toEqual(['run', 'build'])

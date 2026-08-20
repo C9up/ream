@@ -14,7 +14,7 @@
  */
 
 import { Application } from './Application.js'
-import type { Ace } from './console/Ace.js'
+import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
@@ -64,7 +64,7 @@ export interface ReamrcConfig {
   >
   commands?: Array<() => Promise<unknown>>
   /**
-   * Command shorthands — Ace's `commandsAliases`. The value is the command the
+   * Command shorthands — Console's `commandsAliases`. The value is the command the
    * alias stands for, flags included:
    *   `{ resource: 'make:controller --resource' }`
    */
@@ -210,7 +210,7 @@ export class Ignitor {
   private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
   private hotReloadCleanup?: () => void
   #shutdownHandle?: ShutdownHandle
-  #ace?: Ace
+  #console?: Console
 
   // Inline configuration (for simple use or testing)
   private inlineRoutes?: (router: Router) => void
@@ -388,12 +388,12 @@ export class Ignitor {
       await this.phaseRegister()
       await this.phaseBoot()
       await this.phaseStart()
-      // Ace documents its `ace` service as available once the application has
+      // Console documents its `consoleApp` service as available once the application has
       // booted, so the locator is installed here rather than on first use —
-      // `import ace from '@c9up/ream/services/ace'` must not throw in a running
+      // `import consoleApp from '@c9up/ream/services/console'` must not throw in a running
       // app. Only the façade is built (three small modules); loading the
-      // commands themselves stays lazy, inside `ace.boot()`.
-      await this.ace()
+      // commands themselves stays lazy, inside `consoleApp.boot()`.
+      await this.consoleApp()
       await this.phaseReady()
     } catch (err) {
       // A throw mid-boot (e.g. a provider ready() failing AFTER the HTTP port
@@ -412,7 +412,7 @@ export class Ignitor {
 
   /**
    * Load `.env` files into `process.env` before config and providers boot —
-   * mirroring AdonisJS, which loads env in BOTH the HTTP and the ace (console)
+   * mirroring AdonisJS, which loads env in BOTH the HTTP and the consoleApp (console)
    * flows. Without this, `ream migrate` and other console commands booted in a
    * clean subprocess never saw the `.env` the web server got from the shell.
    *
@@ -719,14 +719,14 @@ export class Ignitor {
   async stop(): Promise<void> {
     const errors: unknown[] = []
 
-    // Release the ace locator first — ownership-guarded, so a second Ignitor
+    // Release the consoleApp locator first — ownership-guarded, so a second Ignitor
     // having rebound it is left alone.
-    if (this.#ace !== undefined) {
-      const ace = this.#ace
-      this.#ace = undefined
+    if (this.#console !== undefined) {
+      const consoleApp = this.#console
+      this.#console = undefined
       try {
-        const { clearAce } = await import('./services/ace.js')
-        clearAce(ace)
+        const { clearConsole } = await import('./services/console.js')
+        clearConsole(consoleApp)
       } catch {
         /* the module never loaded — nothing to clear */
       }
@@ -794,25 +794,25 @@ export class Ignitor {
   }
 
   /**
-   * The `ace` façade — the programmatic console (Ace's `ace` service).
+   * The `consoleApp` façade — the programmatic console.
    *
    * Built on demand: the console modules are only imported when something
    * actually reaches for them, so an HTTP-only boot does not pay for the CLI.
    */
-  async ace(): Promise<Ace> {
-    if (this.#ace !== undefined) return this.#ace
+  async consoleApp(): Promise<Console> {
+    if (this.#console !== undefined) return this.#console
 
-    const [{ Ace }, { setAce }] = await Promise.all([
-      import('./console/Ace.js'),
-      import('./services/ace.js'),
+    const [{ Console }, { setConsole }] = await Promise.all([
+      import('./console/Console.js'),
+      import('./services/console.js'),
     ])
     const { kernel, load } = await new ConsoleKernel(this).build()
-    const ace = new Ace({ kernel, load })
+    const consoleApp = new Console({ kernel, load })
 
-    this.#ace = ace
-    setAce(ace)
-    this.app.container.singleton('ace', () => ace)
-    return ace
+    this.#console = consoleApp
+    setConsole(consoleApp)
+    this.app.container.singleton('console', () => consoleApp)
+    return consoleApp
   }
 
   /** The loaded rc file, if `useRcFile()` was called. */
@@ -891,9 +891,9 @@ export { prettyPrintError }
 /**
  * ConsoleKernel — boots the app in console mode and dispatches a command.
  *
- * Ace parity: `new Ignitor(...).console().handle(process.argv.slice(2))`.
+ * Console parity: `new Ignitor(...).console().handle(process.argv.slice(2))`.
  *
- * Commands come from two places, as in Ace:
+ * Commands come from two places, as in Console:
  *   1. the app's own `commands/` directory, discovered automatically;
  *   2. `reamrc.commands[]`, which registers commands shipped by packages.
  *
@@ -913,7 +913,7 @@ export class ConsoleKernel {
   /**
    * Build the console kernel and the function that fills it.
    *
-   * Shared by `handle()` (the CLI) and the `ace` façade (programmatic use), so
+   * Shared by `handle()` (the CLI) and the `consoleApp` façade (programmatic use), so
    * both see exactly the same commands — discovery plus `reamrc.commands` —
    * instead of two loaders drifting apart.
    */
@@ -935,7 +935,7 @@ export class ConsoleKernel {
           this.#started = true
         }
         const app = this.#ignitor.getApp()
-        app.container.singleton('console', () => kernel)
+        app.container.singleton('consoleKernel', () => kernel)
         return app
       },
     })
@@ -964,7 +964,7 @@ export class ConsoleKernel {
 
     let staysAlive = false
     try {
-      // `process.execArgv` IS what node was started with — Ace's `nodeArgs`,
+      // `process.execArgv` IS what node was started with — Console's `nodeArgs`,
       // which a command reads to know how the process was launched.
       const result = await kernel.handle(argv, process.execArgv)
       staysAlive = result.staysAlive

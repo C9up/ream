@@ -1,5 +1,5 @@
 /**
- * `@args` / `@flags` decorators — declarative command inputs (Ace parity).
+ * `@args` / `@flags` decorators — declarative command inputs (Console parity).
  *
  * Legacy (experimental) property decorators, matching the rest of the codebase
  * and the project's swc config (`legacyDecorator: true`). Metadata is written
@@ -50,12 +50,12 @@ export interface ArgumentOptions {
   /** Name shown in help. Defaults to the dash-cased property name. */
   argumentName?: string
   description?: string
-  /** Defaults to `true`, as in Ace — positional arguments are expected. */
+  /** Defaults to `true`, as in Console — positional arguments are expected. */
   required?: boolean
   default?: string | string[]
-  /** Accept an empty value instead of reporting it (Ace `allowEmptyValue`). */
+  /** Accept an empty value instead of reporting it (Console `allowEmptyValue`). */
   allowEmptyValue?: boolean
-  /** Transform or validate the value before assignment (Ace `parse`). */
+  /** Transform or validate the value before assignment (Console `parse`). */
   parse?: (value: string | string[]) => unknown
 }
 
@@ -68,9 +68,9 @@ export interface FlagOptions {
   default?: string | string[] | number | boolean
   /** Defaults to `false` — a flag is optional unless stated otherwise. */
   required?: boolean
-  /** Accept `--flag` with no value behind it (Ace `allowEmptyValue`). */
+  /** Accept `--flag` with no value behind it (Console `allowEmptyValue`). */
   allowEmptyValue?: boolean
-  /** Transform or validate the value before assignment (Ace `parse`). */
+  /** Transform or validate the value before assignment (Console `parse`). */
   parse?: (value: string | string[] | number | boolean) => unknown
   /**
    * Show `--no-<flag>` next to the flag in help. Booleans are always negatable;
@@ -80,7 +80,7 @@ export interface FlagOptions {
 }
 
 /**
- * Reject an argument order the command line could never satisfy (Ace).
+ * Reject an argument order the command line could never satisfy (Console).
  *
  * Exported because `BaseCommand.defineArgument()` declares arguments through a
  * different path: one rule, or a decorated command would accept what the same

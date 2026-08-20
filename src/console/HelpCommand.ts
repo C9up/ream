@@ -1,5 +1,5 @@
 /**
- * `help <command>` — the built-in command explaining another one (Ace's
+ * `help <command>` — the built-in command explaining another one (Console's
  * `HelpCommand`).
  *
  * A registered command, not a branch in the dispatcher: `hasCommand('help')` is

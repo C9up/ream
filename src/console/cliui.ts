@@ -1,10 +1,10 @@
 /**
- * Terminal UI (Ace / `@poppinss/cliui` surface).
+ * Terminal UI (Console / `@poppinss/cliui` surface).
  *
  * Everything renders through {@link Ui.write}, which is what makes the layer
  * testable: in `raw` mode nothing reaches the terminal and every line is kept
  * in memory for assertions. Colours become `name(text)` there — the same trick
- * Ace uses, so an expected log stays a readable string instead of a soup of
+ * Console uses, so an expected log stays a readable string instead of a soup of
  * escape codes.
  */
 
@@ -38,7 +38,7 @@ export type StyleName = keyof typeof STYLES
  * A chainable colour function.
  *
  * Called with text it renders; called with nothing it returns itself, which is
- * what allows Ace's `colors.bgGreen().white(' CREATED ')`.
+ * what allows Console's `colors.bgGreen().white(' CREATED ')`.
  */
 export type Colors = ((text?: string) => string & Colors) & { [K in StyleName]: Colors }
 
@@ -168,7 +168,7 @@ export class Ui {
    * The header cells of the last rendered table.
    *
    * Kept apart from {@link getTableRows} so a caller can assert the data alone.
-   * `assertTableRows` looks at both: Ace treats the head as one more row, and a
+   * `assertTableRows` looks at both: Console treats the head as one more row, and a
    * test may or may not restate it.
    */
   getTableHead(): string[] {
@@ -220,7 +220,7 @@ export class Logger {
   /**
    * Prepend a fixed marker to EVERY message from now on.
    *
-   * Ace's own `prefix` is per-message (`info(msg, { prefix })`, supported
+   * Console's own `prefix` is per-message (`info(msg, { prefix })`, supported
    * below); this sticky form is kept because a command tagging all its output
    * should not repeat itself on every call.
    */
@@ -251,7 +251,7 @@ export class Logger {
   }
 
   /**
-   * A message with animated trailing dots (Ace `logger.await`).
+   * A message with animated trailing dots (Console `logger.await`).
    *
    * The animation only ticks on a TTY: on a pipe, or in raw mode, one line per
    * frame would be noise in a log and unassertable in a test.
@@ -279,7 +279,7 @@ export class Logger {
   }
 
   /**
-   * A step whose outcome is reported later (Ace `logger.action`).
+   * A step whose outcome is reported later (Console `logger.action`).
    *
    *   const create = this.logger.action('creating config/auth.ts')
    *   try { … ; create.displayDuration().succeeded() }
@@ -310,14 +310,14 @@ export class Logger {
   }
 }
 
-/** Per-message decoration (Ace `logger.info(msg, { prefix, suffix })`). */
+/** Per-message decoration (Console `logger.info(msg, { prefix, suffix })`). */
 export interface MessageOptions {
   prefix?: string | number
   suffix?: string | number
 }
 
 /**
- * An "in progress" message with animated dots (Ace `logger.await`).
+ * An "in progress" message with animated dots (Console `logger.await`).
  *
  * Only animates on a TTY. Elsewhere it prints the message once and each
  * `update` once more, which keeps logs and test assertions readable.
@@ -435,7 +435,7 @@ export class Action {
   }
 }
 
-/** A cell with its alignment (Ace `{ content, hAlign }`). */
+/** A cell with its alignment (Console `{ content, hAlign }`). */
 export interface TableCell {
   content: string
   hAlign?: 'left' | 'right' | 'center'
@@ -443,7 +443,7 @@ export interface TableCell {
 
 export type TableInput = string | TableCell
 
-/** A column-aligned table (Ace `ui.table()`). */
+/** A column-aligned table (Console `ui.table()`). */
 export class Table {
   readonly #ui: Ui
   #headCells: TableCell[] = []
@@ -467,7 +467,7 @@ export class Table {
 
   /**
    * Stretch the table to the terminal width, the first column absorbing the
-   * slack (Ace `fullWidth`). Falls back to content width when the width is
+   * slack (Console `fullWidth`). Falls back to content width when the width is
    * unknown — a pipe has no columns.
    */
   fullWidth(): this {
@@ -476,7 +476,7 @@ export class Table {
   }
 
   /**
-   * Which column absorbs the slack in full-width mode (Ace
+   * Which column absorbs the slack in full-width mode (Console
    * `fluidColumnIndex`). Defaults to the first.
    */
   fluidColumnIndex(index: number): this {
@@ -582,7 +582,7 @@ export class Box {
   render(): void {
     if (this.#lines.length === 0) return
 
-    // Instructions are steps, marked with a pointer as Ace renders them; a
+    // Instructions are steps, marked with a pointer as Console renders them; a
     // sticker is a plain highlighted block.
     const decorated =
       this.#kind === 'instructions'
@@ -635,7 +635,7 @@ export class TaskContext {
 
   /**
    * Mark the task as failed. Returned from the callback rather than thrown, so
-   * an expected failure reads like a value — Ace's `return task.error(…)`.
+   * an expected failure reads like a value — Console's `return task.error(…)`.
    */
   error(reason: string | Error): Error {
     this.#failure = reason instanceof Error ? reason : new Error(reason)
@@ -656,7 +656,7 @@ export interface TaskOutcome {
 }
 
 /**
- * A sequence of steps with their outcome (Ace `ui.tasks()`).
+ * A sequence of steps with their outcome (Console `ui.tasks()`).
  *
  * Sequential on purpose: the point is a readable progress report, and running
  * them concurrently would interleave the lines into noise. A failing task stops
@@ -666,7 +666,7 @@ export interface TasksOptions {
   /**
    * Print every progress message instead of only the last one.
    *
-   * Minimal is the default, as in Ace: a hundred `Downloaded 42%` lines make a
+   * Minimal is the default, as in Console: a hundred `Downloaded 42%` lines make a
    * transcript unreadable. Verbose is what a `--verbose` flag turns on.
    */
   verbose?: boolean

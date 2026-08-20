@@ -31,7 +31,7 @@ describe('Ui — raw mode', () => {
     const ui = rawUi()
     ui.logger.prefix('[app]').suffix('(v1)')
     ui.logger.info('booted')
-    // Prefix and suffix are dimmed, as Ace shows them.
+    // Prefix and suffix are dimmed, as Console shows them.
     expect(ui.getLogs()).toEqual(['dim([app]) [ blue(info) ] booted dim((v1))'])
   })
 })
@@ -161,7 +161,7 @@ describe('Ui — tasks', () => {
 })
 
 describe('Ui — colors', () => {
-  it('chains styles, as Ace does', () => {
+  it('chains styles, as Console does', () => {
     const ui = rawUi()
     expect(ui.colors.red('[ERROR]')).toBe('red([ERROR])')
     expect(ui.colors.bgGreen().white(' CREATED ')).toBe('bgGreen(white( CREATED ))')
@@ -228,7 +228,7 @@ describe('Ui — column alignment with real ANSI colours', () => {
   })
 })
 
-describe('Ui — Ace option contracts', () => {
+describe('Ui — Console option contracts', () => {
   it('takes prefix and suffix per message', () => {
     const ui = rawUi()
     ui.logger.info('installing packages', { suffix: 'npm i --production' })
@@ -328,12 +328,12 @@ describe('Command — test assertions', () => {
     ])
   })
 
-  it('accepts the header among the expected rows, as Ace documents it', async () => {
+  it('accepts the header among the expected rows, as Console documents it', async () => {
     const kernel = new Kernel().register(Report)
     kernel.ui.switchMode('raw')
     const command = await kernel.exec('report')
 
-    // Ace's own example restates the head; its check is "every expected row is
+    // Console's own example restates the head; its check is "every expected row is
     // present", so a subset — head or no head — is equally valid.
     command.assertTableRows([
       ['Name', 'Email'],
@@ -403,7 +403,7 @@ describe('BaseCommand — metadata and runtime declaration', () => {
       static override description = 'Declared without decorators'
       run(): void {
         // Read through the parsed bag on purpose: positionals by position,
-        // flags by their command-line name (Ace's shape).
+        // flags by their command-line name (Console's shape).
         seen = {
           name: String(this.parsed.args[0]),
           retries: Number(this.parsed.flags.retries),
@@ -447,7 +447,7 @@ describe('BaseCommand — metadata and runtime declaration', () => {
     }
 
     // Two kernels on purpose: once the command line's command has finished, its
-    // kernel is done — Ace refuses to run anything more through it.
+    // kernel is done — Console refuses to run anything more through it.
     const cli = new Kernel().register(Where)
     cli.ui.switchMode('raw')
     await cli.handle(['where']) // the command line
@@ -545,8 +545,8 @@ describe('BaseCommand — toJSON is an execution snapshot', () => {
       }
     }
 
-    // exec() rejects on a failure (Ace). To inspect the command instead, build
-    // it with create() and drive it — which is the Ace path too.
+    // exec() rejects on a failure (Console). To inspect the command instead, build
+    // it with create() and drive it — which is the Console path too.
     const kernel = new Kernel().register(Fails)
     await expect(kernel.exec('fails')).rejects.toThrow('nope')
 
@@ -626,7 +626,7 @@ describe('Command — public contract of exec()', () => {
     const command = await new Kernel().register(Move).exec('move', ['a', 'b', '--force'])
     const snapshot = command.toJSON()
 
-    // Ace exposes args as a list; flags stay keyed.
+    // Console exposes args as a list; flags stay keyed.
     expect(snapshot.args).toEqual(['a', 'b'])
     expect(snapshot.flags).toEqual({ force: true })
   })

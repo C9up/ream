@@ -11,13 +11,13 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
-    "./ace": {
+    "./console": {
       "types": "./src/console/index.ts",
       "import": "./src/console/index.ts"
     },
-    "./services/ace": {
-      "types": "./src/services/ace.ts",
-      "import": "./src/services/ace.ts"
+    "./services/console": {
+      "types": "./src/services/console.ts",
+      "import": "./src/services/console.ts"
     },
     "./services/app": {
       "types": "./src/services/app.ts",
@@ -197,13 +197,13 @@
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
       },
-      "./ace": {
+      "./console": {
         "types": "./dist/console/index.d.ts",
         "import": "./dist/console/index.js"
       },
-      "./services/ace": {
-        "types": "./dist/services/ace.d.ts",
-        "import": "./dist/services/ace.js"
+      "./services/console": {
+        "types": "./dist/services/console.d.ts",
+        "import": "./dist/services/console.js"
       },
       "./services/app": {
         "types": "./dist/services/app.d.ts",

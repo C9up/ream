@@ -174,7 +174,7 @@ export { Logger, Ui } from './console/cliui.js'
 export { args, flags } from './console/decorators.js'
 // Renamed at the root: Ream already exports an HTTP `ExceptionHandler`, and
 // two different things under one name is worse than a longer one. It keeps its
-// Ace name on the console entry point.
+// Console name on the console entry point.
 export { ExceptionHandler as ConsoleExceptionHandler } from './console/ExceptionHandler.js'
 export { default as HelpCommand } from './console/HelpCommand.js'
 export { IndexGenerator } from './console/IndexGenerator.js'
