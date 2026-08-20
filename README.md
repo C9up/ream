@@ -93,7 +93,7 @@ nothing about ream, and ream owns no test execution. `tests/bootstrap.ts`
 Driving it yourself (a `bin/test.ts`, a console command) is the same call:
 
 ```ts
-import { runTestsFromRcFile } from '@c9up/ream/test-runner'
+import { runTestsFromRcFile } from '@c9up/helix-plugin-ream/runner'
 
 process.exitCode = await runTestsFromRcFile('./reamrc.ts', {
   suites: process.argv.slice(2),
