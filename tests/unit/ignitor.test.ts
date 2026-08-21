@@ -315,3 +315,61 @@ describe('ignitor > graceful shutdown wiring', () => {
     await app.stop()
   })
 })
+
+describe('ignitor > bind address', () => {
+  function hostSpy() {
+    const seen: string[] = []
+    return {
+      seen,
+      factory: (p: number, h: string) => {
+        seen.push(h)
+        return new MockHyperServer(p)
+      },
+    }
+  }
+
+  it('binds localhost by default outside production', async () => {
+    const { factory, seen } = hostSpy()
+    const app = await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
+      .httpServer()
+      .start()
+    expect(seen).toEqual(['localhost'])
+    expect(app.host()).toBe('localhost')
+    await app.stop()
+  })
+
+  it('honours an explicit config host', async () => {
+    const { factory, seen } = hostSpy()
+    const app = await new Ignitor({
+      host: '0.0.0.0',
+      serverFactory: factory,
+      gracefulShutdown: false,
+    })
+      .httpServer()
+      .start()
+    expect(seen).toEqual(['0.0.0.0'])
+    expect(app.host()).toBe('0.0.0.0')
+    await app.stop()
+  })
+
+  it('falls back to process.env.HOST when no config host is given', async () => {
+    const previous = process.env.HOST
+    process.env.HOST = '127.0.0.2'
+    try {
+      const { factory, seen } = hostSpy()
+      const app = await new Ignitor({ serverFactory: factory, gracefulShutdown: false })
+        .httpServer()
+        .start()
+      expect(seen).toEqual(['127.0.0.2'])
+      await app.stop()
+    } finally {
+      if (previous === undefined) delete process.env.HOST
+      else process.env.HOST = previous
+    }
+  })
+
+  it('has no host before start', () => {
+    const { factory } = hostSpy()
+    expect(new Ignitor({ serverFactory: factory }).host()).toBeUndefined()
+  })
+})

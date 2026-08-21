@@ -69,6 +69,7 @@ pub struct NapiRateLimitConfig {
 #[napi]
 pub struct HyperServer {
     port: u16,
+    host: [u8; 4],
     handler: Arc<std::sync::Mutex<Option<ream_http::RequestHandler>>>,
     server: Arc<TokioMutex<Option<ream_http::ReamServer>>>,
     shield: Arc<std::sync::Mutex<Option<ShieldConfig>>>,
@@ -83,8 +84,11 @@ pub struct HyperServer {
 
 #[napi]
 impl HyperServer {
+    /// `host` is the bind address: an IPv4 literal (`0.0.0.0` to accept from
+    /// every interface) or the `localhost` alias. Omitted → loopback only,
+    /// the safe default for a dev machine.
     #[napi(constructor)]
-    pub fn new(port: Option<u32>) -> napi::Result<Self> {
+    pub fn new(port: Option<u32>, host: Option<String>) -> napi::Result<Self> {
         catch_unwind_napi(|| {
             let port_val = port.unwrap_or(0);
             if port_val > 65535 {
@@ -94,8 +98,21 @@ impl HyperServer {
                 ).into());
             }
             let port = port_val as u16;
+            let host = match host.as_deref() {
+                None | Some("localhost") => [127, 0, 0, 1],
+                Some(h) => match h.parse::<std::net::Ipv4Addr>() {
+                    Ok(addr) => addr.octets(),
+                    Err(_) => {
+                        return Err(ream_napi_core::ream_error!(
+                            "INVALID_HOST",
+                            format!("Invalid host '{}' — expected an IPv4 address or 'localhost'", h)
+                        ).into());
+                    }
+                },
+            };
             Ok(Self {
                 port,
+                host,
                 handler: Arc::new(std::sync::Mutex::new(None)),
                 server: Arc::new(TokioMutex::new(None)),
                 shield: Arc::new(std::sync::Mutex::new(None)),
@@ -205,7 +222,7 @@ impl HyperServer {
         let rt_ref = ream_napi_core::shared_runtime();
 
         // Create server, configure, and listen
-        let mut srv = ReamServer::new(port);
+        let mut srv = ReamServer::new(port).with_host(self.host);
         srv.on_request(handler);
         srv.set_stream_registry(self.stream_registry.clone());
 

@@ -174,7 +174,13 @@ export interface HyperServerLike {
 
 export interface IgnitorConfig {
   port?: number
-  serverFactory?: (port: number) => HyperServerLike
+  /**
+   * Bind address of the HTTP server. Falls back to `process.env.HOST`, then to
+   * `0.0.0.0` in production (a container has to accept traffic from outside its
+   * own network namespace) and `localhost` everywhere else.
+   */
+  host?: string
+  serverFactory?: (port: number, host: string) => HyperServerLike
   importer?: (filePath: string) => Promise<unknown>
   watchDirs?: string[]
   /**
@@ -210,6 +216,7 @@ export class Ignitor {
   private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
   private hotReloadCleanup?: () => void
   #shutdownHandle?: ShutdownHandle
+  #host?: string
   #console?: Console
 
   // Inline configuration (for simple use or testing)
@@ -551,7 +558,9 @@ export class Ignitor {
       const availablePort = this.app.inProduction
         ? desiredPort
         : await findAvailablePort(desiredPort)
-      this._httpServer = this.config.serverFactory(availablePort)
+      this.#host =
+        this.config.host ?? process.env.HOST ?? (this.app.inProduction ? '0.0.0.0' : 'localhost')
+      this._httpServer = this.config.serverFactory(availablePort, this.#host)
       this._httpServer.onRequest(kernel)
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
       // listen. Security filtering itself lives in @c9up/blackhole.
@@ -584,7 +593,7 @@ export class Ignitor {
         'IGNITOR_NO_SERVER_FACTORY',
         'httpServer() requires a serverFactory in config',
         {
-          hint: 'Example: new Ignitor({ serverFactory: (port) => new HyperServer(port) })',
+          hint: 'Example: new Ignitor({ serverFactory: (port, host) => new HyperServer(port, host) })',
         },
       )
     }
@@ -774,6 +783,16 @@ export class Ignitor {
 
   async port(): Promise<number> {
     return this._httpServer ? this._httpServer.port() : 0
+  }
+
+  /**
+   * The address the HTTP server was bound to. Resolved at start; undefined
+   * before that (and in non-web environments). Use it in the boot banner —
+   * printing a hardcoded `localhost` for a server bound to `0.0.0.0` sends
+   * you looking in the wrong place.
+   */
+  host(): string | undefined {
+    return this.#host
   }
 
   getApp(): Application {

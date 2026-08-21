@@ -192,3 +192,32 @@ describeIfNetwork('hyper-server > error handling', () => {
     await close()
   })
 })
+
+describeIfNetwork('hyper-server > bind address', () => {
+  it('binds every interface when the host is 0.0.0.0', async () => {
+    const server = new HyperServer(0, '0.0.0.0')
+    server.onRequest(async () => ({ status: 200, headers: {}, body: 'bound' }))
+    await server.listen()
+    const port = await server.port()
+
+    const res = await httpGet(port, '/')
+    expect(res.body).toBe('bound')
+
+    await server.close()
+  })
+
+  it('accepts the localhost alias', async () => {
+    const server = new HyperServer(0, 'localhost')
+    server.onRequest(async () => ({ status: 200, headers: {}, body: 'loopback' }))
+    await server.listen()
+    const port = await server.port()
+
+    expect((await httpGet(port, '/')).body).toBe('loopback')
+
+    await server.close()
+  })
+
+  it('rejects a host that is neither an IPv4 literal nor localhost', () => {
+    expect(() => new HyperServer(0, 'not-a-host')).toThrow(/INVALID_HOST|not-a-host/)
+  })
+})

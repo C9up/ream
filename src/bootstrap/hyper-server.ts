@@ -33,7 +33,7 @@ const PLATFORM_SUFFIX: Record<string, string> = {
 }
 
 interface HyperServerCtor {
-  new (port: number): HyperServerLike
+  new (port: number, host?: string): HyperServerLike
 }
 
 interface HyperServerNapiModule {
@@ -54,7 +54,9 @@ function isHyperServerNapi(value: unknown): value is HyperServerNapiModule {
  * Returns a `serverFactory` compatible with `IgnitorConfig`, or `undefined`
  * when no binary is available (unsupported platform / missing build).
  */
-export function createHyperServerFactory(): ((port: number) => HyperServerLike) | undefined {
+export function createHyperServerFactory():
+  | ((port: number, host?: string) => HyperServerLike)
+  | undefined {
   const suffix = PLATFORM_SUFFIX[`${platform}-${arch}`]
   if (!suffix) return undefined
 
@@ -74,5 +76,5 @@ export function createHyperServerFactory(): ((port: number) => HyperServerLike) 
   if (!isHyperServerNapi(mod)) return undefined
 
   const Ctor = mod.HyperServer
-  return (port: number) => new Ctor(port)
+  return (port: number, host?: string) => new Ctor(port, host)
 }
