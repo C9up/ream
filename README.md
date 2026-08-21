@@ -108,6 +108,7 @@ universe through the container, never via a static import.
 | Package | Description |
 |---------|-------------|
 | [@c9up/atlas](https://github.com/C9up/atlas) | Data Mapper ORM |
+| [@c9up/eon](https://github.com/C9up/eon) | Time-series data layer (TDengine-backed) |
 | [@c9up/rune](https://github.com/C9up/rune) | Validation engine |
 | [@c9up/warden](https://github.com/C9up/warden) | Authentication |
 | [@c9up/sigil](https://github.com/C9up/sigil) | Password hashing (argon2, bcrypt, scrypt) |
@@ -118,16 +119,18 @@ universe through the container, never via a static import.
 | [@c9up/atom](https://github.com/C9up/atom) | Exact decimal arithmetic |
 | [@c9up/bay](https://github.com/C9up/bay) | Job queue (memory + Redis drivers) |
 | [@c9up/echo](https://github.com/C9up/echo) | Cache (memory + Redis drivers) |
+| [@c9up/quasar](https://github.com/C9up/quasar) | Redis connections (named, pub/sub, health checks) |
 | [@c9up/archive](https://github.com/C9up/archive) | File storage (Local + S3-compatible) |
 | [@c9up/rover](https://github.com/C9up/rover) | Mail transport (SMTP, log, pluggable) |
 | [@c9up/nova](https://github.com/C9up/nova) | Web Push notifications (VAPID) |
-| [@c9up/relay](https://github.com/C9up/relay) | Realtime transport (SSE + WebSocket) |
+| [@c9up/relay](https://github.com/C9up/relay) | Realtime transport (SSE; WebSocket Hub protocol implemented, no server upgrade point yet) |
 | [@c9up/comet](https://github.com/C9up/comet) | JSON-RPC 2.0 protocol + isomorphic client |
 | [@c9up/aurora](https://github.com/C9up/aurora) | Reactive UI runtime (SSR + hydration) |
 | [@c9up/photon](https://github.com/C9up/photon) | Frontend rendering engine |
 | [@c9up/inker](https://github.com/C9up/inker) | Server-side templating |
 | [@c9up/station](https://github.com/C9up/station) | Admin scaffolding |
 | [@c9up/helix](https://github.com/C9up/helix) | Framework-agnostic test runtime |
+| [@c9up/helix-plugin-ream](https://github.com/C9up/helix-plugin-ream) | The ream↔helix bridge (boots a Ream app under test) |
 | [@c9up/ream-cli](https://github.com/C9up/ream-cli) | CLI & code generators (Rust binary, `ream` command) |
 | [@c9up/ream-mcp](https://github.com/C9up/ream-mcp) | MCP server — agent-ready framework assistant |
 
