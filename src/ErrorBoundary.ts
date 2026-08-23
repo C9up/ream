@@ -142,7 +142,15 @@ export class ErrorBoundary {
       process.stderr.write(`[ErrorBoundary] Failed to emit: ${JSON.stringify(event)}\n`)
     }
 
-    if (this.devMode) {
+    // A fatal always reaches stderr, dev or not.
+    //
+    // Installing this boundary REPLACES Node's own handling of an unhandled
+    // rejection, which prints the reason and exits. An app that registered no
+    // error listener would otherwise swallow every one of them silently — the
+    // boundary would turn each forgotten `await` from a loud crash into
+    // nothing at all, which is the opposite of what it is for. A duplicated
+    // line when a listener also logs it is a much smaller price.
+    if (this.devMode || event.type === 'system.fatal') {
       const prefix =
         event.type === 'system.fatal'
           ? '✗ FATAL'
@@ -152,6 +160,10 @@ export class ErrorBoundary {
               ? '⚠ SECURITY'
               : '✗ SERVICE'
       process.stderr.write(`${prefix} [${event.source}] ${event.message}\n`)
+      // The stack is the only part that says WHERE the rejection came from.
+      if (event.type === 'system.fatal' && event.originalError !== undefined) {
+        process.stderr.write(`${event.originalError}\n`)
+      }
     }
   }
 }

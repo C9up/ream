@@ -10,6 +10,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ServiceToken } from '../container/types.js'
 import type { Emitter } from '../events/Emitter.js'
+import type { MatchedParams } from '../router/Router.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Session } from '../session/Session.js'
@@ -204,7 +205,8 @@ export class HttpContext extends Macroable {
   readonly response: Response
 
   /** Route parameters extracted from the URL pattern. */
-  readonly params: Record<string, string>
+  /** Matched route parameters — `*` holds the segments it swallowed, as an array. */
+  readonly params: MatchedParams
 
   /** Information about the matched route. */
   readonly route: RouteInfo
@@ -303,7 +305,7 @@ export class HttpContext extends Macroable {
   constructor(
     id: string,
     rawRequest: RawRequest,
-    params: Record<string, string>,
+    params: MatchedParams,
     route: RouteInfo,
     containerResolver?: ContainerResolver,
   ) {

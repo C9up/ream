@@ -335,14 +335,15 @@ describe('router > catch-all wildcard', () => {
     router.get('/assets/*', async () => {})
     const match = router.match('GET', '/assets/css/main.css')
     expect(match).not.toBeUndefined()
-    expect(match?.params['*']).toBe('css/main.css')
+    // AdonisJS hands the wildcard as the ARRAY of segments it swallowed.
+    expect(match?.params['*']).toEqual(['css', 'main.css'])
   })
 
   it('/assets/* matches /assets/single', () => {
     const router = new Router()
     router.get('/assets/*', async () => {})
     const match = router.match('GET', '/assets/single')
-    expect(match?.params['*']).toBe('single')
+    expect(match?.params['*']).toEqual(['single'])
   })
 })
 

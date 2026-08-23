@@ -37,6 +37,15 @@ interface ResolutionChain {
 export class Container {
   #bindings: Map<string, Binding> = new Map()
   #singletons: Map<string, unknown> = new Map()
+  /**
+   * Singletons currently being built, by key.
+   *
+   * The factory is async, so two resolves at cold start both get past the
+   * cache check and both run it — producing two instances where the whole
+   * point is one, and silently discarding the first (a second connection
+   * pool, a second scheduler). Concurrent callers await the same promise.
+   */
+  #pendingSingletons: Map<string, Promise<unknown>> = new Map()
   #overrides: Map<string, ServiceFactory> = new Map()
   /**
    * Snapshot of singletons taken when `swap`/`override` shadows a previously
@@ -176,11 +185,30 @@ export class Container {
    * res])`); only the `undefined` slots are container-resolved, top-level only.
    */
   async resolve<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T> {
-    // Dereference an alias to its target before anything else.
-    const aliasTarget = this.#aliases.get(this.#tokenToKey(token))
-    if (aliasTarget !== undefined) return this.resolve<T>(aliasTarget, runtimeValues)
-
-    const key = this.#tokenToKey(token)
+    // Dereference aliases to the final target before anything else. Walked in
+    // a LOOP with its own seen-set: recursing into `resolve()` re-entered
+    // before the cycle guard below was armed, so `alias('a','b')` +
+    // `alias('b','a')` overflowed the stack instead of naming the cycle.
+    let resolvedToken = token
+    let key = this.#tokenToKey(resolvedToken)
+    const seenAliases = new Set<string>([key])
+    for (
+      let target = this.#aliases.get(key);
+      target !== undefined;
+      target = this.#aliases.get(key)
+    ) {
+      resolvedToken = target
+      key = this.#tokenToKey(target)
+      if (seenAliases.has(key)) {
+        const cycle = [...seenAliases, key].join(' → ')
+        throw new ReamError('CIRCULAR_DEPENDENCY', `Circular alias detected: ${cycle}`, {
+          hint: 'An alias chain must end at a real binding — remove one of the aliases.',
+          context: { chain: cycle },
+        })
+      }
+      seenAliases.add(key)
+    }
+    token = resolvedToken
 
     // Top of a chain: open one, so everything this resolution triggers shares
     // it and nothing outside it does.
@@ -219,7 +247,7 @@ export class Container {
     method: K,
     runtimeValues?: unknown[],
   ): Promise<unknown> {
-    type Ctor = new (...args: unknown[]) => unknown
+    type Ctor = new (...args: never[]) => unknown
     // `Object.getPrototypeOf` is typed `any` in lib.dom, so the assignment
     // narrows it back to a typed constructor without a cast expression.
     const target: Ctor = Object.getPrototypeOf(instance).constructor
@@ -315,13 +343,32 @@ export class Container {
     // 3. Check explicit bindings — the factory may be async.
     const binding = this.#bindings.get(key)
     if (binding) {
-      const instance = binding.factory ? await binding.factory(this) : undefined
-      if (binding.scope === 'singleton') {
-        this.#singletons.set(key, instance)
+      if (binding.scope !== 'singleton') {
+        const instance = binding.factory ? await binding.factory(this) : undefined
+        await this.#runResolvingHooks(key, instance)
+        // Boundary cast from `unknown` — the caller brands the resolved type via T.
+        return instance as T
       }
-      await this.#runResolvingHooks(key, instance)
-      // Boundary cast from `unknown` — the caller brands the resolved type via T.
-      return instance as T
+
+      // A build already under way: join it rather than start a second one.
+      const inFlight = this.#pendingSingletons.get(key)
+      if (inFlight) return (await inFlight) as T
+
+      const building = (async (): Promise<unknown> => {
+        const instance = binding.factory ? await binding.factory(this) : undefined
+        this.#singletons.set(key, instance)
+        // Inside the promise, so the hooks run exactly once per instance no
+        // matter how many callers were waiting.
+        await this.#runResolvingHooks(key, instance)
+        return instance
+      })()
+      this.#pendingSingletons.set(key, building)
+      try {
+        return (await building) as T
+      } finally {
+        // Cleared either way: a failed build must not poison later attempts.
+        this.#pendingSingletons.delete(key)
+      }
     }
 
     // 4. Auto-construct if it's a class
@@ -352,7 +399,7 @@ export class Container {
    * 3. No params → plain `new Class()`
    */
   async #autoConstruct(
-    target: new (...args: unknown[]) => unknown,
+    target: new (...args: never[]) => unknown,
     runtimeValues?: unknown[],
   ): Promise<unknown> {
     const metadata = getServiceMetadata(target)
@@ -397,7 +444,7 @@ export class Container {
           const depToken = injectTokens.get(index)
           deps.push(depToken ? await this.resolve(depToken) : undefined)
         }
-        const instance = new target(...deps)
+        const instance = Reflect.construct(target, deps)
         if (scope === 'singleton') this.#singletons.set(key, instance)
         return instance
       }
@@ -406,7 +453,7 @@ export class Container {
       //     constructor). Slots beyond the runtime values stay undefined.
       if (target.length > 0 && (runtimeValues?.length ?? 0) > 0) {
         const deps = Array.from({ length: target.length }, (_value, index) => runtimeAt(index))
-        const instance = new target(...deps)
+        const instance = Reflect.construct(target, deps)
         if (scope === 'singleton') this.#singletons.set(key, instance)
         return instance
       }
@@ -446,7 +493,7 @@ export class Container {
       deps.push(depToken ? await this.resolve(depToken) : undefined)
     }
 
-    const instance = new target(...deps)
+    const instance = Reflect.construct(target, deps)
     if (scope === 'singleton') this.#singletons.set(key, instance)
     return instance
   }
@@ -507,7 +554,7 @@ const NON_INJECTABLE_CONSTRUCTORS = new Set<unknown>([
 ])
 
 /** True for a real, injectable class token (excludes native primitive constructors). */
-function isInjectableClass(value: unknown): value is new (...args: unknown[]) => unknown {
+function isInjectableClass(value: unknown): value is new (...args: never[]) => unknown {
   return typeof value === 'function' && !NON_INJECTABLE_CONSTRUCTORS.has(value)
 }
 

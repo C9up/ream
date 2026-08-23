@@ -11,7 +11,10 @@ const SERVICE_METADATA_KEY = Symbol('ream:service')
 const INJECT_METADATA_KEY = Symbol('ream:inject')
 
 /** Constructor type — accepts unknown args, returns unknown instance. */
-type AnyConstructor = new (...args: unknown[]) => unknown
+// `never[]` accepts every constructor shape: parameters are contravariant, so a
+// rest of `never` is assignable from any concrete list. Same spelling as the
+// router's, so a class flows between the two without an assertion.
+type AnyConstructor = new (...args: never[]) => unknown
 
 /** Registry of all decorated services. */
 const serviceRegistry: Map<AnyConstructor, ServiceMetadata> = new Map()
@@ -33,14 +36,24 @@ export function getServiceMetadata(target: AnyConstructor): ServiceMetadata | un
  * @Service() decorator.
  * Registers the class in the IoC container for auto-resolution.
  */
+/** Anything with a construct signature — a decorated class always is. */
+function isConstructor(value: unknown): value is AnyConstructor {
+  return typeof value === 'function' && value.prototype !== undefined
+}
+
 export function Service(options: { scope?: ServiceScope; as?: string } = {}): ClassDecorator {
   return (target) => {
     const metadata: ServiceMetadata = {
       scope: options.scope ?? 'singleton',
       as: options.as,
     }
-    // biome-ignore lint/suspicious/noExplicitAny: ClassDecorator target is Function; registry requires AnyConstructor which is a subtype
-    serviceRegistry.set(target as any as AnyConstructor, metadata)
+    // A ClassDecorator's target is typed `Function`, which carries no
+    // construct signature; the guard is what states that a decorated class IS
+    // constructible.
+    if (!isConstructor(target)) {
+      throw new TypeError('@Service() can only decorate a class')
+    }
+    serviceRegistry.set(target, metadata)
     Reflect.defineMetadata(SERVICE_METADATA_KEY, metadata, target)
   }
 }

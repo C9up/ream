@@ -29,6 +29,7 @@ import { startHotReload } from './HotReload.js'
 import type { HttpKernelRequest, HttpKernelResponse } from './HttpKernel.js'
 import { createHttpKernel } from './HttpKernel.js'
 import { ExceptionHandler } from './http/Exception.js'
+import { HttpContext } from './http/HttpContext.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import type { AppContext, ProviderContract } from './Provider.js'
@@ -40,6 +41,7 @@ import { Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearRouter, setRouter } from './services/router.js'
 import { clearServer, setServer } from './services/server.js'
+import { registerSessionTemplateTags } from './session/templateTags.js'
 
 /** Application environment. */
 export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
@@ -253,6 +255,12 @@ export class Ignitor {
     this.app.container.singleton('server', () => this.server)
     this.app.container.singleton('middleware', () => this.middleware)
     this.app.container.singleton('app', () => this.app)
+    // The HttpContext CLASS, so an integration provider can extend it the way
+    // AdonisJS does — `HttpContext.getter('view', …)` is how the view layer
+    // attaches `ctx.view`. Exported from the barrel too, but a provider that
+    // must stay agnostic reaches it through the container instead of importing
+    // ream at runtime.
+    this.app.container.singleton('HttpContext', () => HttpContext)
     // `appRoot` is the URL passed to `new Ignitor(new URL('../', import.meta.url))`.
     // Providers resolve it through the container so they can interpret
     // relative paths in config files (e.g. `pages.root: './resources/pages'`)
@@ -431,6 +439,30 @@ export class Ignitor {
     loadEnvFiles(this.appRoot, { skipEnvLocal: this.environment === 'test' })
   }
 
+  /**
+   * Give the template engine `@error` / `@errors` / `@inputError` /
+   * `@flashMessage`, as AdonisJS's session plugin does.
+   *
+   * The engine is duck-typed out of the container so ream carries no dependency
+   * on it, and an app with no template layer simply skips this.
+   */
+  private async registerSessionTemplateTags(): Promise<void> {
+    for (const token of ['inker', 'view']) {
+      if (!this.app.container.has(token)) continue
+      const binding: unknown = await this.app.container.resolve(token)
+      for (const candidate of [binding, Reflect.get(Object(binding), '_templates')]) {
+        const register = Reflect.get(Object(candidate), 'registerTag')
+        if (typeof register !== 'function') continue
+        registerSessionTemplateTags({
+          registerTag: (tag) => {
+            register.call(candidate, tag)
+          },
+        })
+        return
+      }
+    }
+  }
+
   private async phaseRegister(): Promise<void> {
     // Auto-load config/*.ts files into app.config
     await this.autoloadConfig()
@@ -527,6 +559,8 @@ export class Ignitor {
         onError: (error, ctx) => {
           this.errorBoundary.serviceError('HttpKernel', error, ctx.id)
         },
+        // AdonisJS `config/app.ts` → `http: { allowMethodSpoofing: true }`.
+        allowMethodSpoofing: this.app.config.get<boolean>('app.http.allowMethodSpoofing') === true,
         streamBackend: () => {
           const server = this._httpServer
           if (
@@ -600,6 +634,11 @@ export class Ignitor {
 
     // Install error boundary
     this.errorBoundary.install()
+
+    // Publish the flash-message tags to the template engine, if one is
+    // installed. After boot(), so the engine's own provider has bound it;
+    // before ready(), so a provider that pre-renders finds the tags in place.
+    await this.registerSessionTemplateTags()
 
     // Call ready() on providers
     for (const provider of this.providers) {

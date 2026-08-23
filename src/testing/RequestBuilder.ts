@@ -46,6 +46,35 @@ export interface AuthSubject {
   extraHeaders?: Record<string, string>
 }
 
+/**
+ * What a guard answers when asked to authenticate a test client
+ * (AdonisJS `AuthClientResponse`).
+ */
+export interface ClientAuthResponse {
+  headers?: Record<string, string>
+  session?: Record<string, unknown>
+  cookies?: Record<string, string>
+}
+
+/**
+ * The little `loginAs()` needs of a guard.
+ *
+ * Structurally typed: the test client must not import warden, and an app with
+ * its own guard satisfies this by exposing the same method.
+ */
+export interface ClientAuthenticatable {
+  authenticateAsClient(...args: never[]): ClientAuthResponse | Promise<ClientAuthResponse>
+}
+
+/**
+ * Persists session values for a test request and returns the cookie that
+ * addresses them. Given the session driver, it writes an entry and hands back
+ * `{ <cookieName>: <sessionId> }`.
+ */
+export type SessionSeeder = (
+  values: Record<string, unknown>,
+) => Record<string, string> | Promise<Record<string, string>>
+
 export interface AuthStrategy {
   /** Compute the headers Warden expects for this user (Bearer token / session cookie / ...). */
   headersFor(subject: AuthSubject): Record<string, string> | Promise<Record<string, string>>
@@ -156,7 +185,12 @@ export class RequestBuilder {
   #cookies: Record<string, string> = {}
   #query = new URLSearchParams()
   #authStrategy: AuthStrategy | null
+  #sessionSeeder: SessionSeeder | null
   #pendingAuth: AuthSubject | null = null
+  #pendingClientAuth: {
+    guard: ClientAuthenticatable
+    args: never[]
+  } | null = null
   #timeoutMs: number | undefined
   #maxRedirects = DEFAULT_MAX_REDIRECTS
   #sent: Promise<ApiResponse> | null = null
@@ -170,11 +204,13 @@ export class RequestBuilder {
     method: HttpMethod,
     path: string,
     authStrategy: AuthStrategy | null = null,
+    sessionSeeder: SessionSeeder | null = null,
   ) {
     this.#sender = sender
     this.#method = method
     this.#path = path
     this.#authStrategy = authStrategy
+    this.#sessionSeeder = sessionSeeder
     applyRequestExtensions(this)
   }
 
@@ -421,6 +457,23 @@ export class RequestBuilder {
     return this
   }
 
+  /**
+   * Send this request as an authenticated user (AdonisJS `loginAs`).
+   *
+   *     await client.get('/dashboard').loginAs(sessionGuard, user)
+   *     await client.get('/api/me').loginAs(jwtGuard, user)
+   *     await client.get('/admin').loginAs(basicGuard, 'ada', 'secret')
+   *
+   * The GUARD answers what to send — a header, a session entry, a cookie — so
+   * the test never reproduces how that guard authenticates. A test that forges
+   * its own header proves only that the forgery works; this one travels the
+   * same verification path as production.
+   */
+  loginAs(guard: ClientAuthenticatable, ...args: never[]): this {
+    this.#pendingClientAuth = { guard, args }
+    return this
+  }
+
   /** Fire the request (once) and return the rich response. Idempotent. */
   send(): Promise<ApiResponse> {
     if (this.#sent === null) this.#sent = this.#execute()
@@ -557,6 +610,29 @@ export class RequestBuilder {
         for (const [k, v] of Object.entries(this.#pendingAuth.extraHeaders)) {
           this.#headers[k.toLowerCase()] = v
         }
+      }
+    }
+
+    if (this.#pendingClientAuth !== null) {
+      const { guard, args } = this.#pendingClientAuth
+      const answer = await guard.authenticateAsClient(...args)
+      for (const [k, v] of Object.entries(answer.headers ?? {})) {
+        this.#headers[k.toLowerCase()] = v
+      }
+      Object.assign(this.#cookies, answer.cookies ?? {})
+      // A session guard answers with session VALUES, which only something
+      // holding the session driver can persist. Without a seeder the request
+      // would go out unauthenticated and the test would fail somewhere far from
+      // the cause — so say it here instead.
+      if (answer.session && Object.keys(answer.session).length > 0) {
+        if (!this.#sessionSeeder) {
+          throw new Error(
+            'RequestBuilder: `loginAs()` was given a session-based guard, which needs a session to be written before the request. ' +
+              'Pass `sessionSeeder` in the client options (it receives the values and returns the session cookie).',
+          )
+        }
+        const cookie = await this.#sessionSeeder(answer.session)
+        Object.assign(this.#cookies, cookie)
       }
     }
 

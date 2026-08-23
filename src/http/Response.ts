@@ -37,6 +37,28 @@ function assertNoCRLF(name: string, value: string): void {
 }
 
 /**
+ * Build a `Content-Disposition` value for a download (RFC 6266).
+ *
+ * The filename sits in a quoted-string, so a `"` inside it would close the
+ * field early and the rest would be read as further parameters. Backslash and
+ * quote are escaped, which is what a quoted-string allows.
+ *
+ * A non-ASCII name cannot go in that field at all — the header is Latin-1 — so
+ * it also gets `filename*=UTF-8''…`, and the plain `filename=` keeps an ASCII
+ * approximation for clients that ignore the extended form. Without it an
+ * accented name reached the browser as mojibake, or was dropped.
+ */
+function contentDisposition(disposition: string, filename: string): string {
+  const quoted = filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control
+  // characters is the point — they cannot travel in a header field.
+  const ascii = quoted.replace(/[^\x20-\x7e]/g, '_')
+  const base = `${disposition}; filename="${ascii}"`
+  if (ascii === quoted) return base
+  return `${base}; filename*=UTF-8''${encodeURIComponent(filename)}`
+}
+
+/**
  * JSON.stringify with AdonisJS-parity safety: `BigInt` values are emitted as
  * strings (native `JSON.stringify` throws on them) and circular references are
  * dropped instead of throwing — so `response.json()` / an object `send()` never
@@ -54,8 +76,70 @@ function safeStringify(value: unknown): string {
   })
 }
 
+/**
+ * Pack a cookie value the way AdonisJS does: a JSON envelope, base64url.
+ *
+ * The envelope is what carries the TYPE — without it every cookie comes back a
+ * string, and `plainCookie('count', 3)` would read as `"3"` next request.
+ */
+function packCookieValue(value: unknown): string {
+  return Buffer.from(JSON.stringify({ message: value }), 'utf8').toString('base64url')
+}
+
+/**
+ * Unpack a value written by {@link packCookieValue}.
+ *
+ * Anything that is not one of our envelopes comes back untouched — a cookie set
+ * by something else, or written with `encode: false`, is still readable.
+ */
+export function unpackCookieValue(raw: string): unknown {
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8')
+    const parsed: unknown = JSON.parse(decoded)
+    if (typeof parsed === 'object' && parsed !== null && 'message' in parsed) {
+      return (parsed as { message: unknown }).message
+    }
+    return raw
+  } catch {
+    return raw
+  }
+}
+
+const DURATION_UNITS: ReadonlyMap<string, number> = new Map([
+  ['s', 1],
+  ['m', 60],
+  ['h', 3600],
+  ['d', 86_400],
+  ['w', 604_800],
+])
+
+/**
+ * A cookie lifetime in seconds. A bare number is already seconds (as AdonisJS
+ * documents); a string carries a unit. An unreadable value throws rather than
+ * reaching the header, where it would silently void the cookie.
+ */
+function cookieMaxAgeSeconds(maxAge: number | string): number {
+  if (typeof maxAge === 'number') return Math.trunc(maxAge)
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d|w)?\s*$/i.exec(maxAge)
+  const unit = DURATION_UNITS.get((match?.[2] ?? 's').toLowerCase())
+  if (match?.[1] === undefined || unit === undefined) {
+    throw new Error(
+      `Cannot read "${maxAge}" as a cookie maxAge. Use seconds, or a unit: 30s, 15m, 2h, 7d, 1w.`,
+    )
+  }
+  return Math.trunc(Number(match[1]) * unit)
+}
+
 export interface CookieOptions {
-  maxAge?: number
+  /**
+   * Cookie lifetime in SECONDS, or a duration string (`'2h'`, `'30m'`, `'7d'`).
+   *
+   * AdonisJS types this `number | string` and parses the string form, so a
+   * migrated config carrying `maxAge: '2h'` has to work — emitting
+   * `Max-Age=2h` produced a header no browser accepts, and the cookie was
+   * dropped without a word.
+   */
+  maxAge?: number | string
   path?: string
   httpOnly?: boolean
   secure?: boolean
@@ -67,6 +151,7 @@ export class Response extends Macroable {
   #headers: Record<string, string> = {}
   #cookies: string[] = []
   #body = ''
+  readonly #finishCallbacks: Array<(err: Error | null) => void> = []
   #finished = false
   #redirectBuilderFactory?: () => RedirectBuilder
   #streamBackend?: StreamBackend
@@ -620,8 +705,69 @@ export class Response extends Macroable {
     generateEtag = false,
   ): void {
     const filename = name ?? basename(filePath)
-    this.header('Content-Disposition', `${disposition}; filename="${filename}"`)
+    this.header('Content-Disposition', contentDisposition(disposition, filename))
     this.download(filePath, generateEtag)
+  }
+
+  /**
+   * Run `callback` once the response has been sent (AdonisJS `onFinish`).
+   *
+   * Where a temp file gets deleted, a timer stopped, a metric recorded — work
+   * that must not delay the reply but must still happen. Callbacks run after
+   * the body is handed to the server; one that throws is reported and does not
+   * stop the others, since by then the client already has its answer.
+   *
+   * NAMED DEVIATION: AdonisJS hands the Node `ServerResponse` to the callback.
+   * Ream's response crosses a NAPI boundary and there is no such object, so the
+   * callback receives only the error slot.
+   */
+  onFinish(callback: (err: Error | null) => void): void {
+    this.#finishCallbacks.push(callback)
+  }
+
+  /** @internal Drain the finish callbacks. Called by HttpKernel once sent. */
+  runFinishCallbacks(err: Error | null = null): void {
+    const callbacks = this.#finishCallbacks.splice(0)
+    for (const callback of callbacks) {
+      try {
+        callback(err)
+      } catch {
+        // The client already has its answer; one failing hook must not take
+        // the others with it.
+      }
+    }
+  }
+
+  /**
+   * Send a readable stream as the response body (AdonisJS `stream`).
+   *
+   * NAMED DEVIATION: the stream is CONSUMED into the body rather than piped.
+   * Ream hands a complete response across the NAPI boundary, so there is no
+   * socket to pipe into — the same reason `download()` reads a file rather
+   * than streaming it. For a large payload, prefer `sse()`, which does stream.
+   *
+   * `errorCallback` maps a read failure to `[message, status]`, as upstream;
+   * without one, a failure answers 500 with a generic message rather than
+   * leaking the filesystem error to the client.
+   */
+  async stream(
+    body: NodeJS.ReadableStream,
+    errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
+  ): Promise<void> {
+    const chunks: Buffer[] = []
+    try {
+      for await (const chunk of body) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+      }
+    } catch (err) {
+      const [message, status] = errorCallback
+        ? errorCallback(err as NodeJS.ErrnoException)
+        : ['Cannot process the request', 500]
+      this.status(status ?? 500)
+      this.send(message)
+      return
+    }
+    this.sendBuffer(Buffer.concat(chunks))
   }
 
   setRedirectFactory(factory: () => RedirectBuilder): void {
@@ -695,8 +841,13 @@ export class Response extends Macroable {
    * for values you already protect (encrypted session ids, CSRF tokens) or that
    * a client-side script must read.
    */
-  plainCookie(name: string, value: string, options?: CookieOptions): this {
-    return this.#writeCookie(name, value, options)
+  plainCookie(name: string, value: unknown, options?: CookieOptions & { encode?: boolean }): this {
+    // AdonisJS packs the value into a base64url JSON envelope, which is what
+    // lets `plainCookie('prefs', { theme: 'dark' })` round-trip as an object.
+    // `encode: false` writes the string as-is — for a value a browser script
+    // has to read, or one that is already protected (a signed CSRF token).
+    const encoded = options?.encode === false ? String(value) : packCookieValue(value)
+    return this.#writeCookie(name, encoded, options)
   }
 
   /**
@@ -726,7 +877,9 @@ export class Response extends Macroable {
     const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`]
     // `maxAge: 0` is the RFC 6265 "delete-now" signal used by logout flows. A
     // truthiness check would skip it; explicit `!== undefined` covers 0 too.
-    if (options?.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`)
+    if (options?.maxAge !== undefined) {
+      parts.push(`Max-Age=${cookieMaxAgeSeconds(options.maxAge)}`)
+    }
     if (options?.path) {
       // `Path` is concatenated raw (encodeURIComponent would mangle `/`), so it
       // needs the same CRLF/NUL guard as header() (response-splitting).

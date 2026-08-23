@@ -42,11 +42,23 @@ export class Exception extends Error {
   constructor(message: string, options?: { status?: number; code?: string }) {
     super(message)
     this.name = this.constructor.name
-    // biome-ignore lint/suspicious/noExplicitAny: this.constructor is typed as Function; subclass pattern requires the cast
-    const ctor = this.constructor as any as typeof Exception
-    this.status = options?.status ?? ctor.status
-    this.code = options?.code ?? ctor.code
-    if (ctor.help !== undefined) this.help = ctor.help
+    // `this.constructor` is typed `Function`, which carries none of the statics
+    // a subclass sets (`status`, `code`, `help`). Reading them through
+    // `Reflect.get` states that we are looking at OPTIONAL statics, which is
+    // exactly the contract — a subclass need not define any of them.
+    const ctor = this.constructor
+    const staticNumber = (key: string): number | undefined => {
+      const v = Reflect.get(ctor, key)
+      return typeof v === 'number' ? v : undefined
+    }
+    const staticString = (key: string): string | undefined => {
+      const v = Reflect.get(ctor, key)
+      return typeof v === 'string' ? v : undefined
+    }
+    this.status = options?.status ?? staticNumber('status') ?? Exception.status
+    this.code = options?.code ?? staticString('code') ?? Exception.code
+    const help = staticString('help')
+    if (help !== undefined) this.help = help
   }
 
   /** Override to self-handle the exception (convert to HTTP response). */

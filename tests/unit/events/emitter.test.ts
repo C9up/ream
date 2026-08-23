@@ -20,18 +20,18 @@ beforeEach(() => {
 })
 
 describe('events > Emitter > string-based events', () => {
-  it('dispatches to registered string listeners synchronously', () => {
+  it('dispatches to registered string listeners synchronously', async () => {
     const emitter = new Emitter(new FakeBus())
     const calls: unknown[] = []
     emitter.on('user:registered', (u) => calls.push(u))
-    emitter.emit('user:registered', { id: 1 })
+    await emitter.emit('user:registered', { id: 1 })
     expect(calls).toEqual([{ id: 1 }])
   })
 
   it('forwards the same event through the bus as JSON', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
-    emitter.emit('order.created', { id: 42 })
+    await emitter.emit('order.created', { id: 42 })
     await new Promise((r) => setTimeout(r, 0))
     const emitted = bus.getEmitted()
     expect(emitted).toHaveLength(1)
@@ -44,7 +44,7 @@ describe('events > Emitter > string-based events', () => {
     const errors: unknown[] = []
     emitter.on('emitter:error', (e) => errors.push(e))
     emitter.on('boom', () => Promise.reject(new Error('listener failed')))
-    emitter.emit('boom', { x: 1 })
+    await emitter.emit('boom', { x: 1 })
     await new Promise((r) => setTimeout(r, 0))
     expect(errors).toHaveLength(1)
     const first = errors[0] as { event: string; error: unknown }
@@ -55,7 +55,7 @@ describe('events > Emitter > string-based events', () => {
     const emitter = new Emitter(new FakeBus())
     const spy = vi.spyOn(process.stderr, 'write').mockReturnValue(true)
     emitter.on('boom', () => Promise.reject(new Error('nope')))
-    emitter.emit('boom', {})
+    await emitter.emit('boom', {})
     await new Promise((r) => setTimeout(r, 0))
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("Listener error for 'boom'"))
     spy.mockRestore()
@@ -67,7 +67,7 @@ describe('events > Emitter > string-based events', () => {
       throw new Error('error-listener crashed')
     })
     emitter.on('boom', () => Promise.reject(new Error('primary')))
-    emitter.emit('boom', {})
+    await emitter.emit('boom', {})
     await new Promise((r) => setTimeout(r, 0))
   })
 })
@@ -192,7 +192,7 @@ describe('events > Emitter > wildcard subscriptions', () => {
     expect(await bus.subscriptionCount()).toBe(0)
   })
 
-  it('matchesPattern delegates to the bus wildcard engine', () => {
+  it('matchesPattern delegates to the bus wildcard engine', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     // FakeBus mirrors the Rust router — `order.*` matches single segment
@@ -235,7 +235,7 @@ describe('events > Emitter > request / reply', () => {
 })
 
 describe('events > Emitter > introspection', () => {
-  it('tracks the correlation ID set via setCorrelationId', () => {
+  it('tracks the correlation ID set via setCorrelationId', async () => {
     const emitter = new Emitter(new FakeBus())
     expect(emitter.getCorrelationId()).toBeUndefined()
     emitter.setCorrelationId('trace-42')
@@ -246,7 +246,7 @@ describe('events > Emitter > introspection', () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     emitter.setCorrelationId('trace-42')
-    emitter.emit('user:registered', { id: 1 })
+    await emitter.emit('user:registered', { id: 1 })
     // FakeBus parses `correlationId` off the top of the data JSON — same
     // path the Rust bus uses to populate the Event envelope.
     const [captured] = bus.getEmitted()
@@ -256,7 +256,7 @@ describe('events > Emitter > introspection', () => {
   it('does NOT inject correlationId when none is set (legacy wire shape preserved)', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
-    emitter.emit('user:registered', { id: 1 })
+    await emitter.emit('user:registered', { id: 1 })
     const [captured] = bus.getEmitted()
     // FakeBus generates a synthetic correlationId in its envelope shape,
     // but the underlying parsed data must NOT have one injected by us.
@@ -264,11 +264,11 @@ describe('events > Emitter > introspection', () => {
     expect(parsed.correlationId).toBeUndefined()
   })
 
-  it('does NOT clobber a user-supplied correlationId on the payload', () => {
+  it('does NOT clobber a user-supplied correlationId on the payload', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     emitter.setCorrelationId('emitter-trace')
-    emitter.emit('user:registered', { id: 1, correlationId: 'user-trace' })
+    await emitter.emit('user:registered', { id: 1, correlationId: 'user-trace' })
     const [captured] = bus.getEmitted()
     expect(captured?.correlationId).toBe('user-trace')
   })
@@ -290,12 +290,12 @@ describe('events > Emitter > introspection', () => {
     expect(emitter.getCorrelationId()).toBe('inbound-trace')
   })
 
-  it('skips correlation injection for primitive / array payloads', () => {
+  it('skips correlation injection for primitive / array payloads', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     emitter.setCorrelationId('trace-42')
-    emitter.emit('metric:tick', 42)
-    emitter.emit('batch', [1, 2, 3])
+    await emitter.emit('metric:tick', 42)
+    await emitter.emit('batch', [1, 2, 3])
     const emitted = bus.getEmitted()
     // Both payloads must round-trip untouched; primitives/arrays can't
     // carry a sibling field, so the ID is dropped on the wire (an HTTP
@@ -305,14 +305,14 @@ describe('events > Emitter > introspection', () => {
     expect(JSON.parse(emitted[1].data)).toEqual([1, 2, 3])
   })
 
-  it('hasListeners reports string listeners', () => {
+  it('hasListeners reports string listeners', async () => {
     const emitter = new Emitter(new FakeBus())
     expect(emitter.hasListeners('user:registered')).toBe(false)
     emitter.on('user:registered', () => {})
     expect(emitter.hasListeners('user:registered')).toBe(true)
   })
 
-  it('hasListeners reports class listeners', () => {
+  it('hasListeners reports class listeners', async () => {
     class Evt {}
     const emitter = new Emitter(new FakeBus())
     expect(emitter.hasListeners(Evt)).toBe(false)

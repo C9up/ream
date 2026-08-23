@@ -31,9 +31,15 @@ export type RouteHandlerFunction = (ctx: HttpContext) => Promise<void> | void
  * Controller tuple: [ControllerClass, 'methodName'].
  * Constructor params are resolved by the IoC container, not by TypeScript —
  * same pattern as AdonisJS (@poppinss/utils Constructor type).
+ *
+ * `never[]` rather than `any[]`: parameters are contravariant, so a rest of
+ * `never` accepts EVERY concrete parameter list. The claim that this needed
+ * `any` was simply untrue.
  */
-// biome-ignore lint/suspicious/noExplicitAny: required — TypeScript contravariance makes it impossible to type "any constructor" without `any`
-export type ControllerAction = [target: new (...args: any[]) => any, method: string]
+export type ControllerAction = [target: AnyConstructor, method: string]
+
+/** Any class, whatever its constructor takes. */
+export type AnyConstructor = new (...args: never[]) => unknown
 
 /** Any controller class (derived from {@link ControllerAction} — no fresh `any`). */
 export type ControllerConstructor = ControllerAction[0]
@@ -58,8 +64,7 @@ export interface RouteDefinition {
   method: string
   path: string
   handler: RouteHandlerFunction | null
-  // biome-ignore lint/suspicious/noExplicitAny: see ControllerAction
-  controller?: { target: new (...args: any[]) => any; method: string }
+  controller?: { target: AnyConstructor; method: string }
   middleware: string[]
   inlineMiddleware: MiddlewareFunction[]
   guards: string[]
@@ -144,9 +149,18 @@ function makeDefinition(method: string, path: string, handler: RouteHandler): Ro
   return def
 }
 
+/**
+ * Matched route parameters.
+ *
+ * A named `:param` is a string; the catch-all `*` is the ARRAY of segments it
+ * swallowed, as AdonisJS hands it (`@poppinss/matchit`, and the route types it
+ * generates say `'*': ParamValue[]`).
+ */
+export type MatchedParams = Record<string, string | string[]>
+
 export interface MatchResult {
   route: RouteDefinition
-  params: Record<string, string>
+  params: MatchedParams
 }
 
 // ─── Matchers ───────────────────────────────────────────────
@@ -648,15 +662,25 @@ export class OnRouteBuilder {
     this.#path = path
   }
 
-  /** Render a view (requires Photon/view provider). */
+  /**
+   * Render a template with no handler of your own (AdonisJS brisk `render`).
+   *
+   * Reads the request's `ctx.view` — the per-request renderer the template
+   * provider installs. It used to look only in `ctx.store` under `view`, which
+   * nothing has ever populated, so this route always threw; the message even
+   * named the wrong package. `ctx.store` is still honoured for a host that
+   * seeds its own engine there.
+   */
   render(view: string, data?: Record<string, unknown>): RouteBuilder {
     return this.#router.get(this.#path, async (ctx) => {
-      const raw = ctx.store.get('view')
-      if (!isViewEngine(raw)) {
-        throw new Error('View engine not configured. Register a view provider (Photon) first.')
+      const candidate = Reflect.get(Object(ctx), 'view') ?? ctx.store.get('view')
+      if (!isViewEngine(candidate)) {
+        throw new Error(
+          `[E_NO_VIEW_ENGINE] router.on('${this.#path}').render('${view}') needs a template engine. ` +
+            'Register one (its provider installs `ctx.view`), or seed `ctx.store` with a `view` that has a render() method.',
+        )
       }
-      const viewEngine = raw
-      const html = await viewEngine.render(view, data)
+      const html = await candidate.render(view, data)
       ctx.response.type('text/html; charset=utf-8').send(html)
     })
   }
@@ -980,8 +1004,22 @@ export class Router extends Macroable {
         }
         route.lazyController = { loader, method: route.stringRef.method }
       }
-      // Named route index
+      // Named route index. A duplicate name is refused, as AdonisJS does:
+      // `urlFor(name)` can only mean one route, and silently keeping the last
+      // one makes every link built from that name point somewhere unintended.
       if (route.name) {
+        const existing = this.#nameIndex.get(route.name)
+        // Same name on the same PATH is one logical route split across verbs —
+        // `route(['PUT','PATCH'], …)` and `resource()`'s `update` both do it,
+        // and AdonisJS models those as a single route object. Only a name
+        // reused for a DIFFERENT path is the ambiguity worth refusing.
+        if (existing && existing.path !== route.path) {
+          throw new Error(
+            `[E_DUPLICATE_ROUTE_NAME] A route with name "${route.name}" already exists ` +
+              `(${existing.method} ${existing.path}); ${route.method} ${route.path} reuses it. ` +
+              `It may happen when two routes share a controller — give each an explicit name.`,
+          )
+        }
         this.#nameIndex.set(route.name, route)
       }
 
@@ -990,6 +1028,14 @@ export class Router extends Macroable {
       if (!isParam && !route.domain) {
         // Static route — O(1) exact match
         const key = route.method === '*' ? `*:${route.path}` : `${route.method}:${route.path}`
+        // Refused rather than overwritten, as AdonisJS does. A silent overwrite
+        // is how an authenticated endpoint gets shadowed by a later, unguarded
+        // one that happens to share its path — with nothing in the logs.
+        if (this.#staticIndex.has(key)) {
+          throw new Error(
+            `[E_DUPLICATE_ROUTE] Duplicate route found. "${route.method}: ${route.path}" route already exists.`,
+          )
+        }
         this.#staticIndex.set(key, route)
       } else {
         // Parametric route — indexed by method
@@ -1038,8 +1084,19 @@ export class Router extends Macroable {
         const params = matchPath(route.path, candidatePath)
         if (params === null) continue
 
-        if (!this.#validateMatchers(params, route.matchers)) continue
-        if (!this.#validateMatchers(params, this.#globalMatchers)) continue
+        // A route's own matcher REPLACES the global one for that param, as
+        // AdonisJS merges them (`{ ...global, ...local }`). Applying both as
+        // separate gates meant the global always had the final say, so a route
+        // could never loosen it — a global `id: /^[0-9]+$/` plus a route-level
+        // slug matcher 404'd instead of matching.
+        if (
+          !this.#validateMatchers(params, {
+            ...this.#globalMatchers,
+            ...route.matchers,
+          })
+        ) {
+          continue
+        }
 
         return { route, params }
       }
@@ -1231,19 +1288,21 @@ export class Router extends Macroable {
     return makeDefinition(method, path, handler)
   }
 
-  #validateMatchers(
-    params: Record<string, string>,
-    matcherMap: Record<string, ParamMatcher>,
-  ): boolean {
+  #validateMatchers(params: MatchedParams, matcherMap: Record<string, ParamMatcher>): boolean {
     for (const [param, value] of Object.entries(params)) {
       const matcher = matcherMap[param]
       if (!matcher) continue
+      // The wildcard holds several segments; every one has to satisfy the
+      // matcher, or a `/assets/*` guard would pass on its first segment alone.
+      const values = Array.isArray(value) ? value : [value]
       const regex = matcher instanceof RegExp ? matcher : matcher.pattern
       // A user-supplied /g or /y regex is stateful (`lastIndex` advances on
       // match) — without a reset, the same URL alternates match/no-match
       // across requests. Reset before every test.
-      if (regex.global || regex.sticky) regex.lastIndex = 0
-      if (!regex.test(value)) return false
+      for (const single of values) {
+        if (regex.global || regex.sticky) regex.lastIndex = 0
+        if (!regex.test(single)) return false
+      }
     }
     return true
   }
@@ -1252,7 +1311,7 @@ export class Router extends Macroable {
 // ─── Path matching ──────────────────────────────────────────
 
 /** Match path pattern against actual path, extracting params. Returns null on no match. */
-function matchPath(pattern: string, actual: string): Record<string, string> | null {
+function matchPath(pattern: string, actual: string): MatchedParams | null {
   const patternParts = pattern.split('/')
   const actualParts = actual.split('/')
 
@@ -1263,7 +1322,7 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
   if (wildcardIdx !== -1) {
     if (wildcardIdx !== patternParts.length - 1) return null
     if (actualParts.length < wildcardIdx + 1) return null
-    const params: Record<string, string> = {}
+    const params: MatchedParams = {}
     for (let i = 0; i < wildcardIdx; i++) {
       const part = patternParts[i]
       if (part.startsWith(':')) {
@@ -1272,12 +1331,11 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
         return null
       }
     }
-    // Decode per segment, then rejoin — an encoded `/` inside a segment stays
-    // a value character, the path structure was already split on raw `/`.
-    params['*'] = actualParts
-      .slice(wildcardIdx)
-      .map((s) => safeDecodeURIComponent(s))
-      .join('/')
+    // An ARRAY of segments, as AdonisJS hands it (`@poppinss/matchit` does
+    // `out['*'] = segs.slice(i).map(decode)`, and the generated route types say
+    // `'*': ParamValue[]`). Joining them lost the boundary between a segment
+    // containing an encoded `/` and a real path separator.
+    params['*'] = actualParts.slice(wildcardIdx).map((s) => safeDecodeURIComponent(s))
     return params
   }
 
@@ -1287,7 +1345,7 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
 
   if (actualParts.length < requiredCount || actualParts.length > maxCount) return null
 
-  const params: Record<string, string> = {}
+  const params: MatchedParams = {}
 
   for (let i = 0; i < patternParts.length; i++) {
     const part = patternParts[i]

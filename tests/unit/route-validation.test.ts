@@ -81,9 +81,7 @@ describe('route .validate() — runtime validation', () => {
     const middleware = new MiddlewareRegistry()
     const errors: unknown[] = []
 
-    router
-      .post('/users', async () => {})
-      .validate('createUser') // never registered
+    router.post('/users', async () => {}).validate('createUser') // never registered
 
     const kernel = createHttpKernel({
       router,

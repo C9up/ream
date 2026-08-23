@@ -22,8 +22,12 @@ describe('CookieSigner > sign / unsign', () => {
 
   it('returns null for a tampered value', () => {
     const signed = signer.sign('uid=1')
-    const tampered = signed.replace('uid=1', 'uid=2')
-    expect(signer.unsign(tampered)).toBeNull()
+    // The payload is a base64url envelope, so flip a byte inside it rather
+    // than searching for the plaintext.
+    const dot = signed.lastIndexOf('.')
+    const payload = signed.slice(0, dot)
+    const flipped = `${payload.slice(0, -1)}${payload.endsWith('A') ? 'B' : 'A'}`
+    expect(signer.unsign(`${flipped}${signed.slice(dot)}`)).toBeNull()
   })
 
   it('returns null for a tampered signature', () => {
@@ -37,7 +41,7 @@ describe('CookieSigner > sign / unsign', () => {
 
   it('returns null when verified with a different secret', () => {
     const signed = signer.sign('uid=1')
-    expect(new CookieSigner('other-secret').unsign(signed)).toBeNull()
+    expect(new CookieSigner('a-completely-different-secret').unsign(signed)).toBeNull()
   })
 })
 
@@ -64,6 +68,36 @@ describe('CookieSigner > encrypt / decrypt', () => {
 
   it('returns null when decrypted with a different secret', () => {
     const enc = signer.encrypt('top-secret')
-    expect(new CookieSigner('other-secret').decrypt(enc)).toBeNull()
+    expect(new CookieSigner('a-completely-different-secret').decrypt(enc)).toBeNull()
+  })
+})
+
+describe('CookieSigner > purpose and expiry (AdonisJS parity)', () => {
+  it('refuses a value presented for a different purpose', () => {
+    const token = signer.encrypt('user-42', undefined, 'password-reset')
+    expect(signer.decrypt(token, 'password-reset')).toBe('user-42')
+    // The whole point: a reset token replayed as a session cookie fails here
+    // rather than being honoured.
+    expect(signer.decrypt(token, 'session')).toBeNull()
+    expect(signer.decrypt(token)).toBeNull()
+  })
+
+  it('refuses an expired value', () => {
+    const expired = signer.encrypt('x', -1)
+    expect(signer.decrypt(expired)).toBeNull()
+    const alive = signer.encrypt('x', 60_000)
+    expect(signer.decrypt(alive)).toBe('x')
+  })
+
+  it('applies both to signed values too', () => {
+    const signed = signer.sign('uid=1', 60_000, 'remember-me')
+    expect(signer.unsign(signed, 'remember-me')).toBe('uid=1')
+    expect(signer.unsign(signed, 'other')).toBeNull()
+    expect(signer.unsign(signer.sign('uid=1', -1))).toBeNull()
+  })
+
+  it('refuses a missing or trivially short APP_KEY', () => {
+    expect(() => new CookieSigner('')).toThrow(/Missing APP_KEY/)
+    expect(() => new CookieSigner('short')).toThrow(/at least 16 characters/)
   })
 })

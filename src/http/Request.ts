@@ -12,6 +12,7 @@ import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
 import { Macroable } from '../utils/Macroable.js'
 import { getPath, omitPaths, pickPaths } from '../utils/objectPath.js'
+import { unpackCookieValue } from './Response.js'
 
 export interface RawRequest {
   method: string
@@ -60,7 +61,7 @@ export interface RawRequest {
 
 export class Request extends Macroable {
   #raw: RawRequest
-  #params: Dict
+  #params: Dict<string | string[]>
   #cookieSigner?: CookieSigner
   #signedUrl?: SignedUrl
   #allowMethodSpoofing = false
@@ -91,7 +92,7 @@ export class Request extends Macroable {
    */
   csrfProtected?: boolean
 
-  constructor(raw: RawRequest, params: Dict = {}) {
+  constructor(raw: RawRequest, params: Dict<string | string[]> = {}) {
     super()
     this.#raw = raw
     this.#params = params
@@ -313,15 +314,32 @@ export class Request extends Macroable {
    * (tampered / not signed).
    */
   cookie(name: string, defaultValue?: string): string | null {
-    const raw = this.plainCookie(name)
+    const raw = this.plainCookie<string>(name, undefined, { encoded: false })
     const value = raw === null ? null : this.#cookieSigner ? this.#cookieSigner.unsign(raw) : raw
     return value ?? defaultValue ?? null
   }
 
-  /** Raw (unsigned) cookie value (AdonisJS `plainCookie`), or `defaultValue`/null when absent. */
-  plainCookie(name: string, defaultValue?: string): string | null {
+  /**
+   * An unsigned cookie (AdonisJS `plainCookie`), unpacked.
+   *
+   * `response.plainCookie()` writes a base64url JSON envelope, so this reads
+   * the value BACK WITH ITS TYPE — an object stays an object, a number a
+   * number. A cookie set by something else, or written with `encode: false`,
+   * comes back as the raw string.
+   *
+   * Pass `encoded: false` to skip unpacking entirely.
+   */
+  plainCookie<T = string>(
+    name: string,
+    defaultValue?: T,
+    options?: { encoded?: boolean },
+  ): T | null {
     const cookies = this.#raw.cookies ?? this.cookies()
-    return cookies[name] ?? defaultValue ?? null
+    const raw = cookies[name]
+    if (raw === undefined) return defaultValue ?? null
+    // Caller's claim about an untyped store, same contract as `input<T>`.
+    if (options?.encoded === false) return raw as T
+    return unpackCookieValue(raw) as T
   }
 
   /**
@@ -330,7 +348,7 @@ export class Request extends Macroable {
    * encryption service.
    */
   encryptedCookie(name: string, defaultValue?: string): string | null {
-    const raw = this.plainCookie(name)
+    const raw = this.plainCookie<string>(name, undefined, { encoded: false })
     const value = raw === null || !this.#cookieSigner ? null : this.#cookieSigner.decrypt(raw)
     return value ?? defaultValue ?? null
   }
@@ -381,14 +399,172 @@ export class Request extends Macroable {
 
   // ─── Route params ─────────────────────────────────────────
 
-  /** Get a single route parameter. */
+  /**
+   * Get a single route parameter.
+   *
+   * The catch-all `*` is an ARRAY of segments (AdonisJS hands it that way), so
+   * it is returned joined here — `param('*')` reading `undefined` because the
+   * value was not a string would be worse than the path it describes.
+   * Use {@link params} to get the segments themselves.
+   */
   param(key: string, defaultValue?: string): string | undefined {
-    return this.#params[key] ?? defaultValue
+    const value = this.#params[key]
+    if (value === undefined) return defaultValue
+    return Array.isArray(value) ? value.join('/') : value
   }
 
-  /** Get all route parameters. */
-  params(): Readonly<Dict> {
+  /** Get all route parameters; `*` holds its segments as an array. */
+  params(): Readonly<Dict<string | string[]>> {
     return this.#params
+  }
+
+  // ─── Identity and shape ───────────────────────────────────
+
+  /**
+   * The request id from `x-request-id` (AdonisJS `id`).
+   *
+   * Absent when the proxy or client did not set one — it is not invented here,
+   * because a correlation id nobody else knows correlates nothing.
+   */
+  id(): string | undefined {
+    return this.header('x-request-id')
+  }
+
+  /** The URL split into path and raw query string (AdonisJS `parsedUrl`). */
+  parsedUrl(): { pathname: string; search: string; query: string } {
+    const query = this.#raw.query ?? ''
+    return {
+      pathname: this.#raw.path,
+      search: query ? `?${query}` : '',
+      query,
+    }
+  }
+
+  /** `X-Requested-With: xmlhttprequest` (AdonisJS `ajax`). */
+  ajax(): boolean {
+    return (this.header('x-requested-with') ?? '').toLowerCase() === 'xmlhttprequest'
+  }
+
+  /** Whether the client sent `X-Pjax` (AdonisJS `pjax`). */
+  pjax(): boolean {
+    return this.header('x-pjax') !== undefined
+  }
+
+  /**
+   * Whether this is a speculative prefetch or prerender rather than a real
+   * navigation (AdonisJS `prefetch`).
+   *
+   * Worth checking before anything with a side effect: a browser may fetch a
+   * link the user never clicks, and counting that as a visit — or worse, acting
+   * on it — attributes an intention nobody had.
+   */
+  prefetch(): boolean {
+    const purpose = (
+      this.header('sec-purpose') ??
+      this.header('purpose') ??
+      this.header('x-purpose') ??
+      this.header('x-moz') ??
+      ''
+    ).toLowerCase()
+    return purpose.includes('prefetch') || purpose.includes('prerender')
+  }
+
+  /**
+   * The full URL — `protocol://host/path` (AdonisJS `completeUrl`).
+   *
+   * Pass `true` to keep the query string.
+   */
+  completeUrl(includeQueryString = false): string {
+    const path = includeQueryString ? this.url(true) : this.url(false)
+    return `${this.protocol()}://${this.host()}${path}`
+  }
+
+  /**
+   * Where the user came from, per the `Referer` header — but only when it
+   * points somewhere we trust (AdonisJS `getPreviousUrl`).
+   *
+   * A referrer is attacker-controlled, so redirecting back to it unchecked is
+   * an open redirect. The host must be this request's own or one of
+   * `allowedHosts`; anything else falls back.
+   */
+  getPreviousUrl(allowedHosts: string[] = [], fallback = '/'): string {
+    const referer = this.header('referer') ?? this.header('referrer')
+    if (!referer) return fallback
+    let parsed: URL
+    try {
+      parsed = new URL(referer)
+    } catch {
+      return fallback
+    }
+    const trusted = new Set([this.host(), ...allowedHosts])
+    if (!trusted.has(parsed.host)) return fallback
+    return `${parsed.pathname}${parsed.search}`
+  }
+
+  // ─── Content negotiation ──────────────────────────────────
+
+  /** Every media type the client accepts, best first (AdonisJS `types`). */
+  types(): string[] {
+    return this.#negotiated('accept')
+  }
+
+  /** Every language the client accepts, best first (AdonisJS `languages`). */
+  languages(): string[] {
+    return this.#negotiated('accept-language')
+  }
+
+  /** Every charset the client accepts, best first (AdonisJS `charsets`). */
+  charsets(): string[] {
+    return this.#negotiated('accept-charset')
+  }
+
+  /** Every encoding the client accepts, best first (AdonisJS `encodings`). */
+  encodings(): string[] {
+    return this.#negotiated('accept-encoding')
+  }
+
+  /**
+   * Parse one `Accept-*` header into the client's preference order.
+   *
+   * Sorted by q descending, ties broken by the order the client wrote them —
+   * which is what "preference" means when two entries share a q.
+   */
+  #negotiated(header: string): string[] {
+    const raw = this.#raw.headers[header]
+    if (!raw) return []
+    return parseAcceptHeader(raw)
+      .sort((a, b) => b.q - a.q || a.index - b.index)
+      .map((entry) => entry.value)
+  }
+
+  // ─── Serialization ────────────────────────────────────────
+
+  /** Every cookie, parsed (AdonisJS `cookiesList`). */
+  cookiesList(): Dict {
+    return this.cookies()
+  }
+
+  /**
+   * A JSON-safe view of the request (AdonisJS `serialize`), for logs and error
+   * reports. Carries no body: it may hold credentials, and a log line is the
+   * last place they should land.
+   */
+  serialize(): Record<string, unknown> {
+    return {
+      id: this.id(),
+      url: this.url(true),
+      method: this.method(),
+      protocol: this.protocol(),
+      host: this.host(),
+      headers: this.headers(),
+      qs: this.qs(),
+      params: this.params(),
+    }
+  }
+
+  /** Same as {@link serialize} — what `JSON.stringify(request)` uses. */
+  toJSON(): Record<string, unknown> {
+    return this.serialize()
   }
 
   // ─── Query string ─────────────────────────────────────────

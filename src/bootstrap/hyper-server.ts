@@ -22,15 +22,8 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { arch, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { NAPI_PLATFORM_MAP } from '../helpers/napi-loader.js'
 import type { HyperServerLike } from '../Ignitor.js'
-
-const PLATFORM_SUFFIX: Record<string, string> = {
-  'linux-x64': 'linux-x64-gnu',
-  'linux-arm64': 'linux-arm64-gnu',
-  'darwin-x64': 'darwin-x64',
-  'darwin-arm64': 'darwin-arm64',
-  'win32-x64': 'win32-x64-msvc',
-}
 
 interface HyperServerCtor {
   new (port: number, host?: string): HyperServerLike
@@ -57,7 +50,7 @@ function isHyperServerNapi(value: unknown): value is HyperServerNapiModule {
 export function createHyperServerFactory():
   | ((port: number, host?: string) => HyperServerLike)
   | undefined {
-  const suffix = PLATFORM_SUFFIX[`${platform}-${arch}`]
+  const suffix = NAPI_PLATFORM_MAP[`${platform}-${arch}`]
   if (!suffix) return undefined
 
   const require2 = createRequire(import.meta.url)

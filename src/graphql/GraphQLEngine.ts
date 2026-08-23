@@ -509,6 +509,11 @@ export class GraphQLEngine {
 }
 
 /** Parse and validate an unknown request body as a GraphQL request object. */
+/** GraphQL `variables` must be a keyed object — never an array or null. */
+function isVariablesRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function parseGraphQLBody(body: unknown): GraphQLRequest | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null
   // After typeof check, body is a non-null non-array object; index via 'in' narrowing
@@ -516,14 +521,8 @@ function parseGraphQLBody(body: unknown): GraphQLRequest | null {
   if (typeof q !== 'string') return null
 
   let variables: Record<string, unknown> | undefined
-  if (
-    'variables' in body &&
-    body.variables !== null &&
-    typeof body.variables === 'object' &&
-    !Array.isArray(body.variables)
-  ) {
-    // biome-ignore lint/suspicious/noExplicitAny: narrowed to non-null non-array object above; branded as Record for safe spreading
-    variables = body.variables as any as Record<string, unknown>
+  if ('variables' in body && isVariablesRecord(body.variables)) {
+    variables = body.variables
   }
 
   const rawOpName = 'operationName' in body ? body.operationName : undefined

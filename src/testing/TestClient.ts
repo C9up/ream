@@ -23,6 +23,7 @@ import {
   type HttpMethod,
   type HttpSender,
   RequestBuilder,
+  type SessionSeeder,
   type TestResponse,
 } from './RequestBuilder.js'
 
@@ -47,15 +48,22 @@ export class TestClient {
   #headers: Dict = {}
   #bootFn: (port: number) => Promise<{ port: number; close: () => Promise<void> | void }>
   #auth: AuthStrategy | null
+  #sessionSeeder: SessionSeeder | null
   #routes: RouteManifest | null
 
   constructor(
     bootFn: (port: number) => Promise<{ port: number; close: () => Promise<void> | void }>,
-    options: { auth?: AuthStrategy; routes?: RouteManifest } = {},
+    options: {
+      auth?: AuthStrategy
+      routes?: RouteManifest
+      /** Writes session values for `loginAs()` with a session-based guard. */
+      sessionSeeder?: SessionSeeder
+    } = {},
   ) {
     this.#bootFn = bootFn
     this.#auth = options.auth ?? null
     this.#routes = options.routes ?? null
+    this.#sessionSeeder = options.sessionSeeder ?? null
   }
 
   #server: { port: number; close: () => Promise<void> | void } | null = null
@@ -149,7 +157,7 @@ export class TestClient {
         init.body.toString('utf8'),
         init.timeoutMs,
       )
-    return new RequestBuilder(sender, method, path, this.#auth)
+    return new RequestBuilder(sender, method, path, this.#auth, this.#sessionSeeder)
   }
 
   /**

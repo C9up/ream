@@ -8,9 +8,12 @@
 import { randomBytes } from 'node:crypto'
 import type { HttpContext } from '../http/HttpContext.js'
 import { CookieDriver } from './drivers/CookieDriver.js'
+import { DatabaseDriver, type SessionDbConnection } from './drivers/DatabaseDriver.js'
+import { FileDriver } from './drivers/FileDriver.js'
 import { MemoryDriver } from './drivers/MemoryDriver.js'
 import { RedisDriver } from './drivers/RedisDriver.js'
 import { quasarConnection } from './quasar.js'
+import { ReadOnlyValuesStore, type ValuePath } from './ReadOnlyValuesStore.js'
 import type { SessionConfig, SessionDriver } from './Session.js'
 import { Session } from './Session.js'
 
@@ -22,16 +25,55 @@ interface ResolvedSessionConfig {
   rolling: boolean
 }
 
+const AGE_UNITS: ReadonlyMap<string, number> = new Map([
+  ['s', 1],
+  ['m', 60],
+  ['h', 3600],
+  ['d', 86_400],
+  ['w', 604_800],
+])
+
+/**
+ * A session lifetime in seconds. AdonisJS types `age` as `string | number` and
+ * writes `'2h'` in the generated config, so the string form has to work — a
+ * lifetime silently read as NaN would expire every session immediately.
+ */
+function sessionAgeSeconds(age: number | string): number {
+  if (typeof age === 'number') return Math.trunc(age)
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d|w)?\s*$/i.exec(age)
+  const unit = AGE_UNITS.get((match?.[2] ?? 's').toLowerCase())
+  if (match?.[1] === undefined || unit === undefined) {
+    throw new Error(`Cannot read "${age}" as a session age. Use seconds, or a unit: 30m, 2h, 7d.`)
+  }
+  return Math.trunc(Number(match[1]) * unit)
+}
+
+/** Duck-typed check for a connection the database store can drive. */
+function isSessionDbConnection(value: unknown): value is SessionDbConnection {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof Reflect.get(value, 'query') === 'function' &&
+    typeof Reflect.get(value, 'execute') === 'function'
+  )
+}
+
 export default class SessionMiddleware {
   #driver: SessionDriver
   #cookieDriver: CookieDriver | null = null
   #config: ResolvedSessionConfig
 
   constructor(config?: SessionConfig & { secret?: string }) {
+    // `store` + `stores` (AdonisJS) and `driver` (ream) name the same thing.
+    // A named store supplies the driver and its own options, so
+    // `{ store: 'redis', stores: { redis: { driver: 'redis' } } }` works.
+    const selected = config?.store ?? config?.driver
+    const named = selected ? config?.stores?.[selected] : undefined
     this.#config = {
-      driver: config?.driver ?? 'memory',
+      driver: named?.driver ?? selected ?? 'memory',
       cookieName: config?.cookieName ?? 'ream_session',
-      maxAge: config?.maxAge ?? 7200,
+      // `age` is the AdonisJS key and accepts a duration string.
+      maxAge: config?.age !== undefined ? sessionAgeSeconds(config.age) : (config?.maxAge ?? 7200),
       clearWithBrowser: config?.clearWithBrowser ?? false,
       rolling: config?.rolling ?? false,
     }
@@ -46,6 +88,25 @@ export default class SessionMiddleware {
       this.#driver = this.#cookieDriver
     } else if (this.#config.driver === 'memory') {
       this.#driver = new MemoryDriver()
+    } else if (this.#config.driver === 'file') {
+      const location = config?.location ?? named?.location
+      if (typeof location !== 'string') {
+        throw new Error(
+          'File session driver requires a `location`. Set session.location (or stores.<name>.location) to a writable directory.',
+        )
+      }
+      this.#driver = new FileDriver({ location })
+    } else if (this.#config.driver === 'database') {
+      const connection = config?.dbConnection ?? named?.connection
+      if (!isSessionDbConnection(connection)) {
+        throw new Error(
+          'Database session driver requires a `connection` exposing query() and execute().',
+        )
+      }
+      this.#driver = new DatabaseDriver({
+        connection,
+        tableName: typeof config?.tableName === 'string' ? config.tableName : undefined,
+      })
     } else if (this.#config.driver === 'redis') {
       // Either the app hands a client in, or it names a quasar connection —
       // the same choice echo, bay and warden offer. Nothing is dialled here:
@@ -64,7 +125,9 @@ export default class SessionMiddleware {
     const isProduction = process.env.NODE_ENV === 'production'
 
     // Read session ID from cookie — pre-parsed by the Rust HyperServer.
-    let sessionId = ctx.request.plainCookie(cookieName)
+    let sessionId = ctx.request.plainCookie<string>(cookieName, undefined, {
+      encoded: false,
+    })
     const hadIncomingCookie = sessionId !== null
 
     // Cookie driver: the cookie value IS the session data (encrypted)
@@ -74,6 +137,11 @@ export default class SessionMiddleware {
       const session = new Session(sessionId, data)
       ctx.store.set('session', session)
       ctx.session = session
+      session.setInputReader(() => ctx.request.original())
+      // Same as the server-side branch below: without it `{{ flashMessages }}`
+      // and the `@error` / `@errors` / `@inputError` tags saw nothing at all
+      // under the cookie driver, so a form silently lost its messages.
+      shareSessionWithView(ctx, session)
 
       await next()
 
@@ -94,6 +162,9 @@ export default class SessionMiddleware {
           )
         }
         ctx.response.plainCookie(cookieName, encoded, {
+          // Already encrypted by the cookie driver; packing it again would
+          // only make the cookie bigger and change nothing.
+          encode: false,
           maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
           path: '/',
           httpOnly: true,
@@ -113,6 +184,10 @@ export default class SessionMiddleware {
     const session = new Session(sessionId, data)
     ctx.store.set('session', session)
     ctx.session = session
+    // `flashAll()` takes no argument (AdonisJS): it reads the request's own
+    // input, which is what repopulates a form after a redirect-back.
+    session.setInputReader(() => ctx.request.original())
+    shareSessionWithView(ctx, session)
 
     await next()
 
@@ -154,6 +229,9 @@ export default class SessionMiddleware {
     // the cookie-driver path above (which already omits `isNew`).
     if (session.isDirty() || regenerated || (rolling && hadIncomingCookie)) {
       ctx.response.plainCookie(cookieName, session.sessionId, {
+        // An opaque id — packing it would invalidate every session cookie
+        // already in a browser for no gain.
+        encode: false,
         maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
         path: '/',
         httpOnly: true,
@@ -166,4 +244,24 @@ export default class SessionMiddleware {
 
 function generateSessionId(): string {
   return randomBytes(24).toString('base64url')
+}
+
+/**
+ * Share the session with the request's view, as AdonisJS's session does.
+ *
+ * A migrated template reads `{{ old('email') }}`, `@error('email')` and
+ * `{{ flashMessages.get(...) }}` unchanged, so the three names and their shapes
+ * have to match. Skipped when the app installed no template layer.
+ */
+function shareSessionWithView(ctx: HttpContext, session: Session): void {
+  const view = Reflect.get(Object(ctx), 'view')
+  const share = Reflect.get(Object(view), 'share')
+  if (typeof share !== 'function') return
+  const flashMessages = new ReadOnlyValuesStore(session.flashMessages())
+  share.call(view, {
+    session: new ReadOnlyValuesStore(session.all()),
+    flashMessages,
+    // Adonis exposes the previous request's input under `old`.
+    old: (key: ValuePath, defaultValue?: unknown): unknown => flashMessages.get(key, defaultValue),
+  })
 }

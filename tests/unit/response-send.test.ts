@@ -257,10 +257,17 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     expect(sc).toContain('sid=')
     expect(sc).not.toMatch(/sid=abc(;|$)/)
 
+    // plainCookie is UNSIGNED but packed, as AdonisJS packs it — so the value
+    // keeps its type on the way back. `encode: false` writes it verbatim.
     const plain = new Response()
     plain.setCookieSigner(signer)
     plain.plainCookie('sid', 'abc')
-    expect(plain.getHeaders()['set-cookie'] ?? '').toContain('sid=abc')
+    const packed = plain.getHeaders()['set-cookie'] ?? ''
+    expect(packed).not.toMatch(/sid=abc(;|$)/)
+
+    const raw = new Response()
+    raw.plainCookie('sid', 'abc', { encode: false })
+    expect(raw.getHeaders()['set-cookie'] ?? '').toContain('sid=abc')
   })
 
   it('a signed cookie round-trips: response.cookie() → request.cookie()', () => {

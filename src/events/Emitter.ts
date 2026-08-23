@@ -75,27 +75,153 @@ export class Emitter {
     }
   }
 
+  /**
+   * Listen for the NEXT occurrence only (AdonisJS `once`).
+   *
+   * The listener removes itself before running, so a handler that emits the
+   * same event does not re-enter it.
+   */
+  once<T>(event: string, listener: ListenerFn<T>): void {
+    const wrapper: ListenerFn = (data) => {
+      this.off(event, wrapper)
+      return (listener as ListenerFn)(data)
+    }
+    this.on(event, wrapper as ListenerFn<T>)
+  }
+
+  /**
+   * Register the listener only when `condition` holds (AdonisJS `listenIf`) —
+   * the shape a feature flag takes at boot, without an `if` around every call.
+   */
+  listenIf<T>(condition: boolean, event: string, listener: ListenerFn<T>): void {
+    if (condition) this.on(event, listener)
+  }
+
+  /** Alias of {@link on} (AdonisJS names it `listen`). */
+  listen<T>(event: string, listener: ListenerFn<T>): void {
+    this.on(event, listener)
+  }
+
+  /** Report listener failures (AdonisJS `onError`). */
+  onError(listener: (event: string, error: unknown) => void): void {
+    this.on('emitter:error', (payload) => {
+      const detail = payload as { event?: string; error?: unknown }
+      listener(detail?.event ?? 'unknown', detail?.error)
+    })
+  }
+
+  /** Remove one listener from an event (AdonisJS `off`). */
+  off(event: string, listener: ListenerFn): void {
+    const list = this.stringListeners.get(event)
+    if (!list) return
+    const index = list.indexOf(listener)
+    if (index !== -1) list.splice(index, 1)
+    if (list.length === 0) this.stringListeners.delete(event)
+  }
+
+  /** Alias of {@link off} (AdonisJS `clearListener`). */
+  clearListener(event: string, listener: ListenerFn): void {
+    this.off(event, listener)
+  }
+
+  /** Drop every listener of one event (AdonisJS `clearListeners`). */
+  clearListeners(event: string): void {
+    this.stringListeners.delete(event)
+  }
+
+  /** Drop every listener of every event (AdonisJS `clearAllListeners`). */
+  clearAllListeners(): void {
+    this.stringListeners.clear()
+    this.classListeners.clear()
+  }
+
+  /** How many listeners an event has, or all of them (AdonisJS `listenerCount`). */
+  listenerCount(event?: string): number {
+    if (event !== undefined) return this.stringListeners.get(event)?.length ?? 0
+    let total = 0
+    for (const list of this.stringListeners.values()) total += list.length
+    for (const list of this.classListeners.values()) total += list.length
+    return total
+  }
+
   // ─── Emit ─────────────────────────────────────────────────
 
   /**
-   * Emit a string-based event.
+   * Run an event's listeners, in parallel or one after another.
+   *
+   * A listener that throws is reported and does NOT stop the others: one
+   * failing subscriber must not silently cancel the rest of the reaction to an
+   * event it does not own.
    */
-  emit(event: string, data: unknown): void {
-    // Dispatch to string listeners
-    const listeners = this.stringListeners.get(event)
-    if (listeners) {
-      for (const fn of listeners) {
-        Promise.resolve(fn(data)).catch((err) => {
-          // Surface listener errors instead of swallowing them
-          this.emitError(event, err)
-        })
+  async #dispatchListeners(event: string, data: unknown, serial: boolean): Promise<void> {
+    const listeners = [
+      ...(this.stringListeners.get(event) ?? []),
+      ...this.#wildcardListenersFor(event),
+    ]
+    if (listeners.length === 0) return
+    const run = async (fn: ListenerFn): Promise<void> => {
+      try {
+        await fn(data)
+      } catch (err) {
+        this.emitError(event, err)
       }
     }
+    if (serial) {
+      for (const fn of listeners) await run(fn)
+      return
+    }
+    await Promise.all(listeners.map(run))
+  }
 
-    // Also push through EventBus for cross-service / Rust subscribers.
-    // `#wrapForBus` prepends the correlation envelope when set so the ID
-    // reaches the other side; without it `setCorrelationId()` was a no-op.
-    void this.bus.emit(event, JSON.stringify(this.#wrapForBus(data))).catch((err: unknown) => {
+  /** Listeners registered through `onAny` whose pattern matches `event`. */
+  #wildcardListenersFor(_event: string): ListenerFn[] {
+    return []
+  }
+
+  /**
+   * Emit and run the listeners ONE AT A TIME (AdonisJS `emitSerial`).
+   *
+   * Use it when order matters — a listener that seeds what the next one reads.
+   */
+  async emitSerial(event: string, data: unknown): Promise<void> {
+    await this.#dispatchListeners(event, data, true)
+    this.#publishToBus(event, data)
+  }
+
+  /**
+   * Emit a string-based event.
+   *
+   * Returns a promise resolving once every listener has finished, as AdonisJS
+   * does — awaiting it is how a handler makes sure the work it triggered
+   * actually happened before it answers. Listeners run in PARALLEL; use
+   * {@link emitSerial} when one has to finish before the next starts.
+   *
+   * Not awaiting it keeps the old fire-and-forget behaviour: a listener that
+   * rejects is reported through `emitError`, never left unhandled.
+   */
+  async emit(event: string, data: unknown): Promise<void> {
+    await this.#dispatchListeners(event, data, false)
+    this.#publishToBus(event, data)
+  }
+
+  /**
+   * Push the event onto the bus for cross-service / Rust subscribers.
+   *
+   * `#wrapForBus` prepends the correlation envelope when set so the ID reaches
+   * the other side; without it `setCorrelationId()` was a no-op.
+   */
+  #publishToBus(event: string, data: unknown): void {
+    // Serialize INSIDE the guard. `JSON.stringify` throws synchronously on a
+    // cycle or a BigInt, and it was evaluated as an argument — so the throw
+    // escaped past the `.catch` and crashed the caller.
+    let payload: string
+    try {
+      payload = JSON.stringify(this.#wrapForBus(data))
+    } catch (err) {
+      this.emitError(event, err)
+      return
+    }
+    void this.bus.emit(event, payload).catch((err: unknown) => {
       this.emitError(event, err)
     })
   }

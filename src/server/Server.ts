@@ -23,11 +23,11 @@ export interface MiddlewareClass {
 /** Lazy import returning a module with a default export. */
 export type LazyImport<T> = () => Promise<{ default: T }>
 
-// biome-ignore lint/suspicious/noExplicitAny: contravariance — same as ControllerAction
-export type ErrorHandlerClass = new (...args: any[]) => ExceptionHandler
+// `never[]` accepts every constructor shape: parameters are contravariant, so a
+// rest of `never` is assignable from any concrete list. No `any` needed.
+export type ErrorHandlerClass = new (...args: never[]) => ExceptionHandler
 
-// biome-ignore lint/suspicious/noExplicitAny: contravariance — middleware class constructors
-type MiddlewareClassConstructor = new (...args: any[]) => MiddlewareClass
+type MiddlewareClassConstructor = new (...args: never[]) => MiddlewareClass
 
 /** What server.use() and router.use() accept: lazy imports or direct functions. */
 export type MiddlewareEntry = LazyImport<MiddlewareClassConstructor> | MiddlewareFunction

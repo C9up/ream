@@ -59,14 +59,39 @@ describe('Session > flash lifecycle', () => {
     expect(s.get('user')).toBe(1)
   })
 
-  it('flash / flashAll / flashOnly / flashExcept stage data for next request', () => {
+  it('flash stages a key or an object for the next request', () => {
     const s = new Session('sid')
     s.flash('msg', 'hi')
-    s.flashAll({ a: 1, b: 2 })
-    s.flashOnly({ x: 1, y: 2 }, ['x'])
-    s.flashExcept({ keep: 1, drop: 2 }, ['drop'])
-    const out = s.toJSON()
-    expect(out.__flash).toEqual({ msg: 'hi', a: 1, b: 2, x: 1, keep: 1 })
+    s.flash({ notice: 'saved' })
+    expect(s.toJSON().__flash).toEqual({ msg: 'hi', notice: 'saved' })
+  })
+
+  it('flashAll / flashOnly / flashExcept read the request input themselves', () => {
+    // AdonisJS `flashAll()` takes NO argument — it flashes `request.original()`
+    // under `input`, which is what repopulates a form after a redirect-back.
+    const s = new Session('sid')
+    s.setInputReader(() => ({ email: 'a@b.test', password: 'secret', _csrf: 'x' }))
+
+    s.flashAll()
+    expect(s.toJSON().__flash).toEqual({
+      input: { email: 'a@b.test', password: 'secret', _csrf: 'x' },
+    })
+
+    const only = new Session('sid')
+    only.setInputReader(() => ({ email: 'a@b.test', password: 'secret' }))
+    only.flashOnly(['email'])
+    expect(only.toJSON().__flash).toEqual({ input: { email: 'a@b.test' } })
+
+    const except = new Session('sid')
+    except.setInputReader(() => ({ email: 'a@b.test', password: 'secret' }))
+    except.flashExcept(['password'])
+    expect(except.toJSON().__flash).toEqual({ input: { email: 'a@b.test' } })
+  })
+
+  it('flashes nothing rather than throwing outside a request', () => {
+    const s = new Session('sid')
+    expect(() => s.flashAll()).not.toThrow()
+    expect(s.toJSON().__flash).toEqual({ input: {} })
   })
 
   it('toJSON omits __flash when no flash data was staged', () => {

@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Console } from '../../src/console/Console.js'
 import { BaseCommand } from '../../src/console/BaseCommand.js'
+import { Console } from '../../src/console/Console.js'
 import { args, flags } from '../../src/console/decorators.js'
 import { Kernel } from '../../src/console/Kernel.js'
 import { Ignitor } from '../../src/Ignitor.js'

@@ -20,7 +20,7 @@ import type {
   RuntimeValidator,
 } from './middleware/Pipeline.js'
 import { compose } from './middleware/Pipeline.js'
-import type { RouteDefinition, Router } from './router/Router.js'
+import type { AnyConstructor, RouteDefinition, Router } from './router/Router.js'
 import type { CookieSigner } from './security/CookieSigner.js'
 import type { SignedUrl } from './security/SignedUrl.js'
 import type { Dict } from './types/helpers.js'
@@ -41,6 +41,14 @@ export interface HttpKernelConfig {
    * SSE path with a clean error — used by mock servers in unit tests.
    */
   streamBackend?: () => import('./http/SseStream.js').StreamBackend | undefined
+  /**
+   * Honour a `_method` form field on POST (AdonisJS `http.allowMethodSpoofing`).
+   *
+   * OFF by default, as upstream. An HTML form cannot send PUT or DELETE, so an
+   * app that relies on the workaround has to say so — otherwise any POST body
+   * could rewrite itself into a DELETE.
+   */
+  allowMethodSpoofing?: boolean
 }
 
 export interface HttpKernelResponse {
@@ -163,6 +171,12 @@ export function createHttpKernel(
       routeInfo,
       config.container,
     )
+    if (config.allowMethodSpoofing === true) {
+      // Was never wired: the setter existed but nothing called it, so a
+      // migrated config asking for spoofing got a `_method` field that did
+      // nothing at all.
+      ctx.request.setMethodSpoofing(true)
+    }
     ctx.setRouteUrlResolver((name, params) => config.router.urlFor(name, params))
     // Inject the async-resolved APP_KEY services + base logger (resolved once).
     await resolveServices()
@@ -296,7 +310,11 @@ export function createHttpKernel(
         path: reqData.path,
         status: ctx.response.getStatus(),
       })
-      return serializeResponse(ctx)
+      const serialized = serializeResponse(ctx)
+      // The body is built; anything registered with `response.onFinish()` runs
+      // now — after the answer is ready, before we hand it back.
+      ctx.response.runFinishCallbacks()
+      return serialized
     } catch (error) {
       // If the handler opened an SSE stream via `response.sse()` and
       // THEN threw, the reserved stream id is still on the response.
@@ -334,14 +352,17 @@ export function createHttpKernel(
         path: reqData.path,
         status: ctx.response.getStatus(),
       })
-      return serializeResponse(ctx)
+      const serialized = serializeResponse(ctx)
+      // The body is built; anything registered with `response.onFinish()` runs
+      // now — after the answer is ready, before we hand it back.
+      ctx.response.runFinishCallbacks()
+      return serialized
     }
   }
 }
 
 function createControllerHandler(
-  // biome-ignore lint/suspicious/noExplicitAny: see ControllerAction type — IoC resolves constructor params
-  controller: { target: new (...args: any[]) => any; method: string },
+  controller: { target: AnyConstructor; method: string },
   container?: Container,
 ): (ctx: HttpContext) => Promise<void> {
   return async (ctx: HttpContext) => {
@@ -363,7 +384,7 @@ function createControllerHandler(
  * Returns empty arrays if no decorators are present.
  */
 function readControllerGuardMetadata(
-  target: new (...args: unknown[]) => unknown,
+  target: AnyConstructor,
   method: string,
 ): { guards: string[]; roles: string[]; permissions: string[] } {
   try {

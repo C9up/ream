@@ -13,7 +13,16 @@ import { arch, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { ReamError } from '../errors/ReamError.js'
 
-/** Platform triple suffix (matches napi-rs naming). */
+/**
+ * Platform triple suffix (matches napi-rs naming).
+ *
+ * The ONE map for `@c9up/ream`. Every native package carries its own — they are
+ * independently publishable and must not import each other — so a new target
+ * still has to be added per package; within ream it is added here once.
+ *
+ * Linux binaries target GLIBC. musl (Alpine) is not a supported target, and the
+ * loader says so rather than reporting a bare "not found".
+ */
 export const NAPI_PLATFORM_MAP: Record<string, string> = {
   'linux-x64': 'linux-x64-gnu',
   'linux-arm64': 'linux-arm64-gnu',
@@ -94,13 +103,20 @@ export function loadNapi<T>(options: LoadNapiOptions): T {
     }
   }
 
+  // On a musl host the glibc binary is present but never loads, so "not found"
+  // sends the reader looking for a missing file that is right there. Name the
+  // real reason instead.
+  const muslHint = suffix.endsWith('-gnu')
+    ? ' If you are on Alpine/musl, note the prebuilt Linux binaries target glibc — musl is not a supported target.'
+    : ''
   throw new ReamError(
     `${errorCodePrefix}_NAPI_NOT_FOUND`,
     `${binaryName} NAPI binary not found. Expected ${binaryName}.${suffix}.node`,
     {
-      hint:
+      hint: `${
         options.notFoundHint ??
-        "Run 'pnpm --filter @c9up/ream build:rust' to build the native module.",
+        "Run 'pnpm --filter @c9up/ream build:rust' to build the native module."
+      }${muslHint}`,
     },
   )
 }

@@ -28,7 +28,10 @@ export type UnwrapOpaque<T> = T extends Opaque<infer Base, string> ? Base : T
 export type AsyncOrSync<T> = T | Promise<T>
 
 /** Constructor type. */
-export type Constructor<T = unknown, Args extends unknown[] = unknown[]> = new (...args: Args) => T
+// The default `Args` is `never[]`, not `unknown[]`: parameters are
+// contravariant, so only a rest of `never` accepts EVERY concrete parameter
+// list. Pass `Args` explicitly when you need to call the constructor.
+export type Constructor<T = unknown, Args extends unknown[] = never[]> = new (...args: Args) => T
 
 /** Abstract constructor type. */
 export type AbstractConstructor<T = unknown> = abstract new (...args: unknown[]) => T

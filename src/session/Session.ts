@@ -19,9 +19,38 @@ export interface SessionDriver {
   touch(sessionId: string, ttl: number): Promise<void>
 }
 
+/** Where `flashAll` / `flashOnly` / `flashExcept` put the request input. */
+const FLASH_INPUT_KEY = 'input'
+
+/** Where the intended URL is stored, out of the way of app keys. */
+const INTENDED_URL_KEY = '__intended_url'
+
 export interface SessionConfig {
-  driver: string
+  /**
+   * Which store to use. AdonisJS names this key `store`; `driver` is ream's
+   * older spelling and both are accepted, so a migrated `config/session.ts`
+   * runs with its imports rewritten and nothing else.
+   */
+  driver?: string
+  /** AdonisJS spelling of {@link driver}. */
+  store?: string
+  /**
+   * Named stores, AdonisJS-style: `{ store: 'redis', stores: { redis: … } }`.
+   * The selected entry supplies the driver name and its options.
+   */
+  stores?: Record<string, { driver: string } & Record<string, unknown>>
+  /** `file` driver only — the directory session files are written to. */
+  location?: string
+  /** `database` driver only — the connection to store sessions on. */
+  dbConnection?: unknown
+  /** `database` driver only — the table holding them (default `sessions`). */
+  tableName?: string
   cookieName?: string
+  /**
+   * Session lifetime. A bare number is SECONDS; a string carries a unit
+   * (`'2h'`), which is how AdonisJS writes it (`age: string | number`).
+   */
+  age?: number | string
   maxAge?: number // seconds, default 7200 (2h)
   clearWithBrowser?: boolean
   /**
@@ -64,11 +93,18 @@ function generateSessionId(): string {
   return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 }
 
+/** A non-null, non-array object — the shape flash data must have to be keyed. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export class Session {
   #data: Record<string, unknown> = {}
   #flashData: Record<string, unknown> = {}
   #previousFlash: Record<string, unknown> = {}
   #dirty = false
+  /** Reads the request's original input; absent outside a request. */
+  #readInput?: () => Record<string, unknown>
   #sessionId: string
   /**
    * The session id active when the request arrived, captured at construction.
@@ -84,11 +120,7 @@ export class Session {
     this.#originalSessionId = sessionId
     this.#data = { ...data }
     const flash = data.__flash
-    this.#previousFlash =
-      typeof flash === 'object' && flash !== null && !Array.isArray(flash)
-        ? // biome-ignore lint/suspicious/noExplicitAny: flash narrowed to non-null non-array object; branded as Record for key access
-          (flash as any as Record<string, unknown>)
-        : {}
+    this.#previousFlash = isPlainRecord(flash) ? { ...flash } : {}
     delete this.#data.__flash
   }
 
@@ -127,12 +159,11 @@ export class Session {
 
   /** Get a session value. */
   get<T = unknown>(key: string, defaultValue?: T): T {
-    if (key in this.#data) {
-      // biome-ignore lint/suspicious/noExplicitAny: session data stored as unknown; caller brands the value type via T
-      return this.#data[key] as any as T
-    }
-    // biome-ignore lint/suspicious/noExplicitAny: generic default — caller brands the value type via T
-    return defaultValue as any as T
+    // The store is untyped by nature, so `T` is the CALLER's claim about what
+    // it put there — one assertion from `unknown`, which is what `T` means
+    // here. Going through `any` first widened nothing and hid the intent.
+    if (key in this.#data) return this.#data[key] as T
+    return defaultValue as T
   }
 
   /** Set a session value. */
@@ -183,35 +214,152 @@ export class Session {
 
   // ─── Flash data ───────────────────────────────────────────
 
-  /** Set flash data (available only on the next request). */
-  flash(key: string, value: unknown): void {
-    this.#flashData[key] = value
+  /**
+   * @internal Give the session read access to the request's ORIGINAL input.
+   *
+   * AdonisJS's session holds the HTTP context and reads `request.original()`;
+   * ream's Session stays free of it, so the middleware injects a reader. Absent
+   * (a session built outside a request), the input-flashing methods flash
+   * nothing rather than throwing.
+   */
+  setInputReader(read: () => Record<string, unknown>): void {
+    this.#readInput = read
+  }
+
+  /** The request's original input, or nothing when there is no request. */
+  #input(): Record<string, unknown> {
+    return this.#readInput?.() ?? {}
+  }
+
+  /**
+   * Set flash data, available only on the next request.
+   *
+   * Takes a key and a value, or an object of both (AdonisJS accepts either).
+   */
+  flash(key: string | Record<string, unknown>, value?: unknown): void {
+    if (typeof key === 'string') this.#flashData[key] = value
+    else Object.assign(this.#flashData, key)
     this.#dirty = true
   }
 
-  /** Flash all current input. */
-  flashAll(input: Record<string, unknown>): void {
-    for (const [k, v] of Object.entries(input)) {
-      this.#flashData[k] = v
-    }
-    this.#dirty = true
+  /**
+   * Flash the whole request input for the next request (AdonisJS `flashAll`).
+   *
+   * Takes NO argument: it reads the request's original input itself, which is
+   * what makes `session.flashAll()` before a redirect-back repopulate a form.
+   */
+  flashAll(): void {
+    this.flash(FLASH_INPUT_KEY, this.#input())
   }
 
-  /** Flash only specific keys. */
-  flashOnly(input: Record<string, unknown>, keys: string[]): void {
-    for (const k of keys) {
-      if (k in input) this.#flashData[k] = input[k]
+  /** Flash only these input keys (AdonisJS `flashOnly`). */
+  flashOnly(keys: string[]): void {
+    const input = this.#input()
+    const picked: Record<string, unknown> = {}
+    for (const key of keys) {
+      if (Object.hasOwn(input, key)) picked[key] = input[key]
     }
-    this.#dirty = true
+    this.flash(FLASH_INPUT_KEY, picked)
   }
 
-  /** Flash all except specific keys. */
-  flashExcept(input: Record<string, unknown>, keys: string[]): void {
-    const keySet = new Set(keys)
-    for (const [k, v] of Object.entries(input)) {
-      if (!keySet.has(k)) this.#flashData[k] = v
+  /**
+   * Flash the request input except these keys (AdonisJS `flashExcept`).
+   *
+   *   session.flashExcept(['password', '_csrf'])
+   */
+  flashExcept(keys: string[]): void {
+    const omit = new Set(keys)
+    const kept: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(this.#input())) {
+      if (!omit.has(key)) kept[key] = value
     }
-    this.#dirty = true
+    this.flash(FLASH_INPUT_KEY, kept)
+  }
+
+  /**
+   * Flash an error collection under `errorsBag` (AdonisJS `flashErrors`) —
+   * where the `@error` / `@errors` template tags read from.
+   */
+  flashErrors(errors: Record<string, string | string[]>): void {
+    this.flash({ errorsBag: errors })
+  }
+
+  /**
+   * Flash a validation failure the way a form expects it (AdonisJS
+   * `flashValidationErrors`): the per-field messages under `inputErrorsBag`,
+   * a summary under `errorsBag`, and — unless told otherwise — the input, so
+   * the redisplayed form keeps what the user typed.
+   */
+  flashValidationErrors(
+    error: { code?: string; messages?: Array<{ field?: string; message?: string }> },
+    withInput = true,
+  ): void {
+    const bag: Record<string, string[]> = {}
+    for (const message of error.messages ?? []) {
+      if (message.field === undefined || message.message === undefined) continue
+      const existing = bag[message.field] ?? []
+      existing.push(message.message)
+      bag[message.field] = existing
+    }
+    this.flash('inputErrorsBag', bag)
+    this.flashErrors({
+      [error.code ?? 'E_VALIDATION_ERROR']: Object.values(bag).flat(),
+    })
+    if (withInput) this.flashAll()
+  }
+
+  /**
+   * Keep the PREVIOUS request's flash data for one more request (AdonisJS
+   * `reflash`) — what a redirect chain needs so a message survives the hop.
+   */
+  reflash(): void {
+    this.flash(this.#previousFlash)
+  }
+
+  /** Keep only these keys of the previous flash data (AdonisJS `reflashOnly`). */
+  reflashOnly(keys: string[]): void {
+    for (const key of keys) {
+      if (Object.hasOwn(this.#previousFlash, key)) {
+        this.flash(key, this.#previousFlash[key])
+      }
+    }
+  }
+
+  /** Keep the previous flash data except these keys (AdonisJS `reflashExcept`). */
+  reflashExcept(keys: string[]): void {
+    const omit = new Set(keys)
+    for (const [key, value] of Object.entries(this.#previousFlash)) {
+      if (!omit.has(key)) this.flash(key, value)
+    }
+  }
+
+  // ─── Intended URL ─────────────────────────────────────────
+
+  /**
+   * Remember where the user was heading (AdonisJS `setIntendedUrl`).
+   *
+   * An auth middleware stores it before redirecting to the login page, so the
+   * user lands back on the page they asked for instead of a generic dashboard.
+   */
+  setIntendedUrl(url: string): void {
+    this.put(INTENDED_URL_KEY, url)
+  }
+
+  /** The remembered URL, or null. */
+  getIntendedUrl(): string | null {
+    const url = this.get<string>(INTENDED_URL_KEY)
+    return typeof url === 'string' ? url : null
+  }
+
+  /** Read it and forget it — the usual call right after a successful login. */
+  pullIntendedUrl(): string | null {
+    const url = this.getIntendedUrl()
+    this.clearIntendedUrl()
+    return url
+  }
+
+  clearIntendedUrl(): void {
+    this.forget(INTENDED_URL_KEY)
   }
 
   /** Get a flashed value from the previous request. */
@@ -221,12 +369,10 @@ export class Session {
 
   /** Get a specific flash message from the previous request. */
   old<T = unknown>(key: string, defaultValue?: T): T {
-    if (key in this.#previousFlash) {
-      // biome-ignore lint/suspicious/noExplicitAny: flash data stored as unknown; caller brands the value type via T
-      return this.#previousFlash[key] as any as T
-    }
-    // biome-ignore lint/suspicious/noExplicitAny: generic default — caller brands the value type via T
-    return defaultValue as any as T
+    // Same contract as `get`: `T` is the caller's claim about a store that is
+    // untyped by nature.
+    if (key in this.#previousFlash) return this.#previousFlash[key] as T
+    return defaultValue as T
   }
 
   // ─── Serialization ────────────────────────────────────────

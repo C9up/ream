@@ -14,8 +14,9 @@ export interface ServiceMetadata {
 }
 
 /** Token used to resolve a service — class constructor, string name, or registered symbol. */
-// biome-ignore lint/suspicious/noExplicitAny: IoC container tokens must accept any constructor signature
-export type ServiceToken = (new (...args: any[]) => unknown) | string | symbol
+// `never[]` accepts every constructor shape — parameters are contravariant, so
+// a rest of `never` is assignable from any concrete list.
+export type ServiceToken = (new (...args: never[]) => unknown) | string | symbol
 
 /**
  * Resolver handed to a binding factory so it can resolve its own dependencies

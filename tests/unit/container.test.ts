@@ -268,10 +268,14 @@ describe('container > @Inject() named binding', () => {
 
   it('override named binding for testing', async () => {
     container.singleton('PaymentGateway', async () => ({ charge: () => 'real' }))
-    expect((await container.resolve<{ charge: () => string }>('PaymentGateway')).charge()).toBe('real')
+    expect((await container.resolve<{ charge: () => string }>('PaymentGateway')).charge()).toBe(
+      'real',
+    )
 
     container.override('PaymentGateway', { charge: () => 'fake' })
-    expect((await container.resolve<{ charge: () => string }>('PaymentGateway')).charge()).toBe('fake')
+    expect((await container.resolve<{ charge: () => string }>('PaymentGateway')).charge()).toBe(
+      'fake',
+    )
   })
 })
 
@@ -317,9 +321,10 @@ describe('container > circular dependency detection', () => {
     }))
 
     // B depends on A and Shared; A depends on Shared — diamond, not circular
-    const b = await container.resolve<{ a: { shared: { value: number } }; shared: { value: number } }>(
-      'B',
-    )
+    const b = await container.resolve<{
+      a: { shared: { value: number } }
+      shared: { value: number }
+    }>('B')
     expect(b.a.shared.value).toBe(42)
     expect(b.shared.value).toBe(42)
   })

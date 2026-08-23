@@ -20,12 +20,21 @@ import { Container } from './container/Container.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
+/**
+ * How far the app intends to go in its lifecycle.
+ *
+ * `run` is a real boot. `warmup` means the app is being INSPECTED — a codegen
+ * or listing command — so it will never become ready.
+ */
+export type ApplicationMode = 'run' | 'warmup'
+
 export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
   #appRoot?: URL
   private providers: ProviderContract[] = []
   private _booted = false
+  #mode: ApplicationMode = 'run'
   private _bootingHooks: Array<() => Promise<void> | void> = []
   private _bootedHooks: Array<() => Promise<void> | void> = []
   private _shutdownHooks: Array<() => Promise<void> | void> = []
@@ -33,6 +42,36 @@ export class Application implements AppContext {
   constructor() {
     this.container = new Container()
     this.config = new ConfigStore()
+  }
+
+  /**
+   * The current mode (AdonisJS `getMode`).
+   *
+   * A provider reads it to skip its SIDE EFFECTS — starting queue workers,
+   * opening a connection — when the app is only being inspected. It must never
+   * change which bindings are registered: the app being inspected has to match
+   * the app that runs, or the generated types describe something else.
+   *
+   *   async start() {
+   *     if (this.app.getMode() !== 'run') return
+   *     await startQueueWorkers()
+   *   }
+   */
+  getMode(): ApplicationMode {
+    return this.#mode
+  }
+
+  /**
+   * Switch the mode (AdonisJS `setMode`). Only before boot — afterwards the
+   * side effects a provider skipped have already been skipped, and pretending
+   * otherwise would leave the app half-started.
+   */
+  setMode(mode: ApplicationMode): this {
+    if (this._booted) {
+      throw new Error(`Cannot switch to '${mode}' mode: the application is already booted.`)
+    }
+    this.#mode = mode
+    return this
   }
 
   // ─── Paths ────────────────────────────────────────────────

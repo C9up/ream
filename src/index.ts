@@ -53,6 +53,13 @@ export { type GetterFn, Macroable, type MacroFn } from './utils/Macroable.js'
 // ─── Session ────────────────────────────────────────────────
 
 export { CookieDriver as SessionCookieDriver } from './session/drivers/CookieDriver.js'
+export type {
+  DatabaseDriverOptions as SessionDatabaseDriverOptions,
+  SessionDbConnection,
+} from './session/drivers/DatabaseDriver.js'
+export { DatabaseDriver as SessionDatabaseDriver } from './session/drivers/DatabaseDriver.js'
+export type { FileDriverOptions as SessionFileDriverOptions } from './session/drivers/FileDriver.js'
+export { FileDriver as SessionFileDriver } from './session/drivers/FileDriver.js'
 export { MemoryDriver as SessionMemoryDriver } from './session/drivers/MemoryDriver.js'
 export type {
   RedisSessionOptions,
