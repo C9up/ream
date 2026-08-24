@@ -20,6 +20,7 @@ import {
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
 import { ContainerResolver } from './ContainerResolver.js'
+import { ContextualBindingsBuilder } from './ContextualBindingsBuilder.js'
 import type { Binding, ServiceFactory, ServiceToken } from './types.js'
 
 /**
@@ -52,6 +53,19 @@ interface ResolutionChain {
    * caches exactly as before.
    */
   scopedReads?: number
+  /**
+   * The class whose dependencies are being resolved right now.
+   *
+   * A contextual binding answers "when THIS class asks for that, give it
+   * this", so the lookup needs the direct dependent. Carried on the chain for
+   * the same reason the scoped values are: `#autoConstruct` knows it, and
+   * every method between there and the lookup would otherwise have to pass it
+   * down. Saved and restored around each construction, so a dependency's own
+   * dependencies see IT as their parent, not its parent.
+   */
+  parent?: new (
+    ...args: never[]
+  ) => unknown
 }
 
 export class Container {
@@ -76,6 +90,9 @@ export class Container {
   #singletonBackup: Map<string, unknown> = new Map()
   /** Alias key → the token it forwards to (AdonisJS `container.alias`). */
   #aliases: Map<string, ServiceToken> = new Map()
+  /** parent class → (binding key → the factory that class gets instead). */
+  #contextualBindings: Map<new (...args: never[]) => unknown, Map<string, ServiceFactory>> =
+    new Map()
   /** token key → post-resolution callbacks (AdonisJS `container.resolving`). */
   #resolvingHooks: Map<string, Array<(value: unknown) => void | Promise<void>>> = new Map()
   /**
@@ -108,6 +125,33 @@ export class Container {
     const key = this.#tokenToKey(token)
     this.#singletons.set(key, value)
     this.#bindings.set(key, { token, factory: () => value, scope: 'singleton', dependencies: [] })
+  }
+
+  /**
+   * Give ONE class a different implementation of a dependency (AdonisJS
+   * `container.contextualBinding`).
+   *
+   * `contextualBinding(UsersController, Hash, () => new Argon2())` — everyone
+   * else asking for `Hash` still gets the container's binding. See
+   * {@link when} for the fluent spelling.
+   */
+  contextualBinding(
+    parent: new (...args: never[]) => unknown,
+    binding: ServiceToken,
+    factory: ServiceFactory,
+  ): void {
+    const forParent = this.#contextualBindings.get(parent) ?? new Map()
+    forParent.set(this.#tokenToKey(binding), factory)
+    this.#contextualBindings.set(parent, forParent)
+  }
+
+  /**
+   * Fluent contextual binding (AdonisJS `container.when`):
+   *
+   *     container.when(UsersController).asksFor(Hash).provide(() => new Argon2())
+   */
+  when(parent: new (...args: never[]) => unknown): ContextualBindingsBuilder {
+    return new ContextualBindingsBuilder(this, parent)
   }
 
   /**
@@ -271,6 +315,19 @@ export class Container {
     // `Object.getPrototypeOf` is typed `any` in lib.dom, so the assignment
     // narrows it back to a typed constructor without a cast expression.
     const target: Ctor = Object.getPrototypeOf(instance).constructor
+    // A method's dependencies are dependencies of the class declaring it, so a
+    // contextual binding applies to `call()` exactly as to a constructor. There
+    // is usually no chain open here — `call()` is an entry point — so one is
+    // opened to carry the parent, rather than each `resolve()` below opening
+    // its own with nobody in it.
+    const chain = this.#chain.getStore()
+    if (chain === undefined) {
+      return this.#chain.run({ stack: [], set: new Set(), parent: target }, () =>
+        this.call(instance, method, runtimeValues),
+      )
+    }
+    const outerParent = chain.parent
+    chain.parent = target
     const paramTypes: unknown[] =
       Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
     // `@Inject('token')` on a method parameter — a named binding the reflected
@@ -299,6 +356,8 @@ export class Container {
       const type = paramTypes[index]
       args.push(isInjectableClass(type) ? await this.resolve(type) : undefined)
     }
+
+    chain.parent = outerParent
 
     const member: unknown = instance[method]
     if (!isCallable(member)) {
@@ -336,6 +395,24 @@ export class Container {
   /** @internal Normalise a token the way the container keys it. */
   keyFor(token: ServiceToken): string {
     return this.#tokenToKey(token)
+  }
+
+  /**
+   * Resolve `token` as if `parent` had asked for it, so `parent`'s contextual
+   * bindings apply (AdonisJS `resolveFor`). `parent: null` means nobody asked —
+   * identical to {@link make}.
+   */
+  async resolveFor<T>(
+    parent: (new (...args: never[]) => unknown) | null,
+    token: ServiceToken,
+    runtimeValues?: unknown[],
+  ): Promise<T> {
+    if (parent === null) return this.make<T>(token, runtimeValues)
+    const chain = this.#chain.getStore()
+    return this.#chain.run(
+      chain === undefined ? { stack: [], set: new Set(), parent } : { ...chain, parent },
+      () => this.make<T>(token, runtimeValues),
+    )
   }
 
   // ─── Introspection ────────────────────────────────────────
@@ -386,22 +463,33 @@ export class Container {
       return swapped as T
     }
 
-    // 2. A value bound on the resolver that opened this chain. Before the
+    // 2. A contextual binding for the class currently being built — "when
+    //    UsersController asks for Hash, give it Argon2". Before the resolver's
+    //    values and the container's, after swaps: @adonisjs/fold's order.
+    const store = this.#chain.getStore()
+    const contextual =
+      store?.parent === undefined ? undefined : this.#contextualBindings.get(store.parent)?.get(key)
+    if (contextual !== undefined) {
+      const instance = await contextual(this)
+      await this.#runResolvingHooks(key, instance)
+      return instance as T
+    }
+
+    // 3. A value bound on the resolver that opened this chain. Before the
     //    container's own values, after swaps — the order @adonisjs/fold
     //    resolves in (`resolveFor`: swaps, resolver values, container values).
     //    No `resolving` hooks: the value was not constructed here.
-    const store = this.#chain.getStore()
     if (store?.values?.has(key)) {
       store.scopedReads = (store.scopedReads ?? 0) + 1
       return store.values.get(key) as T
     }
 
-    // 3. Check cached singletons
+    // 4. Check cached singletons
     if (this.#singletons.has(key)) {
       return this.#singletons.get(key) as T
     }
 
-    // 4. Check explicit bindings — the factory may be async.
+    // 5. Check explicit bindings — the factory may be async.
     const binding = this.#bindings.get(key)
     if (binding) {
       if (binding.scope !== 'singleton') {
@@ -435,14 +523,14 @@ export class Container {
       }
     }
 
-    // 5. Auto-construct if it's a class
+    // 6. Auto-construct if it's a class
     if (typeof token === 'function') {
       const instance = (await this.#autoConstruct(token, runtimeValues)) as T
       await this.#runResolvingHooks(key, instance)
       return instance
     }
 
-    // 6. Not found
+    // 7. Not found
     const allKeys = [...this.#bindings.keys(), ...this.#overrides.keys()]
     const suggestion = didYouMean(key, allKeys)
     throw new ReamError(
@@ -463,6 +551,23 @@ export class Container {
    * 3. No params → plain `new Class()`
    */
   async #autoConstruct(
+    target: new (...args: never[]) => unknown,
+    runtimeValues?: unknown[],
+  ): Promise<unknown> {
+    // Everything resolved inside is a dependency OF `target`, which is what a
+    // contextual binding keys on. Restored on EVERY exit — the construction has
+    // three returns and can throw — so `target`'s own parent is back in place.
+    const store = this.#chain.getStore()
+    const outerParent = store?.parent
+    if (store !== undefined) store.parent = target
+    try {
+      return await this.#constructWithDeps(target, runtimeValues)
+    } finally {
+      if (store !== undefined) store.parent = outerParent
+    }
+  }
+
+  async #constructWithDeps(
     target: new (...args: never[]) => unknown,
     runtimeValues?: unknown[],
   ): Promise<unknown> {

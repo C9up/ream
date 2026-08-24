@@ -19,20 +19,23 @@ export interface ServiceMetadata {
 export type ServiceToken = (new (...args: never[]) => unknown) | string | symbol
 
 /**
- * Resolver handed to a binding factory so it can resolve its own dependencies
+ * What a binding factory is handed so it can resolve its own dependencies
  * (AdonisJS parity: `container.singleton(token, async (resolver) =>
- * await resolver.make(Dep))`). The Container itself satisfies this contract.
+ * await resolver.make(Dep))`).
+ *
+ * Narrow on purpose: both the `Container` and a per-request `ContainerResolver`
+ * satisfy it, so a factory works the same whichever one is resolving.
  */
-export interface ContainerResolver {
+export interface FactoryResolver {
   make<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T>
 }
 
 /**
  * Factory function for creating service instances. Receives a {@link
- * ContainerResolver} (AdonisJS parity) — the async container means a factory
+ * FactoryResolver} (AdonisJS parity) — the async container means a factory
  * that needs another binding must `await resolver.make(Dep)`.
  */
-export type ServiceFactory = (resolver: ContainerResolver) => unknown
+export type ServiceFactory = (resolver: FactoryResolver) => unknown
 
 /** Binding entry in the container. */
 export interface Binding {

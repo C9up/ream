@@ -58,6 +58,20 @@ export class ContainerResolver {
     )
   }
 
+  /**
+   * Resolve as if `parent` had asked, so `parent`'s contextual bindings apply
+   * (AdonisJS `resolver.resolveFor`). `null` means nobody asked.
+   */
+  resolveFor<T>(
+    parent: (new (...args: never[]) => unknown) | null,
+    token: ServiceToken,
+    runtimeValues?: unknown[],
+  ): Promise<T> {
+    return this.#container.runWithScopedValues(this.#values, () =>
+      this.#container.resolveFor<T>(parent, token, runtimeValues),
+    )
+  }
+
   /** Whether the token resolves — here or on the container (AdonisJS `hasBinding`). */
   hasBinding(token: ServiceToken): boolean {
     return this.#values.has(this.#container.keyFor(token)) || this.#container.has(token)

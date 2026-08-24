@@ -9,7 +9,6 @@
 
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
-import type { Readable } from 'node:stream'
 import etag from 'etag'
 import { contentType } from 'mime-types'
 import { durationToSeconds } from '../helpers/duration.js'
