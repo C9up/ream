@@ -112,8 +112,16 @@ export default class BodyParserMiddleware {
     }
 
     // JSON
-    if (this.#config.json.enabled && matchesType(contentType, this.#config.json.types)) {
-      // Request already lazy-parses JSON — nothing to do
+    if (matchesType(contentType, this.#config.json.types)) {
+      if (this.#config.json.enabled) {
+        // `Request` lazy-parses JSON on first read; nothing to do here.
+      } else {
+        // Turning the parser off has to actually turn it off. Seeding an empty
+        // parsed body stops `Request`'s lazy parse from running later — before
+        // this, `json.enabled: false` was accepted and silently ignored, so a
+        // route that meant to read the raw payload still got it parsed.
+        ctx.request.setParsedBody({})
+      }
     }
 
     // Form URL-encoded

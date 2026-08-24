@@ -28,6 +28,12 @@ function isSameOriginOrRelative(referer: string, requestUrl?: string): boolean {
   }
 }
 
+/** The slice of the session the intended-URL methods use. */
+export interface IntendedUrlStore {
+  setIntendedUrl(url: string): void
+  pullIntendedUrl(): string | null
+}
+
 export class RedirectBuilder {
   #response: Response
   #status = 302
@@ -36,6 +42,9 @@ export class RedirectBuilder {
   #requestUrl?: string
   #requestReferer?: string
   #routeUrlResolver?: RouteUrlResolver
+  #session?: IntendedUrlStore
+  #isAjax = false
+  #hasRoute = true
 
   constructor(
     response: Response,
@@ -43,12 +52,77 @@ export class RedirectBuilder {
       requestUrl?: string
       requestReferer?: string
       routeUrlResolver?: RouteUrlResolver
+      /** The request session, for the intended-URL methods. */
+      session?: IntendedUrlStore
+      /** Whether this is an XHR — `withIntendedUrl` skips those. */
+      isAjax?: boolean
+      /** Whether a route matched — `withIntendedUrl` skips 404s. */
+      hasRoute?: boolean
     },
   ) {
     this.#response = response
     this.#requestUrl = options?.requestUrl
     this.#requestReferer = options?.requestReferer
     this.#routeUrlResolver = options?.routeUrlResolver
+    this.#session = options?.session
+    this.#isAjax = options?.isAjax ?? false
+    this.#hasRoute = options?.hasRoute ?? true
+  }
+
+  /**
+   * Remember where the user was heading, then carry on redirecting — AdonisJS'
+   * `withIntendedUrl` (a macro `@adonisjs/session` adds to Redirect).
+   *
+   * Only a GET, non-XHR, route-matched request is stored, exactly as upstream:
+   * remembering a POST would replay it as a GET after login, and remembering a
+   * 404 would send the user back to a dead end.
+   */
+  withIntendedUrl(method = 'GET'): this {
+    if (
+      this.#session &&
+      method.toUpperCase() === 'GET' &&
+      !this.#isAjax &&
+      this.#hasRoute &&
+      this.#requestUrl
+    ) {
+      this.#session.setIntendedUrl(this.#requestUrl)
+    }
+    return this
+  }
+
+  /**
+   * Redirect to the remembered URL, consuming it — AdonisJS' `toIntended`.
+   *
+   * The stored value is validated before use: it is written from a request URL,
+   * but a session store is not a trust boundary, and a redirect to an absolute
+   * off-site URL is an open redirect. Anything not same-origin or relative
+   * falls back, which is what `back()` already does with the Referer.
+   */
+  toIntended(fallback = '/'): void {
+    const intended = this.#session?.pullIntendedUrl() ?? null
+    this.toPath(this.#safeIntended(intended, fallback))
+  }
+
+  /** `toIntended`, falling back to a named route — AdonisJS' `toIntendedRoute`. */
+  toIntendedRoute(name: string, params?: Record<string, string>): void {
+    const intended = this.#session?.pullIntendedUrl() ?? null
+    const safe = intended === null ? null : this.#safeIntended(intended, null)
+    if (safe !== null) {
+      this.toPath(safe)
+      return
+    }
+    this.toRoute(name, params)
+  }
+
+  #safeIntended<T extends string | null>(intended: string | null, fallback: T): string | T {
+    if (!intended) return fallback
+    if (this.#requestUrl && !isSameOriginOrRelative(intended, this.#requestUrl)) {
+      return fallback
+    }
+    // A protocol-relative `//evil.com` is absolute to a browser even though it
+    // looks relative — reject it whether or not a request URL is known.
+    if (intended.startsWith('//')) return fallback
+    return intended
   }
 
   /** Set redirect status code. */

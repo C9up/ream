@@ -144,3 +144,25 @@ describe('BodyParserMiddleware — multipart limits', () => {
     expect(nextCalled).toBe(true)
   })
 })
+
+describe('BodyParserMiddleware — disabling a parser', () => {
+  it('json.enabled:false actually stops the body being parsed', async () => {
+    const ctx = makeCtx('{"a":1}', 'application/json')
+    await new BodyParserMiddleware({ json: { enabled: false } }).handle(ctx, noop)
+    // It used to be accepted and ignored: Request lazy-parsed anyway, so a
+    // route meaning to read the raw payload still got an object.
+    expect(ctx.request.body()).toEqual({})
+  })
+
+  it('json is parsed when left enabled', async () => {
+    const ctx = makeCtx('{"a":1}', 'application/json')
+    await new BodyParserMiddleware().handle(ctx, noop)
+    expect(ctx.request.body()).toEqual({ a: 1 })
+  })
+
+  it('form.enabled:false leaves the body unparsed', async () => {
+    const ctx = makeCtx('a=1', 'application/x-www-form-urlencoded')
+    await new BodyParserMiddleware({ form: { enabled: false } }).handle(ctx, noop)
+    expect(ctx.request.body()).toEqual({})
+  })
+})

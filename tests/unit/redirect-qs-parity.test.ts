@@ -66,3 +66,91 @@ describe('ream > redirect().withQs (AdonisJS parity)', () => {
     expect(location(response)).toBe('/dashboard')
   })
 })
+
+/**
+ * Intended-URL redirects. These live in `@adonisjs/session`, not in
+ * http-server: it adds `withIntendedUrl` / `toIntended` / `toIntendedRoute`
+ * to Redirect as macros (session_middleware.js:21-45). Looking only at
+ * http-server's RedirectBuilder makes them look absent — they are not.
+ */
+describe('ream > redirect().toIntended (AdonisJS parity)', () => {
+  function withSession(requestUrl = 'http://app.test/admin/reports', stored?: string) {
+    let intended: string | null = stored ?? null
+    const session = {
+      setIntendedUrl(url: string) {
+        intended = url
+      },
+      pullIntendedUrl() {
+        const value = intended
+        intended = null
+        return value
+      },
+    }
+    const response = new Response()
+    const redirect = new RedirectBuilder(response, {
+      requestUrl,
+      session,
+      routeUrlResolver: (name) => `/${name}`,
+    })
+    return { response, redirect, session, read: () => intended }
+  }
+
+  it('remembers a GET destination and redirects back to it after', () => {
+    const { redirect, response, read } = withSession()
+    redirect.withIntendedUrl('GET')
+    expect(read()).toBe('http://app.test/admin/reports')
+
+    redirect.toIntended()
+    expect(location(response)).toBe('http://app.test/admin/reports')
+  })
+
+  it('consumes the stored URL, so a second redirect falls back', () => {
+    const { redirect, read } = withSession()
+    redirect.withIntendedUrl('GET')
+    redirect.toIntended()
+    // pull = read + delete, as upstream does.
+    expect(read()).toBeNull()
+  })
+
+  it('does not remember a POST, an XHR or an unmatched route', () => {
+    const post = withSession()
+    post.redirect.withIntendedUrl('POST')
+    expect(post.read()).toBeNull()
+
+    const response = new Response()
+    const xhr = new RedirectBuilder(response, {
+      requestUrl: 'http://app.test/x',
+      session: post.session,
+      isAjax: true,
+    })
+    xhr.withIntendedUrl('GET')
+    expect(post.read()).toBeNull()
+  })
+
+  it('falls back when nothing was remembered', () => {
+    const { redirect, response } = withSession()
+    redirect.toIntended('/dashboard')
+    expect(location(response)).toBe('/dashboard')
+  })
+
+  it('refuses an off-site intended URL', () => {
+    // A session store is not a trust boundary; redirecting to an absolute
+    // foreign URL is an open redirect.
+    const { redirect, response } = withSession('http://app.test/x', 'https://evil.example/steal')
+    redirect.toIntended('/safe')
+    expect(location(response)).toBe('/safe')
+  })
+
+  it('refuses a protocol-relative //evil.com', () => {
+    // Looks relative, is absolute to a browser.
+    const { redirect, response } = withSession('http://app.test/x', '//evil.example/steal')
+    redirect.toIntended('/safe')
+    expect(location(response)).toBe('/safe')
+  })
+
+  it('toIntendedRoute falls back to the named route', () => {
+    const { redirect, response } = withSession('http://app.test/x')
+    redirect.toIntendedRoute('dashboard')
+    expect(location(response)).toBe('/dashboard')
+  })
+})
