@@ -9,6 +9,7 @@
 import type { HttpContext } from '../http/HttpContext.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
 import { parseSize } from './parseSize.js'
+import { parseQueryString, type QsParseOptions } from './qsParse.js'
 
 export interface BodyParserConfig {
   json?: {
@@ -20,6 +21,16 @@ export interface BodyParserConfig {
     enabled?: boolean
     limit?: string
     types?: string[]
+    /**
+     * Turn `''` into `null`. AdonisJS defaults this to `true`, so an empty
+     * text input arrives as `null` rather than an empty string — which is what
+     * a "nullable" validation rule expects to see.
+     */
+    convertEmptyStringsToNull?: boolean
+    /** Trim surrounding whitespace. AdonisJS defaults this to `true`. */
+    trimWhitespaces?: boolean
+    /** Options for the bracket-notation parser (`depth`, `parameterLimit`). */
+    queryString?: QsParseOptions
   }
   raw?: {
     enabled?: boolean
@@ -55,6 +66,11 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
     enabled: true,
     limit: '1mb',
     types: ['application/x-www-form-urlencoded'],
+    // AdonisJS ships both as `true` (define_config: form.convertEmptyStringsToNull
+    // / trimWhitespaces), so a migrated form behaves the same here.
+    convertEmptyStringsToNull: true,
+    trimWhitespaces: true,
+    queryString: {},
   },
   raw: {
     enabled: false,
@@ -102,7 +118,13 @@ export default class BodyParserMiddleware {
 
     // Form URL-encoded
     if (this.#config.form.enabled && matchesType(contentType, this.#config.form.types)) {
-      ctx.request.setParsedBody(parseFormUrlEncoded(rawBody))
+      ctx.request.setParsedBody(
+        parseQueryString(rawBody, {
+          ...this.#config.form.queryString,
+          convertEmptyStringsToNull: this.#config.form.convertEmptyStringsToNull,
+          trimWhitespaces: this.#config.form.trimWhitespaces,
+        }),
+      )
     }
 
     // Raw text — wrap the string under `_body` so consumers can still
@@ -179,36 +201,4 @@ export default class BodyParserMiddleware {
 
 function matchesType(contentType: string, types: string[]): boolean {
   return types.some((t) => contentType.includes(t))
-}
-
-function parseFormUrlEncoded(body: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  if (!body) return result
-  for (const pair of body.split('&')) {
-    if (!pair) continue
-    const eqIdx = pair.indexOf('=')
-    if (eqIdx === -1) {
-      result[decodeFormComponent(pair)] = ''
-    } else {
-      result[decodeFormComponent(pair.slice(0, eqIdx))] = decodeFormComponent(pair.slice(eqIdx + 1))
-    }
-  }
-  return result
-}
-
-// `application/x-www-form-urlencoded` reserves `+` for space (RFC 1866 / WHATWG
-// URL form spec), so the substitution must happen before percent-decoding —
-// otherwise a literal `+` (encoded as `%2B`) would be turned into a space too.
-//
-// Malformed percent-encoding (e.g. a truncated `a=%E0%A4%A`) makes
-// decodeURIComponent throw URIError; mirror Request.ts#safeDecode and fall back
-// to the substituted-but-undecoded value so an invalid body is a parse miss,
-// not a 500.
-function decodeFormComponent(value: string): string {
-  const spaced = value.replace(/\+/g, ' ')
-  try {
-    return decodeURIComponent(spaced)
-  } catch {
-    return spaced
-  }
 }

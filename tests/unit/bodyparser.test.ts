@@ -38,7 +38,30 @@ describe('BodyParserMiddleware — form-urlencoded', () => {
   it('handles flag-style keys without value', async () => {
     const ctx = makeCtx('debug&trace=1', 'application/x-www-form-urlencoded')
     await new BodyParserMiddleware().handle(ctx, noop)
+    // `null`, not `''`: AdonisJS ships `convertEmptyStringsToNull: true` for
+    // form bodies, which is what a "nullable" validation rule expects to see.
+    expect(ctx.request.body()).toEqual({ debug: null, trace: '1' })
+  })
+
+  it('keeps the empty string when the app turns the conversion off', async () => {
+    const ctx = makeCtx('debug&trace=1', 'application/x-www-form-urlencoded')
+    await new BodyParserMiddleware({
+      form: { convertEmptyStringsToNull: false },
+    }).handle(ctx, noop)
     expect(ctx.request.body()).toEqual({ debug: '', trace: '1' })
+  })
+
+  it('nests bracket and dotted keys, and collects repeats', async () => {
+    const ctx = makeCtx(
+      'user[name]=ada&user.age=36&tags[]=x&tags[]=y',
+      'application/x-www-form-urlencoded',
+    )
+    await new BodyParserMiddleware().handle(ctx, noop)
+    // Flat parsing kept only the last `tags[]`, losing a checkbox group.
+    expect(ctx.request.body()).toEqual({
+      user: { name: 'ada', age: '36' },
+      tags: ['x', 'y'],
+    })
   })
 
   it('skips empty pairs from a leading `&`', async () => {
