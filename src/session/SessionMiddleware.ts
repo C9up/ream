@@ -116,6 +116,7 @@ export default class SessionMiddleware {
       const data = await this.#driver.read(sessionId ?? '')
       sessionId = sessionId ?? generateSessionId()
       const session = new Session(sessionId, data)
+      session.setDriver(this.#driver, !hadIncomingCookie)
       ctx.store.set('session', session)
       ctx.session = session
       session.setInputReader(() => ctx.request.original())
@@ -163,6 +164,7 @@ export default class SessionMiddleware {
 
     const data = await this.#driver.read(sessionId)
     const session = new Session(sessionId, data)
+    session.setDriver(this.#driver, !hadIncomingCookie)
     ctx.store.set('session', session)
     ctx.session = session
     // `flashAll()` takes no argument (AdonisJS): it reads the request's own

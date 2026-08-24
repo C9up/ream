@@ -69,8 +69,13 @@ export type {
   SessionRedisClientSource,
 } from './session/drivers/RedisDriver.js'
 export { RedisDriver as SessionRedisDriver } from './session/drivers/RedisDriver.js'
-export type { SessionConfig, SessionDriver } from './session/Session.js'
-export { Session } from './session/Session.js'
+export type {
+  SessionConfig,
+  SessionDriver,
+  SessionDriverWithTagging,
+  TaggedSession,
+} from './session/Session.js'
+export { Session, supportsTagging as sessionStoreSupportsTagging } from './session/Session.js'
 export { default as SessionMiddleware } from './session/SessionMiddleware.js'
 
 // ─── Body Parser ────────────────────────────────────────────

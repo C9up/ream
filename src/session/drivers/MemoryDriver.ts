@@ -1,4 +1,4 @@
-import type { SessionDriver } from '../Session.js'
+import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
 
 /** Sweep expired entries once the store reaches this size. */
 const SWEEP_THRESHOLD = 1000
@@ -19,8 +19,10 @@ export interface MemoryDriverOptions {
   maxEntries?: number
 }
 
-export class MemoryDriver implements SessionDriver {
+export class MemoryDriver implements SessionDriverWithTagging {
   #store: Map<string, { data: Record<string, unknown>; expiresAt: number }> = new Map()
+  /** user id → the sessions tagged with it. */
+  #tags: Map<string, Set<string>> = new Map()
   readonly #maxEntries: number
 
   constructor(options: MemoryDriverOptions = {}) {
@@ -57,6 +59,12 @@ export class MemoryDriver implements SessionDriver {
 
   async destroy(sessionId: string): Promise<void> {
     this.#store.delete(sessionId)
+    // Drop the tags too: a destroyed session left in the index would be
+    // reported as an active device forever.
+    for (const [userId, ids] of this.#tags) {
+      if (!ids.delete(sessionId)) continue
+      if (ids.size === 0) this.#tags.delete(userId)
+    }
   }
 
   async touch(sessionId: string, ttl: number): Promise<void> {
@@ -64,5 +72,39 @@ export class MemoryDriver implements SessionDriver {
     if (entry) {
       entry.expiresAt = Date.now() + ttl * 1000
     }
+  }
+
+  async tag(sessionId: string, userId: string | number): Promise<void> {
+    const key = String(userId)
+    const ids = this.#tags.get(key) ?? new Set<string>()
+    ids.add(sessionId)
+    this.#tags.set(key, ids)
+  }
+
+  async untag(sessionId: string, userId: string | number): Promise<void> {
+    const key = String(userId)
+    const ids = this.#tags.get(key)
+    if (!ids) return
+    ids.delete(sessionId)
+    if (ids.size === 0) this.#tags.delete(key)
+  }
+
+  async tagged(userId: string | number): Promise<TaggedSession[]> {
+    const ids = this.#tags.get(String(userId))
+    if (!ids) return []
+    const now = Date.now()
+    const sessions: TaggedSession[] = []
+    for (const id of [...ids]) {
+      const entry = this.#store.get(id)
+      // An expired or evicted session is not an active device. Forget it here
+      // too, so the index does not grow with entries the store already lost.
+      if (!entry || entry.expiresAt < now) {
+        ids.delete(id)
+        continue
+      }
+      sessions.push({ id, data: { ...entry.data } })
+    }
+    if (ids.size === 0) this.#tags.delete(String(userId))
+    return sessions
   }
 }

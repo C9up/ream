@@ -1,4 +1,4 @@
-import type { SessionDriver } from '../Session.js'
+import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
 
 /**
  * The little a session store needs of a database connection.
@@ -30,8 +30,9 @@ export interface DatabaseDriverOptions {
  *   id          varchar primary key
  *   data        text
  *   expires_at  bigint     -- epoch ms
+ *   user_id     varchar null  -- session tagging; nullable, only set at login
  */
-export class DatabaseDriver implements SessionDriver {
+export class DatabaseDriver implements SessionDriverWithTagging {
   readonly #db: SessionDbConnection
   readonly #table: string
 
@@ -59,16 +60,7 @@ export class DatabaseDriver implements SessionDriver {
       await this.destroy(sessionId)
       return {}
     }
-    try {
-      const parsed: unknown = JSON.parse(row.data)
-      return typeof parsed === 'object' && parsed !== null
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      // Unreadable row: treat the session as absent rather than hand the app a
-      // half-parsed object.
-      return {}
-    }
+    return parseData(row.data)
   }
 
   async write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void> {
@@ -100,8 +92,52 @@ export class DatabaseDriver implements SessionDriver {
     ])
   }
 
+  /**
+   * Associate the session with a user (AdonisJS's database store does the same:
+   * a nullable `user_id` column, set at login).
+   */
+  async tag(sessionId: string, userId: string | number): Promise<void> {
+    await this.#db.execute(`UPDATE ${this.#table} SET user_id = ? WHERE id = ?`, [
+      String(userId),
+      sessionId,
+    ])
+  }
+
+  /**
+   * Drop the association. Scoped to the user id as well as the session, so a
+   * logout cannot clear a tag another user's session happens to hold.
+   */
+  async untag(sessionId: string, userId: string | number): Promise<void> {
+    await this.#db.execute(
+      `UPDATE ${this.#table} SET user_id = NULL WHERE id = ? AND user_id = ?`,
+      [sessionId, String(userId)],
+    )
+  }
+
+  /** Every non-expired session this user holds — their active devices. */
+  async tagged(userId: string | number): Promise<TaggedSession[]> {
+    const rows = await this.#db.query<{ id: string; data: string }>(
+      `SELECT id, data FROM ${this.#table} WHERE user_id = ? AND expires_at >= ?`,
+      [String(userId), Date.now()],
+    )
+    return rows.map((row) => ({ id: row.id, data: parseData(row.data) }))
+  }
+
   /** Delete every expired row — for a scheduled job, since nothing else does. */
   async prune(): Promise<void> {
     await this.#db.execute(`DELETE FROM ${this.#table} WHERE expires_at < ?`, [Date.now()])
+  }
+}
+
+/**
+ * A stored payload back into an object. An unreadable row is an absent session
+ * rather than a half-parsed object handed to the app.
+ */
+function parseData(raw: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
   }
 }

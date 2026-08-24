@@ -8,7 +8,7 @@
  * carries these four commands.
  */
 
-import type { SessionDriver } from '../Session.js'
+import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
 
 /** The commands a session needs. Compatible with ioredis and node-redis. */
 export interface SessionRedisClient {
@@ -16,6 +16,22 @@ export interface SessionRedisClient {
   set(key: string, value: string, ...args: unknown[]): Promise<unknown>
   del(key: string | string[]): Promise<number>
   expire(key: string, seconds: number): Promise<number>
+  /** Set commands, needed only for session tagging. Every real client has them. */
+  sadd?(key: string, ...members: string[]): Promise<number>
+  srem?(key: string, ...members: string[]): Promise<number>
+  smembers?(key: string): Promise<string[]>
+  exists?(key: string): Promise<number>
+}
+
+/** The set commands session tagging needs, over and above the base four. */
+const SET_COMMANDS = ['sadd', 'srem', 'smembers', 'exists'] as const
+
+/** A client that carries them. */
+type TaggingRedisClient = SessionRedisClient &
+  Required<Pick<SessionRedisClient, (typeof SET_COMMANDS)[number]>>
+
+function hasSetCommands(client: SessionRedisClient): client is TaggingRedisClient {
+  return SET_COMMANDS.every((command) => typeof client[command] === 'function')
 }
 
 /** Where the client comes from — resolved once, on the first request that needs it. */
@@ -28,7 +44,7 @@ export interface RedisSessionOptions {
   prefix?: string
 }
 
-export class RedisDriver implements SessionDriver {
+export class RedisDriver implements SessionDriverWithTagging {
   readonly #source: SessionRedisClientSource
   #resolved: SessionRedisClient | undefined
   #pending: Promise<SessionRedisClient> | undefined
@@ -62,6 +78,35 @@ export class RedisDriver implements SessionDriver {
 
   #key(sessionId: string): string {
     return `${this.#prefix}${sessionId}`
+  }
+
+  /** Where the set of a user's session ids lives. */
+  #tagKey(userId: string | number): string {
+    return `${this.#prefix}tag:${userId}`
+  }
+
+  /**
+   * The client, narrowed to one that carries the set commands.
+   *
+   * They are optional on {@link SessionRedisClient} so a four-command shim
+   * still satisfies the store contract. A real client has them; a shim that
+   * does not gets told which command is missing, rather than a tag that
+   * silently does nothing and a "log out everywhere" that logs nobody out.
+   */
+  async #taggingClient(method: string): Promise<TaggingRedisClient> {
+    const client = await this.#client()
+    const missing = SET_COMMANDS.find((command) => typeof client[command] !== 'function')
+    if (missing !== undefined) {
+      throw new Error(
+        `session.${method}() needs the Redis \`${missing.toUpperCase()}\` command, which the configured client does not expose.`,
+      )
+    }
+    if (!hasSetCommands(client)) {
+      // Unreachable: `missing` already proved every command is there. The guard
+      // is what tells the type system so, without asserting it.
+      throw new Error(`session.${method}() could not narrow the Redis client.`)
+    }
+    return client
   }
 
   /**
@@ -98,6 +143,36 @@ export class RedisDriver implements SessionDriver {
   async touch(sessionId: string, ttl: number): Promise<void> {
     const client = await this.#client()
     await client.expire(this.#key(sessionId), ttl)
+  }
+
+  async tag(sessionId: string, userId: string | number): Promise<void> {
+    const client = await this.#taggingClient('tag')
+    await client.sadd(this.#tagKey(userId), sessionId)
+  }
+
+  async untag(sessionId: string, userId: string | number): Promise<void> {
+    const client = await this.#taggingClient('untag')
+    await client.srem(this.#tagKey(userId), sessionId)
+  }
+
+  async tagged(userId: string | number): Promise<TaggedSession[]> {
+    const client = await this.#taggingClient('tagged')
+    const key = this.#tagKey(userId)
+    const ids = await client.smembers(key)
+    const sessions: TaggedSession[] = []
+    const stale: string[] = []
+    for (const id of ids) {
+      // A member whose session key expired is not an active device. Redis
+      // cannot expire set members individually, so the set is pruned here —
+      // otherwise it grows with every session the user ever opened.
+      if ((await client.exists(this.#key(id))) === 0) {
+        stale.push(id)
+        continue
+      }
+      sessions.push({ id, data: await this.read(id) })
+    }
+    if (stale.length > 0) await client.srem(key, ...stale)
+    return sessions
   }
 }
 

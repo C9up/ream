@@ -19,6 +19,38 @@ export interface SessionDriver {
   touch(sessionId: string, ttl: number): Promise<void>
 }
 
+/** One session belonging to a tagged user (AdonisJS `TaggedSession`). */
+export interface TaggedSession {
+  id: string
+  data: Record<string, unknown>
+}
+
+/**
+ * A driver that can associate a session with a user, so every session a user
+ * holds can be listed or destroyed — "log me out everywhere", and "these are
+ * your active devices" (AdonisJS `SessionStoreWithTaggingContract`).
+ *
+ * Only the drivers that keep a queryable index can answer: memory, redis and
+ * database. The cookie driver holds no server-side state at all, and the file
+ * driver would have to scan the directory on every lookup.
+ */
+export interface SessionDriverWithTagging extends SessionDriver {
+  tag(sessionId: string, userId: string | number): Promise<void>
+  untag(sessionId: string, userId: string | number): Promise<void>
+  /** Every non-expired session tagged with this user. */
+  tagged(userId: string | number): Promise<TaggedSession[]>
+}
+
+/** Whether a driver carries the tagging half of the contract. */
+export function supportsTagging(driver: SessionDriver): driver is SessionDriverWithTagging {
+  return (
+    'tag' in driver &&
+    typeof (driver as SessionDriverWithTagging).tag === 'function' &&
+    'tagged' in driver &&
+    typeof (driver as SessionDriverWithTagging).tagged === 'function'
+  )
+}
+
 /** Where `flashAll` / `flashOnly` / `flashExcept` put the request input. */
 const FLASH_INPUT_KEY = 'input'
 
@@ -114,6 +146,10 @@ export class Session {
    */
   readonly #originalSessionId: string
   #regenerated = false
+  /** Whether this session was created for THIS request (no incoming cookie). */
+  #fresh = false
+  /** The store behind it, when there is one — absent for a bare unit-test session. */
+  #driver?: SessionDriver
 
   constructor(sessionId: string, data: Record<string, unknown> = {}) {
     this.#sessionId = sessionId
@@ -388,5 +424,85 @@ export class Session {
 
   isDirty(): boolean {
     return this.#dirty
+  }
+
+  /** AdonisJS spelling of {@link isDirty}. */
+  get hasBeenModified(): boolean {
+    return this.#dirty
+  }
+
+  /**
+   * Whether this session was created during THIS request — no session cookie
+   * came in with it (AdonisJS `fresh`).
+   */
+  get fresh(): boolean {
+    return this.#fresh
+  }
+
+  /**
+   * Whether the session holds nothing (AdonisJS `isEmpty`). Flash data counts:
+   * a session carrying only a flash message still has something to write.
+   */
+  get isEmpty(): boolean {
+    return Object.keys(this.#data).length === 0 && Object.keys(this.#flashData).length === 0
+  }
+
+  /**
+   * Whether writes are refused (AdonisJS `readonly`). Always false here: ream
+   * has no read-only session mode, and reporting `true` would tell a caller
+   * its writes were dropped when they were not.
+   */
+  get readonly(): boolean {
+    return false
+  }
+
+  /**
+   * @internal Wire the store and the freshness flag. Called by
+   * `SessionMiddleware`; a session built by hand in a test has neither.
+   */
+  setDriver(driver: SessionDriver, fresh: boolean): void {
+    this.#driver = driver
+    this.#fresh = fresh
+  }
+
+  /**
+   * Whether the store behind this session can tag sessions with a user
+   * (AdonisJS `supportsTagging`). False under the cookie and file drivers.
+   */
+  supportsTagging(): boolean {
+    return this.#driver !== undefined && supportsTagging(this.#driver)
+  }
+
+  /**
+   * Associate this session with a user, so every session that user holds can
+   * be found later (AdonisJS `tag`) — what "log out from all my devices" and
+   * "your active sessions" are built on. Call it at login.
+   */
+  async tag(userId: string | number): Promise<void> {
+    await this.#taggingDriver('tag').tag(this.#sessionId, userId)
+  }
+
+  /** Drop the association made by {@link tag} (AdonisJS `untag`). Call it at logout. */
+  async untag(userId: string | number): Promise<void> {
+    await this.#taggingDriver('untag').untag(this.#sessionId, userId)
+  }
+
+  /**
+   * The store, asserted to support tagging. Throws naming the method rather
+   * than resolving to a no-op: a login that believes it tagged the session
+   * would leave "log out everywhere" silently doing nothing.
+   */
+  #taggingDriver(method: string): SessionDriverWithTagging {
+    if (this.#driver === undefined) {
+      throw new Error(
+        `session.${method}() needs a session store — this session was built without one.`,
+      )
+    }
+    if (!supportsTagging(this.#driver)) {
+      throw new Error(
+        `session.${method}() is not supported by the configured session store. Use the memory, redis, or database store.`,
+      )
+    }
+    return this.#driver
   }
 }
