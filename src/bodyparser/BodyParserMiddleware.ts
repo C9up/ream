@@ -13,12 +13,10 @@ import { parseQueryString, type QsParseOptions } from './qsParse.js'
 
 export interface BodyParserConfig {
   json?: {
-    enabled?: boolean
     limit?: string // e.g. '1mb'
     types?: string[]
   }
   form?: {
-    enabled?: boolean
     limit?: string
     types?: string[]
     /**
@@ -33,12 +31,10 @@ export interface BodyParserConfig {
     queryString?: QsParseOptions
   }
   raw?: {
-    enabled?: boolean
     limit?: string
     types?: string[]
   }
   multipart?: {
-    enabled?: boolean
     /** Total multipart body size cap (sum of all file sizes). Default: '20mb'. */
     limit?: string
     /** Maximum number of files per request. Default: 20. */
@@ -58,12 +54,10 @@ interface ResolvedBodyParserConfig {
 
 const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
   json: {
-    enabled: true,
     limit: '1mb',
     types: ['application/json', 'application/vnd.api+json'],
   },
   form: {
-    enabled: true,
     limit: '1mb',
     types: ['application/x-www-form-urlencoded'],
     // AdonisJS ships both as `true` (define_config: form.convertEmptyStringsToNull
@@ -73,12 +67,11 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
     queryString: {},
   },
   raw: {
-    enabled: false,
+    // AdonisJS parses `text/*` out of the box (define_config: raw.types).
     limit: '1mb',
-    types: ['text/plain'],
+    types: ['text/*'],
   },
   multipart: {
-    enabled: true,
     limit: '20mb',
     maxFiles: 20,
     maxFields: 500,
@@ -91,6 +84,7 @@ export default class BodyParserMiddleware {
   #config: ResolvedBodyParserConfig
 
   constructor(config?: BodyParserConfig) {
+    assertNoEnabledFlag(config)
     this.#config = {
       json: { ...DEFAULT_CONFIG.json, ...config?.json },
       form: { ...DEFAULT_CONFIG.form, ...config?.form },
@@ -113,19 +107,11 @@ export default class BodyParserMiddleware {
 
     // JSON
     if (matchesType(contentType, this.#config.json.types)) {
-      if (this.#config.json.enabled) {
-        // `Request` lazy-parses JSON on first read; nothing to do here.
-      } else {
-        // Turning the parser off has to actually turn it off. Seeding an empty
-        // parsed body stops `Request`'s lazy parse from running later — before
-        // this, `json.enabled: false` was accepted and silently ignored, so a
-        // route that meant to read the raw payload still got it parsed.
-        ctx.request.setParsedBody({})
-      }
+      // `Request` lazy-parses JSON on first read; nothing to do here.
     }
 
     // Form URL-encoded
-    if (this.#config.form.enabled && matchesType(contentType, this.#config.form.types)) {
+    if (matchesType(contentType, this.#config.form.types)) {
       ctx.request.setParsedBody(
         parseQueryString(rawBody, {
           ...this.#config.form.queryString,
@@ -138,14 +124,14 @@ export default class BodyParserMiddleware {
     // Raw text — wrap the string under `_body` so consumers can still
     // reach it through `request.input('_body')`. This matches the fallback
     // shape used by `Request.#ensureParsedBody` when JSON yields a non-object.
-    if (this.#config.raw.enabled && matchesType(contentType, this.#config.raw.types)) {
+    if (matchesType(contentType, this.#config.raw.types)) {
       ctx.request.setParsedBody({ _body: rawBody })
     }
 
     // Multipart — the Rust-side HyperServer parses the body server-side
     // (multer crate) and ships the structured payload on `request.multipart`.
     // JS just hydrates `MultipartFile` instances from the typed envelope.
-    if (this.#config.multipart.enabled && matchesType(contentType, this.#config.multipart.types)) {
+    if (matchesType(contentType, this.#config.multipart.types)) {
       const payload = ctx.request.multipart()
       if (payload) {
         if (this.#rejectMultipart(ctx, payload.files, payload.fields)) return
@@ -207,6 +193,44 @@ export default class BodyParserMiddleware {
   }
 }
 
+/**
+ * Whether a request's content-type is claimed by one of `types`.
+ *
+ * AdonisJS configures wildcards (`raw.types` defaults to `text/*`), so a bare
+ * substring test would never match `text/plain` against `text/*`. Parameters
+ * are stripped first: `application/json; charset=utf-8` is a JSON body.
+ */
 function matchesType(contentType: string, types: string[]): boolean {
-  return types.some((t) => contentType.includes(t))
+  const actual = (contentType.split(';')[0] ?? '').trim().toLowerCase()
+  if (!actual) return false
+  return types.some((candidate) => {
+    const pattern = candidate.trim().toLowerCase()
+    if (pattern === '*/*') return true
+    if (pattern.endsWith('/*')) {
+      return actual.startsWith(`${pattern.slice(0, -1)}`)
+    }
+    return actual === pattern
+  })
+}
+
+/**
+ * `enabled` was an atlas-era invention: AdonisJS has no such flag, and a parser
+ * is turned off by giving it no `types`. It also never worked for JSON, which
+ * `Request` lazy-parses on first read regardless.
+ *
+ * Silently ignoring a config key that used to mean something would re-enable a
+ * parser an app deliberately switched off, so it fails loudly with the
+ * replacement spelled out.
+ */
+function assertNoEnabledFlag(config?: BodyParserConfig): void {
+  if (!config) return
+  for (const section of ['json', 'form', 'raw', 'multipart'] as const) {
+    const value: unknown = config[section]
+    if (value !== null && typeof value === 'object' && 'enabled' in value) {
+      throw new Error(
+        `[E_BODYPARSER_CONFIG] \`${section}.enabled\` is no longer supported — AdonisJS has no such option. ` +
+          `To disable this parser, give it no types: \`${section}: { types: [] }\`.`,
+      )
+    }
+  }
 }

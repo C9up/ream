@@ -72,24 +72,32 @@ describe('BodyParserMiddleware — form-urlencoded', () => {
 })
 
 describe('BodyParserMiddleware — raw text', () => {
-  it('exposes the raw string under `_body` when raw.enabled is true', async () => {
+  it('exposes the raw string under `_body`, since text/* is parsed by default', async () => {
     const ctx = makeCtx('hello world', 'text/plain')
-    await new BodyParserMiddleware({ raw: { enabled: true } }).handle(ctx, noop)
+    await new BodyParserMiddleware().handle(ctx, noop)
     expect(ctx.request.body()).toEqual({ _body: 'hello world' })
   })
 
-  it('is a no-op when raw.enabled is false (default)', async () => {
+  it('leaves the body alone when raw is given no types', async () => {
     const ctx = makeCtx('hello world', 'text/plain')
-    await new BodyParserMiddleware().handle(ctx, noop)
-    // text/plain is neither JSON nor form-encoded, and raw is disabled by
-    // default — Request.#ensureParsedBody falls back to {} for non-JSON bodies.
+    await new BodyParserMiddleware({ raw: { types: [] } }).handle(ctx, noop)
+    // Nothing claims text/plain now, and Request.#ensureParsedBody falls back
+    // to {} for a non-JSON body.
     expect(ctx.request.body()).toEqual({})
+  })
+
+  it('matches a wildcard type and ignores charset parameters', async () => {
+    // AdonisJS defaults raw.types to `text/*`, so the matcher has to handle
+    // both the wildcard and `; charset=utf-8`.
+    const ctx = makeCtx('hi', 'text/csv; charset=utf-8')
+    await new BodyParserMiddleware().handle(ctx, noop)
+    expect(ctx.request.body()).toEqual({ _body: 'hi' })
   })
 
   it('respects a custom raw.types list', async () => {
     const ctx = makeCtx('<doc/>', 'application/xml')
     await new BodyParserMiddleware({
-      raw: { enabled: true, types: ['application/xml'] },
+      raw: { types: ['application/xml'] },
     }).handle(ctx, noop)
     expect(ctx.request.body()).toEqual({ _body: '<doc/>' })
   })
@@ -146,23 +154,23 @@ describe('BodyParserMiddleware — multipart limits', () => {
 })
 
 describe('BodyParserMiddleware — disabling a parser', () => {
-  it('json.enabled:false actually stops the body being parsed', async () => {
-    const ctx = makeCtx('{"a":1}', 'application/json')
-    await new BodyParserMiddleware({ json: { enabled: false } }).handle(ctx, noop)
-    // It used to be accepted and ignored: Request lazy-parsed anyway, so a
-    // route meaning to read the raw payload still got an object.
+  it('a parser given no types does not claim the body', async () => {
+    // How AdonisJS turns a parser off — there is no `enabled` flag upstream.
+    const ctx = makeCtx('a=1', 'application/x-www-form-urlencoded')
+    await new BodyParserMiddleware({ form: { types: [] } }).handle(ctx, noop)
     expect(ctx.request.body()).toEqual({})
   })
 
-  it('json is parsed when left enabled', async () => {
+  it('json is parsed by default', async () => {
     const ctx = makeCtx('{"a":1}', 'application/json')
     await new BodyParserMiddleware().handle(ctx, noop)
     expect(ctx.request.body()).toEqual({ a: 1 })
   })
 
-  it('form.enabled:false leaves the body unparsed', async () => {
-    const ctx = makeCtx('a=1', 'application/x-www-form-urlencoded')
-    await new BodyParserMiddleware({ form: { enabled: false } }).handle(ctx, noop)
-    expect(ctx.request.body()).toEqual({})
+  it('rejects the removed `enabled` flag instead of ignoring it', async () => {
+    // Silently dropping it would re-enable a parser an app switched off.
+    expect(() => new BodyParserMiddleware({ json: { enabled: false } } as never)).toThrow(
+      /E_BODYPARSER_CONFIG/,
+    )
   })
 })
