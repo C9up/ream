@@ -16,7 +16,20 @@ export interface DatabaseDriverOptions {
   connection: SessionDbConnection
   /** Table holding the sessions. Default `sessions`. */
   tableName?: string
+  /**
+   * Percent chance that a write also sweeps expired rows (AdonisJS
+   * `gcProbability`, default 2).
+   *
+   * Without it nothing collects them: `read()` only drops a row it happens to
+   * look at, so a session whose owner never comes back stays in the table
+   * forever. `0` turns the sweep off, for a deployment that prunes on a
+   * schedule instead — see {@link DatabaseDriver.prune}.
+   */
+  gcProbability?: number
 }
+
+/** AdonisJS's default: two writes in a hundred pay for the cleanup. */
+const DEFAULT_GC_PROBABILITY = 2
 
 /**
  * Database-backed sessions (AdonisJS `database` store).
@@ -35,9 +48,17 @@ export interface DatabaseDriverOptions {
 export class DatabaseDriver implements SessionDriverWithTagging {
   readonly #db: SessionDbConnection
   readonly #table: string
+  readonly #gcProbability: number
 
   constructor(options: DatabaseDriverOptions) {
     this.#db = options.connection
+    const gc = options.gcProbability ?? DEFAULT_GC_PROBABILITY
+    if (!Number.isFinite(gc) || gc < 0 || gc > 100) {
+      throw new Error(
+        `Session gcProbability must be a percentage between 0 and 100, got ${String(options.gcProbability)}.`,
+      )
+    }
+    this.#gcProbability = gc
     const table = options.tableName ?? 'sessions'
     // The table name is concatenated into the SQL (it cannot be a bind
     // parameter), so it is restricted to an identifier rather than trusted.
@@ -73,12 +94,32 @@ export class DatabaseDriver implements SessionDriverWithTagging {
       `UPDATE ${this.#table} SET data = ?, expires_at = ? WHERE id = ?`,
       [payload, expiresAt, sessionId],
     )
-    if (updated.rowsAffected > 0) return
+    if (updated.rowsAffected > 0) {
+      await this.#collectGarbage()
+      return
+    }
     await this.#db.execute(`INSERT INTO ${this.#table} (id, data, expires_at) VALUES (?, ?, ?)`, [
       sessionId,
       payload,
       expiresAt,
     ])
+    await this.#collectGarbage()
+  }
+
+  /**
+   * Sweep expired rows on a fraction of writes (AdonisJS `#collectGarbage`).
+   *
+   * Best-effort: a failed sweep must not fail the request that happened to draw
+   * the short straw. What it did not remove, the next write that does will.
+   */
+  async #collectGarbage(): Promise<void> {
+    if (this.#gcProbability <= 0) return
+    if (Math.random() * 100 >= this.#gcProbability) return
+    try {
+      await this.prune()
+    } catch {
+      // See above — the session was written, which is what the request needed.
+    }
   }
 
   async destroy(sessionId: string): Promise<void> {

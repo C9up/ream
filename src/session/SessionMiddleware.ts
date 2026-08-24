@@ -87,6 +87,7 @@ export default class SessionMiddleware {
       this.#driver = new DatabaseDriver({
         connection,
         tableName: typeof config?.tableName === 'string' ? config.tableName : undefined,
+        gcProbability: typeof config?.gcProbability === 'number' ? config.gcProbability : undefined,
       })
     } else if (this.#config.driver === 'redis') {
       // Either the app hands a client in, or it names a quasar connection —

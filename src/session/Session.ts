@@ -77,6 +77,11 @@ export interface SessionConfig {
   dbConnection?: unknown
   /** `database` driver only — the table holding them (default `sessions`). */
   tableName?: string
+  /**
+   * `database` driver only — percent chance that a write also sweeps expired
+   * rows (AdonisJS `gcProbability`, default 2). `0` turns it off.
+   */
+  gcProbability?: number
   cookieName?: string
   /**
    * Session lifetime. A bare number is SECONDS; a string carries a unit
