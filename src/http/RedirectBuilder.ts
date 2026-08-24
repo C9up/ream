@@ -31,7 +31,7 @@ function isSameOriginOrRelative(referer: string, requestUrl?: string): boolean {
 export class RedirectBuilder {
   #response: Response
   #status = 302
-  #qs: Record<string, string> | null = null
+  #qs: Record<string, unknown> = {}
   #forwardQs = false
   #requestUrl?: string
   #requestReferer?: string
@@ -57,13 +57,42 @@ export class RedirectBuilder {
     return this
   }
 
-  /** Forward current query string to the redirect target. */
-  withQs(qs?: Record<string, string>): this {
-    if (qs) {
-      this.#qs = qs
-    } else {
+  /**
+   * Query string for the redirect target, in the four shapes AdonisJS accepts:
+   *
+   *   withQs()                 forward the request's own query string
+   *   withQs(false)            stop forwarding it
+   *   withQs({ a: 1, b: 2 })   merge these values in
+   *   withQs('a', 1)           set one value
+   *
+   * The object and name/value forms MERGE, as upstream does — calling it twice
+   * adds to what is there rather than replacing it.
+   */
+  withQs(): this
+  withQs(forward: boolean): this
+  withQs(values: Record<string, unknown>): this
+  withQs(name: string, value: unknown): this
+  withQs(name?: boolean | string | Record<string, unknown>, value?: unknown): this {
+    if (name === undefined) {
       this.#forwardQs = true
+      return this
     }
+    if (typeof name === 'boolean') {
+      this.#forwardQs = name
+      return this
+    }
+    if (typeof name === 'string') {
+      this.#qs[name] = value
+      return this
+    }
+    Object.assign(this.#qs, name)
+    return this
+  }
+
+  /** Drop every value added with {@link withQs}, and stop forwarding. */
+  clearQs(): this {
+    this.#qs = {}
+    this.#forwardQs = false
     return this
   }
 
@@ -98,14 +127,26 @@ export class RedirectBuilder {
     }
   }
 
+  /**
+   * Forwarded query string first, explicit values on top — the order AdonisJS
+   * uses, so `withQs()` plus `withQs('page', 2)` overrides an inbound `page`
+   * rather than being overridden by it.
+   */
   #appendQs(path: string): string {
-    let qs = ''
-    if (this.#qs) {
-      qs = new URLSearchParams(this.#qs).toString()
-    } else if (this.#forwardQs && this.#requestUrl) {
+    const params = new URLSearchParams()
+    if (this.#forwardQs && this.#requestUrl) {
       const qsIdx = this.#requestUrl.indexOf('?')
-      if (qsIdx !== -1) qs = this.#requestUrl.slice(qsIdx + 1)
+      if (qsIdx !== -1) {
+        for (const [key, value] of new URLSearchParams(this.#requestUrl.slice(qsIdx + 1))) {
+          params.append(key, value)
+        }
+      }
     }
+    for (const [key, value] of Object.entries(this.#qs)) {
+      if (value === undefined || value === null) continue
+      params.set(key, String(value))
+    }
+    const qs = params.toString()
     if (!qs) return path
     return path.includes('?') ? `${path}&${qs}` : `${path}?${qs}`
   }

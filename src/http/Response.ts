@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
+import { durationToSeconds } from '../helpers/duration.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
 import { Macroable } from '../utils/Macroable.js'
 import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
@@ -105,39 +106,11 @@ export function unpackCookieValue(raw: string): unknown {
   }
 }
 
-const DURATION_UNITS: ReadonlyMap<string, number> = new Map([
-  ['s', 1],
-  ['m', 60],
-  ['h', 3600],
-  ['d', 86_400],
-  ['w', 604_800],
-])
-
-/**
- * A cookie lifetime in seconds. A bare number is already seconds (as AdonisJS
- * documents); a string carries a unit. An unreadable value throws rather than
- * reaching the header, where it would silently void the cookie.
- */
-function cookieMaxAgeSeconds(maxAge: number | string): number {
-  if (typeof maxAge === 'number') return Math.trunc(maxAge)
-  const match = /^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d|w)?\s*$/i.exec(maxAge)
-  const unit = DURATION_UNITS.get((match?.[2] ?? 's').toLowerCase())
-  if (match?.[1] === undefined || unit === undefined) {
-    throw new Error(
-      `Cannot read "${maxAge}" as a cookie maxAge. Use seconds, or a unit: 30s, 15m, 2h, 7d, 1w.`,
-    )
-  }
-  return Math.trunc(Number(match[1]) * unit)
-}
-
 export interface CookieOptions {
   /**
-   * Cookie lifetime in SECONDS, or a duration string (`'2h'`, `'30m'`, `'7d'`).
-   *
-   * AdonisJS types this `number | string` and parses the string form, so a
-   * migrated config carrying `maxAge: '2h'` has to work — emitting
-   * `Max-Age=2h` produced a header no browser accepts, and the cookie was
-   * dropped without a word.
+   * Cookie lifetime. A NUMBER is seconds; a STRING is parsed the way Adonis
+   * parses it (`'2 hours'`, `'30 mins'`, `'7 days'`, `'2h'`…), including its
+   * rule that a unitless string is milliseconds — see `helpers/duration.ts`.
    */
   maxAge?: number | string
   path?: string
@@ -878,7 +851,7 @@ export class Response extends Macroable {
     // `maxAge: 0` is the RFC 6265 "delete-now" signal used by logout flows. A
     // truthiness check would skip it; explicit `!== undefined` covers 0 too.
     if (options?.maxAge !== undefined) {
-      parts.push(`Max-Age=${cookieMaxAgeSeconds(options.maxAge)}`)
+      parts.push(`Max-Age=${durationToSeconds(options.maxAge, 'a cookie maxAge')}`)
     }
     if (options?.path) {
       // `Path` is concatenated raw (encodeURIComponent would mangle `/`), so it

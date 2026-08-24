@@ -6,6 +6,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { durationToSeconds } from '../helpers/duration.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { CookieDriver } from './drivers/CookieDriver.js'
 import { DatabaseDriver, type SessionDbConnection } from './drivers/DatabaseDriver.js'
@@ -23,29 +24,6 @@ interface ResolvedSessionConfig {
   maxAge: number
   clearWithBrowser: boolean
   rolling: boolean
-}
-
-const AGE_UNITS: ReadonlyMap<string, number> = new Map([
-  ['s', 1],
-  ['m', 60],
-  ['h', 3600],
-  ['d', 86_400],
-  ['w', 604_800],
-])
-
-/**
- * A session lifetime in seconds. AdonisJS types `age` as `string | number` and
- * writes `'2h'` in the generated config, so the string form has to work — a
- * lifetime silently read as NaN would expire every session immediately.
- */
-function sessionAgeSeconds(age: number | string): number {
-  if (typeof age === 'number') return Math.trunc(age)
-  const match = /^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d|w)?\s*$/i.exec(age)
-  const unit = AGE_UNITS.get((match?.[2] ?? 's').toLowerCase())
-  if (match?.[1] === undefined || unit === undefined) {
-    throw new Error(`Cannot read "${age}" as a session age. Use seconds, or a unit: 30m, 2h, 7d.`)
-  }
-  return Math.trunc(Number(match[1]) * unit)
 }
 
 /** Duck-typed check for a connection the database store can drive. */
@@ -73,7 +51,10 @@ export default class SessionMiddleware {
       driver: named?.driver ?? selected ?? 'memory',
       cookieName: config?.cookieName ?? 'ream_session',
       // `age` is the AdonisJS key and accepts a duration string.
-      maxAge: config?.age !== undefined ? sessionAgeSeconds(config.age) : (config?.maxAge ?? 7200),
+      maxAge:
+        config?.age !== undefined
+          ? durationToSeconds(config.age, 'a session age')
+          : (config?.maxAge ?? 7200),
       clearWithBrowser: config?.clearWithBrowser ?? false,
       rolling: config?.rolling ?? false,
     }
