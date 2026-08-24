@@ -27,7 +27,7 @@ export type LazyImport<T> = () => Promise<{ default: T }>
 // rest of `never` is assignable from any concrete list. No `any` needed.
 export type ErrorHandlerClass = new (...args: never[]) => ExceptionHandler
 
-type MiddlewareClassConstructor = new (...args: never[]) => MiddlewareClass
+export type MiddlewareClassConstructor = new (...args: never[]) => MiddlewareClass
 
 /** What server.use() and router.use() accept: lazy imports or direct functions. */
 export type MiddlewareEntry = LazyImport<MiddlewareClassConstructor> | MiddlewareFunction
@@ -137,8 +137,9 @@ export function resolveMiddlewareEntry(entry: MiddlewareEntry): MiddlewareFuncti
         throw new Error(
           '[E_MIDDLEWARE_ENTRY] A middleware entry with no declared parameters was treated as a lazy import, ' +
             'but it did not resolve to a module with a default export. ' +
-            'If this is a middleware (e.g. `handle.bind(this)` or `(...args) => …`), keep the `ctx` parameter ' +
-            'or wrap the import with `lazyMiddleware(() => import(...))` to say which it is.',
+            'If this is an inline middleware (e.g. `handle.bind(this)` or `(...args) => …`), register it on the ' +
+            'route or group — `router.get(...).use(fn)` — rather than in `router.use([...])`, which takes ' +
+            'imports of middleware classes, as AdonisJS does.',
         )
       }
       cachedClass = mod.default
@@ -180,47 +181,26 @@ export function resolveParametrizedMiddlewareEntry(
   }
 }
 
-/** Marks a factory as a lazy import, so nothing has to be inferred about it. */
-const LAZY_MIDDLEWARE = Symbol.for('ream.lazyMiddleware')
-
-/**
- * Declare a lazily-imported middleware class.
- *
- *     router.use([lazyMiddleware(() => import('#middleware/auth'))])
- *
- * AdonisJS never has to guess: a middleware entry is either a function (always
- * a closure) or an object carrying a module reference. Ream accepts a bare
- * `() => import(...)` for convenience, which makes the two shapes ambiguous —
- * this marker removes the ambiguity for good, and is the recommended form.
- */
-export function lazyMiddleware<T>(factory: LazyImport<T>): LazyImport<T> {
-  return Object.assign(factory, { [LAZY_MIDDLEWARE]: true })
-}
-
 /**
  * Whether an entry is a middleware to run, rather than a module to import.
  *
- * AdonisJS never infers this: `middlewareInfo` treats every function as a
- * closure, because its lazy entries are objects carrying a module reference.
- * Ream also accepts a bare `() => import(...)`, which makes a zero-arity
- * function ambiguous — `handle.bind(this)` and `(...args) => {}` report
- * `length === 0` just like an import factory does.
+ * The two are separated by WHERE they are registered, exactly as in AdonisJS:
+ * `router.use([...])` takes imports of middleware classes (its own `use()`
+ * runs `moduleImporter(one, 'handle')` over every entry), while an inline
+ * function goes on a route or group. So this only has to cope with the entries
+ * that reach it, and a zero-arity function is an import factory.
  *
- * `lazyMiddleware()` is the way to say which is which; without it the
- * zero-arity case is read as an import, and a middleware that lost its
- * parameters gets the explicit error below rather than a puzzling failure
- * deeper in.
+ * A middleware that lost its parameters — `handle.bind(this)`, `(...args) =>`
+ * — still lands here looking like a factory, which is why the resolver below
+ * raises a named error instead of failing somewhere deeper.
  */
 function isMiddlewareFunction(entry: MiddlewareEntry): entry is MiddlewareFunction {
   if (typeof entry !== 'function') return false
-  // An explicitly marked factory needs no guessing at all.
-  if (Reflect.get(entry, LAZY_MIDDLEWARE) === true) return false
   // A declared parameter means a middleware: `(ctx)`, `(ctx, next)`.
   if (entry.length > 0) return true
-  // Zero declared parameters is genuinely ambiguous — `() => import(...)` and
-  // `handle.bind(this)` are both zero-arity functions returning a promise, and
-  // nothing distinguishes them without calling one. Treated as an import,
-  // which is the common case; `lazyMiddleware()` (or keeping the `ctx`
-  // parameter) is the way out, and the error below says so.
+  // Zero declared parameters: an import factory. `router.use()` only takes
+  // those, so this is not a guess about which kind an entry is — a closure
+  // that reaches here was registered in the wrong place, and the resolver
+  // says so rather than running it as a module.
   return false
 }

@@ -3,19 +3,16 @@
  *
  * AdonisJS never infers this — `middlewareInfo` treats every function as a
  * closure, because its lazy entries are objects carrying a module reference.
- * Ream accepts a bare `() => import(...)` too, so a zero-arity function is
- * ambiguous: `handle.bind(this)` and `(...args) => {}` look exactly like an
- * import factory. `lazyMiddleware()` says which is which, and the ambiguous
- * case now fails with an error that names the fix.
+ * Ream separates them the same way — by WHERE they are registered:
+ * `router.use([...])` takes imports of middleware classes, an inline function
+ * goes on a route or group. A middleware that lost its parameters still reaches
+ * the resolver looking like a factory, and fails with an error naming where it
+ * belongs.
  */
 import { describe, expect, it } from 'vitest'
 import { HttpContext } from '../../src/http/HttpContext.js'
 import type { RawRequest } from '../../src/http/Request.js'
-import {
-  lazyMiddleware,
-  type MiddlewareClass,
-  resolveMiddlewareEntry,
-} from '../../src/server/Server.js'
+import { type MiddlewareClass, resolveMiddlewareEntry } from '../../src/server/Server.js'
 
 const RAW: RawRequest = {
   method: 'GET',
@@ -63,13 +60,6 @@ describe('ream > middleware entry shape', () => {
     expect(ctx.store.get('ran')).toBe('class')
   })
 
-  it('lazyMiddleware() marks a factory explicitly', async () => {
-    const mw = resolveMiddlewareEntry(lazyMiddleware(async () => ({ default: Recorded })))
-    const ctx = makeCtx()
-    await mw(ctx, async () => {})
-    expect(ctx.store.get('ran')).toBe('class')
-  })
-
   it('a bound middleware that lost its parameters fails with a usable message', async () => {
     // The trap: `.bind()` reports length 0, so this reads as an import factory.
     // It used to fail somewhere deeper with nothing pointing back here.
@@ -87,8 +77,6 @@ describe('ream > middleware entry shape', () => {
 
   it('the error says how to fix it', async () => {
     const mw = resolveMiddlewareEntry(async () => undefined as never)
-    await expect(mw(makeCtx(), async () => {})).rejects.toThrow(
-      /lazyMiddleware|keep the `ctx` parameter/,
-    )
+    await expect(mw(makeCtx(), async () => {})).rejects.toThrow(/register it on the route or group/)
   })
 })

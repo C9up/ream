@@ -178,7 +178,7 @@ export type {
   MiddlewareClass,
   MiddlewareEntry,
 } from './server/Server.js'
-export { lazyMiddleware, resolveMiddlewareEntry, Server } from './server/Server.js'
+export { resolveMiddlewareEntry, Server } from './server/Server.js'
 
 // ─── Ignitor ────────────────────────────────────────────────
 

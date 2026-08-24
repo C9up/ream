@@ -8,7 +8,7 @@ import type { HttpContext } from '../http/HttpContext.js'
 import { safeDecodeURIComponent } from '../http/urlDecode.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
-import type { MiddlewareEntry } from '../server/Server.js'
+import type { LazyImport, MiddlewareClassConstructor, MiddlewareEntry } from '../server/Server.js'
 import { resolveMiddlewareEntry, resolveParametrizedMiddlewareEntry } from '../server/Server.js'
 import { singular, snakeCase } from '../utils/inflect.js'
 import { Macroable } from '../utils/Macroable.js'
@@ -733,9 +733,16 @@ export class Router extends Macroable {
 
   /**
    * Register router-level middleware (runs on requests with a matched route).
-   *   router.use([() => import('#middleware/auth_middleware')])
+   *
+   *     router.use([() => import('#middleware/auth_middleware')])
+   *
+   * Imports of middleware CLASSES only, as in AdonisJS — its `use()` runs
+   * `moduleImporter(one, 'handle')` over every entry, so a closure has no
+   * place here. An inline function goes on the route or group instead
+   * (`router.get(...).use(fn)`), which is also what removes the ambiguity
+   * between a zero-arity closure and an import factory.
    */
-  use(middleware: MiddlewareEntry[]): this {
+  use(middleware: LazyImport<MiddlewareClassConstructor>[]): this {
     for (const mw of middleware) {
       this.#routerMiddleware.push(resolveMiddlewareEntry(mw))
     }
