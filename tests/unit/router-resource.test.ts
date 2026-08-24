@@ -107,6 +107,22 @@ describe('router > nested + shallow resources', () => {
     expect(router.match('GET', '/posts/7/comments')?.route.name).toBe('posts.comments.index')
   })
 
+  it('singularizes an irregular parent, not just a regular one', () => {
+    // `people` → `person_id`. A regular-plurals-only inflector produced
+    // `people_id`, and the route silently exposed the wrong param name.
+    const router = new Router()
+    router.resource('people.photos', PostsController)
+    const matched = router.match('GET', '/people/7/photos/3')
+    expect(matched?.params.person_id).toBe('7')
+    expect(matched?.params.id).toBe('3')
+  })
+
+  it('leaves an uncountable parent alone', () => {
+    const router = new Router()
+    router.resource('sheep.tags', PostsController)
+    expect(router.match('GET', '/sheep/7/tags/3')?.params.sheep_id).toBe('7')
+  })
+
   it('shallowResource drops the parent prefix on member routes', () => {
     const router = new Router()
     router.shallowResource('posts.comments', PostsController)

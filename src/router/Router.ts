@@ -4,13 +4,13 @@
  * @implements FR24, FR25, FR26, FR27, FR28
  */
 
+import { singular, snakeCase } from '../helpers/string.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { safeDecodeURIComponent } from '../http/urlDecode.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { LazyImport, MiddlewareClassConstructor, MiddlewareEntry } from '../server/Server.js'
 import { resolveMiddlewareEntry, resolveParametrizedMiddlewareEntry } from '../server/Server.js'
-import { singular, snakeCase } from '../utils/inflect.js'
 import { Macroable } from '../utils/Macroable.js'
 
 /** Options for {@link Router.makeSignedUrl}. */
