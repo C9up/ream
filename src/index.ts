@@ -11,6 +11,7 @@ import 'reflect-metadata'
 export { Application } from './Application.js'
 export { ConfigStore, configProvider, defineModuleConfig, env } from './ConfigLoader.js'
 export { Container } from './container/Container.js'
+export { ContainerResolver } from './container/ContainerResolver.js'
 export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './container/types.js'
 export { Env, EnvValidationException } from './env/Env.js'
 export { loadEnvFiles } from './env/loadEnvFiles.js'
@@ -285,8 +286,8 @@ export type { EventsConfig } from './events/config.js'
 export { defineConfig as defineEventsConfig } from './events/config.js'
 export {
   BaseEvent,
-  type ContainerResolver,
   Emitter,
+  type EmitterResolver,
   type ListenerClass,
 } from './events/Emitter.js'
 export type {

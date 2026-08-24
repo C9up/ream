@@ -160,17 +160,16 @@ export function createHttpKernel(
         }
       : { pattern: '', middleware: [] }
 
-    // 4. Create HttpContext. Pass the app container as the per-request
-    //    `ctx.containerResolver` (Adonis idiom) so agnostic middleware
-    //    (Warden, Blackhole) resolve host services from the context they are
-    //    handed instead of importing `@c9up/ream/services/app` at runtime.
-    const ctx = new HttpContext(
-      correlationId,
-      reqData,
-      match?.params ?? {},
-      routeInfo,
-      config.container,
-    )
+    // 4. Create HttpContext with its OWN resolver (Adonis
+    //    `container.createResolver()`), so agnostic middleware (Warden,
+    //    Blackhole) resolve host services from the context they are handed
+    //    instead of importing `@c9up/ream/services/app` at runtime — and so a
+    //    value bound for this request cannot be seen by any other.
+    const resolver = config.container?.createResolver()
+    const ctx = new HttpContext(correlationId, reqData, match?.params ?? {}, routeInfo, resolver)
+    // What Adonis binds on every request's resolver: the context itself, so a
+    // controller or service can take `HttpContext` as a constructor dependency.
+    resolver?.bindValue(HttpContext, ctx)
     if (config.allowMethodSpoofing === true) {
       // Was never wired: the setter existed but nothing called it, so a
       // migrated config asking for spoofing got a `_method` field that did
@@ -366,7 +365,10 @@ function createControllerHandler(
   container?: Container,
 ): (ctx: HttpContext) => Promise<void> {
   return async (ctx: HttpContext) => {
-    const instance = container ? await container.make(controller.target) : new controller.target()
+    // Through the REQUEST resolver when there is one: a controller taking
+    // `HttpContext` as a dependency must get this request's, not a stale one.
+    const resolve = ctx.containerResolver ?? container
+    const instance = resolve ? await resolve.make(controller.target) : new controller.target()
     const method = (instance as Record<string, (ctx: HttpContext) => Promise<void> | void>)[
       controller.method
     ]

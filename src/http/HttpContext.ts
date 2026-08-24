@@ -88,7 +88,19 @@ export interface Authorizer {
 // pattern as warden/blackhole middleware), so nothing cross-imports it.
 interface ContainerResolver {
   /** Resolve/construct a service by token (class, string, or symbol). Async (AdonisJS parity). */
-  make<T>(token: ServiceToken): Promise<T>
+  make<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T>
+  /** Call a method with its dependencies injected (AdonisJS `resolver.call`). */
+  call<T, K extends string & keyof T>(
+    instance: T,
+    method: K,
+    runtimeValues?: unknown[],
+  ): Promise<unknown>
+  /** Bind a value for THIS request only (AdonisJS `resolver.bindValue`). */
+  bindValue<T>(token: ServiceToken, value: T): void
+  /** Whether the token resolves (AdonisJS `resolver.hasBinding`). */
+  hasBinding(token: ServiceToken): boolean
+  /** Whether every token resolves (AdonisJS `resolver.hasAllBindings`). */
+  hasAllBindings(tokens: ServiceToken[]): boolean
 }
 
 /**
@@ -248,8 +260,9 @@ export class HttpContext extends Macroable {
 
   /**
    * Per-request IoC resolver (Adonis idiom: `ctx.containerResolver.make(...)`).
-   * Populated by `HttpKernel` from the application container. Undefined only
-   * when the context was built without one (e.g. a mock in a unit test).
+   * Built by `HttpKernel` with `container.createResolver()`, so a value bound
+   * on it belongs to THIS request and no other. Undefined only when the context
+   * was built without one (e.g. a mock in a unit test).
    * Agnostic middleware resolves host services through this, never by importing
    * `@c9up/ream`. See {@link ContainerResolver}.
    */

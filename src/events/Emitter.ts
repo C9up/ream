@@ -33,10 +33,21 @@ type ListenerConstructor<T = unknown> = new (...args: never[]) => ListenerClass<
 
 type Listener<T = unknown> = ListenerFn<T> | ListenerConstructor<T>
 
-/** Resolver for instantiating listener classes with DI. */
-export interface ContainerResolver {
+/**
+ * Resolver for instantiating listener classes with DI — the narrow shape the
+ * emitter needs, so a test can hand it a fake without building a container.
+ * The real {@link import('../container/ContainerResolver.js').ContainerResolver}
+ * satisfies it.
+ */
+export interface EmitterResolver {
   make<T>(target: new (...args: never[]) => T): Promise<T>
 }
+
+/**
+ * @deprecated Use {@link EmitterResolver}. The name now belongs to the real
+ * per-request resolver exported from `@c9up/ream`, as in AdonisJS.
+ */
+export type ContainerResolver = EmitterResolver
 
 /**
  * What `on` / `once` / `onAny` hand back: call it to stop listening. Named
@@ -46,11 +57,11 @@ export type UnsubscribeFunction = () => void
 
 export class Emitter {
   private bus: EventBus
-  private resolver?: ContainerResolver
+  private resolver?: EmitterResolver
   private classListeners: Map<EventConstructor, Listener[]> = new Map()
   private stringListeners: Map<string, ListenerFn[]> = new Map()
 
-  constructor(bus: EventBus, resolver?: ContainerResolver) {
+  constructor(bus: EventBus, resolver?: EmitterResolver) {
     this.bus = bus
     this.resolver = resolver
   }

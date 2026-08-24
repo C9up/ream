@@ -19,6 +19,7 @@ import {
 } from '../decorators/Service.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
+import { ContainerResolver } from './ContainerResolver.js'
 import type { Binding, ServiceFactory, ServiceToken } from './types.js'
 
 /**
@@ -32,6 +33,25 @@ const RESERVED_TOKEN_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
 interface ResolutionChain {
   stack: string[]
   set: Set<string>
+  /**
+   * Values bound on the {@link ContainerResolver} that opened this chain.
+   *
+   * Carried on the chain, not passed down each private method, so a value
+   * bound for one request is visible to everything that resolution triggers —
+   * a controller's constructor dependency sees the same `HttpContext` the
+   * middleware bound — and to nothing outside it.
+   */
+  values?: ReadonlyMap<string, unknown>
+  /**
+   * How many scoped values this chain has handed out so far.
+   *
+   * A singleton built while a request's values are in scope may have captured
+   * one — cache it app-wide and every later request gets the first request's
+   * `HttpContext`. Comparing this counter before and after a build says whether
+   * it actually read one, so a singleton that touched no request state still
+   * caches exactly as before.
+   */
+  scopedReads?: number
 }
 
 export class Container {
@@ -287,6 +307,37 @@ export class Container {
     return member.apply(instance, args)
   }
 
+  /**
+   * A resolver whose {@link ContainerResolver.bindValue} values are isolated
+   * from this container (AdonisJS `container.createResolver()`).
+   *
+   * Anything the resolver builds — and everything that build depends on — sees
+   * those values; nothing outside it does. This is how a request binds its own
+   * `HttpContext` without every other request seeing it.
+   */
+  createResolver(): ContainerResolver {
+    return new ContainerResolver(this)
+  }
+
+  /**
+   * @internal Run `fn` with `values` layered onto the resolution chain.
+   *
+   * Reuses an open chain rather than starting a second one, so cycle detection
+   * still spans the whole resolution when a resolver is used inside a factory.
+   */
+  runWithScopedValues<T>(values: ReadonlyMap<string, unknown>, fn: () => Promise<T>): Promise<T> {
+    const chain = this.#chain.getStore()
+    return this.#chain.run(
+      chain === undefined ? { stack: [], set: new Set(), values } : { ...chain, values },
+      fn,
+    )
+  }
+
+  /** @internal Normalise a token the way the container keys it. */
+  keyFor(token: ServiceToken): string {
+    return this.#tokenToKey(token)
+  }
+
   // ─── Introspection ────────────────────────────────────────
 
   /** Check if a token is registered or resolvable. */
@@ -335,12 +386,22 @@ export class Container {
       return swapped as T
     }
 
-    // 2. Check cached singletons
+    // 2. A value bound on the resolver that opened this chain. Before the
+    //    container's own values, after swaps — the order @adonisjs/fold
+    //    resolves in (`resolveFor`: swaps, resolver values, container values).
+    //    No `resolving` hooks: the value was not constructed here.
+    const store = this.#chain.getStore()
+    if (store?.values?.has(key)) {
+      store.scopedReads = (store.scopedReads ?? 0) + 1
+      return store.values.get(key) as T
+    }
+
+    // 3. Check cached singletons
     if (this.#singletons.has(key)) {
       return this.#singletons.get(key) as T
     }
 
-    // 3. Check explicit bindings — the factory may be async.
+    // 4. Check explicit bindings — the factory may be async.
     const binding = this.#bindings.get(key)
     if (binding) {
       if (binding.scope !== 'singleton') {
@@ -354,9 +415,12 @@ export class Container {
       const inFlight = this.#pendingSingletons.get(key)
       if (inFlight) return (await inFlight) as T
 
+      const readsBefore = store?.scopedReads ?? 0
       const building = (async (): Promise<unknown> => {
         const instance = binding.factory ? await binding.factory(this) : undefined
-        this.#singletons.set(key, instance)
+        // See `ResolutionChain.scopedReads`: a build that consumed a
+        // request-scoped value is that request's, not the application's.
+        this.#cacheIfAppWide('singleton', key, instance, store, readsBefore)
         // Inside the promise, so the hooks run exactly once per instance no
         // matter how many callers were waiting.
         await this.#runResolvingHooks(key, instance)
@@ -371,14 +435,14 @@ export class Container {
       }
     }
 
-    // 4. Auto-construct if it's a class
+    // 5. Auto-construct if it's a class
     if (typeof token === 'function') {
       const instance = (await this.#autoConstruct(token, runtimeValues)) as T
       await this.#runResolvingHooks(key, instance)
       return instance
     }
 
-    // 5. Not found
+    // 6. Not found
     const allKeys = [...this.#bindings.keys(), ...this.#overrides.keys()]
     const suggestion = didYouMean(key, allKeys)
     throw new ReamError(
@@ -409,6 +473,10 @@ export class Container {
     if (scope === 'singleton' && this.#singletons.has(key)) {
       return this.#singletons.get(key)
     }
+
+    // Same rule as the explicit singleton bindings: see `scopedReads`.
+    const store = this.#chain.getStore()
+    const readsBefore = store?.scopedReads ?? 0
 
     // A runtime value at this index (from `make(Class, [req, res])`) wins over
     // container resolution for that constructor slot.
@@ -445,7 +513,7 @@ export class Container {
           deps.push(depToken ? await this.resolve(depToken) : undefined)
         }
         const instance = Reflect.construct(target, deps)
-        if (scope === 'singleton') this.#singletons.set(key, instance)
+        this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
         return instance
       }
       // (b) No @Inject/metadata, but the caller supplied runtime values — build
@@ -454,7 +522,7 @@ export class Container {
       if (target.length > 0 && (runtimeValues?.length ?? 0) > 0) {
         const deps = Array.from({ length: target.length }, (_value, index) => runtimeAt(index))
         const instance = Reflect.construct(target, deps)
-        if (scope === 'singleton') this.#singletons.set(key, instance)
+        this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
         return instance
       }
       // (c) The constructor declares parameters but we have no way to resolve
@@ -471,7 +539,7 @@ export class Container {
       }
       // (d) Genuine zero-argument class.
       const instance = new target()
-      if (scope === 'singleton') this.#singletons.set(key, instance)
+      this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
       return instance
     }
 
@@ -494,8 +562,28 @@ export class Container {
     }
 
     const instance = Reflect.construct(target, deps)
-    if (scope === 'singleton') this.#singletons.set(key, instance)
+    this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
     return instance
+  }
+
+  /**
+   * Cache a singleton — unless it read a request-scoped value while building.
+   *
+   * See `ResolutionChain.scopedReads`: an instance that captured one belongs to
+   * that request, and caching it hands the first request's state to every
+   * later one. AdonisJS does not guard this; it is the kind of silent
+   * cross-request leak worth refusing.
+   */
+  #cacheIfAppWide(
+    scope: string,
+    key: string,
+    instance: unknown,
+    store: ResolutionChain | undefined,
+    readsBefore: number,
+  ): void {
+    if (scope !== 'singleton') return
+    if ((store?.scopedReads ?? 0) !== readsBefore) return
+    this.#singletons.set(key, instance)
   }
 
   #tokenToKey(token: ServiceToken): string {
