@@ -130,6 +130,17 @@ export function resolveMiddlewareEntry(entry: MiddlewareEntry): MiddlewareFuncti
   return async (ctx: HttpContext, next: () => Promise<void>) => {
     if (!cachedClass) {
       const mod = await lazyImport()
+      if (mod === null || typeof mod !== 'object' || !('default' in mod)) {
+        // The zero-arity ambiguity, reported where it can be acted on: a bound
+        // or rest-args middleware lands here because it declares no parameters
+        // and was read as an import factory.
+        throw new Error(
+          '[E_MIDDLEWARE_ENTRY] A middleware entry with no declared parameters was treated as a lazy import, ' +
+            'but it did not resolve to a module with a default export. ' +
+            'If this is a middleware (e.g. `handle.bind(this)` or `(...args) => …`), keep the `ctx` parameter ' +
+            'or wrap the import with `lazyMiddleware(() => import(...))` to say which it is.',
+        )
+      }
       cachedClass = mod.default
     }
     const instance = ctx.containerResolver
@@ -169,18 +180,47 @@ export function resolveParametrizedMiddlewareEntry(
   }
 }
 
-/** Check if an entry is a direct middleware function (not a lazy import). */
+/** Marks a factory as a lazy import, so nothing has to be inferred about it. */
+const LAZY_MIDDLEWARE = Symbol.for('ream.lazyMiddleware')
+
+/**
+ * Declare a lazily-imported middleware class.
+ *
+ *     router.use([lazyMiddleware(() => import('#middleware/auth'))])
+ *
+ * AdonisJS never has to guess: a middleware entry is either a function (always
+ * a closure) or an object carrying a module reference. Ream accepts a bare
+ * `() => import(...)` for convenience, which makes the two shapes ambiguous —
+ * this marker removes the ambiguity for good, and is the recommended form.
+ */
+export function lazyMiddleware<T>(factory: LazyImport<T>): LazyImport<T> {
+  return Object.assign(factory, { [LAZY_MIDDLEWARE]: true })
+}
+
+/**
+ * Whether an entry is a middleware to run, rather than a module to import.
+ *
+ * AdonisJS never infers this: `middlewareInfo` treats every function as a
+ * closure, because its lazy entries are objects carrying a module reference.
+ * Ream also accepts a bare `() => import(...)`, which makes a zero-arity
+ * function ambiguous — `handle.bind(this)` and `(...args) => {}` report
+ * `length === 0` just like an import factory does.
+ *
+ * `lazyMiddleware()` is the way to say which is which; without it the
+ * zero-arity case is read as an import, and a middleware that lost its
+ * parameters gets the explicit error below rather than a puzzling failure
+ * deeper in.
+ */
 function isMiddlewareFunction(entry: MiddlewareEntry): entry is MiddlewareFunction {
-  // A lazy import factory returns a promise (dynamic import). Middleware functions don't.
-  // We check: if calling it with no args returns a thenable, it's a lazy import.
-  // Better heuristic: lazy imports are () => import(...) which have .length === 0
-  // and middleware functions have .length >= 2 (ctx, next).
-  // Edge case: arrow with defaults has length 1. But lazy import() always has length 0.
   if (typeof entry !== 'function') return false
-  // Functions with 2+ params are definitely middleware
-  if (entry.length >= 2) return true
-  // Functions with 0 params are likely lazy imports
-  if (entry.length === 0) return false
-  // 1 param is ambiguous — treat as middleware (ctx only, no next)
-  return true
+  // An explicitly marked factory needs no guessing at all.
+  if (Reflect.get(entry, LAZY_MIDDLEWARE) === true) return false
+  // A declared parameter means a middleware: `(ctx)`, `(ctx, next)`.
+  if (entry.length > 0) return true
+  // Zero declared parameters is genuinely ambiguous — `() => import(...)` and
+  // `handle.bind(this)` are both zero-arity functions returning a promise, and
+  // nothing distinguishes them without calling one. Treated as an import,
+  // which is the common case; `lazyMiddleware()` (or keeping the `ctx`
+  // parameter) is the way out, and the error below says so.
+  return false
 }
