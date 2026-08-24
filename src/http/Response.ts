@@ -9,6 +9,7 @@
 
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
+import type { Readable } from 'node:stream'
 import etag from 'etag'
 import { contentType } from 'mime-types'
 import { durationToSeconds } from '../helpers/duration.js'
@@ -116,11 +117,25 @@ export interface CookieOptions {
   path?: string
   httpOnly?: boolean
   secure?: boolean
-  sameSite?: 'lax' | 'strict' | 'none'
+  /**
+   * `false` omits the attribute entirely (AdonisJS accepts the boolean form);
+   * `true` is not a valid attribute value and is rejected.
+   */
+  sameSite?: boolean | 'lax' | 'strict' | 'none'
+  /** Domain the cookie is valid for — what makes it readable across subdomains. */
+  domain?: string
+  /** Absolute expiry, or a function returning one (AdonisJS `expires`). */
+  expires?: Date | (() => Date)
+  /** CHIPS partitioned cookie: keyed to the top-level site as well as the domain. */
+  partitioned?: boolean
+  /** Eviction priority hint (Chromium). */
+  priority?: 'low' | 'medium' | 'high'
 }
 
 export class Response extends Macroable {
   #status = 200
+  /** A body still being drained by {@link stream}; awaited by {@link settle}. */
+  #pendingStream: Promise<void> | undefined
   #headers: Record<string, string> = {}
   #cookies: string[] = []
   #body = ''
@@ -630,6 +645,19 @@ export class Response extends Macroable {
     throw new E_HTTP_REQUEST_ABORTED(body, status)
   }
 
+  /**
+   * Abort unless `condition` is truthy (AdonisJS `abortUnless`) — the guard
+   * clause form: `response.abortUnless(user, 'Not found', 404)` narrows `user`
+   * for everything after it.
+   */
+  abortUnless<T>(
+    condition: T,
+    body: unknown,
+    status = 400,
+  ): asserts condition is Exclude<T, undefined | null | false> {
+    if (!condition) this.abort(body, status)
+  }
+
   /** Abort only when `condition` is truthy (AdonisJS `abortIf`). */
   abortIf(
     condition: unknown,
@@ -637,6 +665,17 @@ export class Response extends Macroable {
     status = 400,
   ): asserts condition is undefined | null | false {
     if (condition) this.abort(body, status)
+  }
+
+  /**
+   * @internal Wait for a body still being produced (see {@link stream}). The
+   * kernel calls this before serializing; everything else resolves at once.
+   */
+  async settle(): Promise<void> {
+    const pending = this.#pendingStream
+    if (pending === undefined) return
+    this.#pendingStream = undefined
+    await pending
   }
 
   /**
@@ -722,8 +761,23 @@ export class Response extends Macroable {
    * `errorCallback` maps a read failure to `[message, status]`, as upstream;
    * without one, a failure answers 500 with a generic message rather than
    * leaking the filesystem error to the client.
+   *
+   * Upstream's `stream()` returns void and a controller never awaits it, so a
+   * migrated controller does not either. The drain is therefore REGISTERED as
+   * well as returned: the kernel awaits it before serializing, and a caller
+   * that ignores the promise still sends the whole body instead of an empty
+   * one. Awaiting it keeps working.
    */
-  async stream(
+  stream(
+    body: NodeJS.ReadableStream,
+    errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
+  ): Promise<void> {
+    const draining = this.#drain(body, errorCallback)
+    this.#pendingStream = draining
+    return draining
+  }
+
+  async #drain(
     body: NodeJS.ReadableStream,
     errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
   ): Promise<void> {
@@ -842,6 +896,11 @@ export class Response extends Macroable {
     // (Chrome 80+, Firefox, Safari) silently reject the cookie otherwise, so
     // a missing Secure here turns OAuth callbacks / iframe sessions into a
     // "works in dev (localhost relaxes Secure), breaks in prod" foot-gun.
+    if (options?.sameSite === true) {
+      throw new Error(
+        `Cookie '${name}': sameSite: true is not an attribute value — use 'lax', 'strict', 'none', or false to omit it.`,
+      )
+    }
     if (options?.sameSite === 'none' && !options.secure) {
       throw new Error(
         `Cookie '${name}': SameSite=None requires Secure: true (browsers reject SameSite=None cookies without Secure).`,
@@ -859,9 +918,32 @@ export class Response extends Macroable {
       assertNoCRLF(`Set-Cookie path for '${name}'`, options.path)
       parts.push(`Path=${options.path}`)
     }
+    if (options?.domain) {
+      // Concatenated raw like `Path`, so it carries the same splitting guard.
+      assertNoCRLF(`Set-Cookie domain for '${name}'`, options.domain)
+      parts.push(`Domain=${options.domain}`)
+    }
+    if (options?.expires !== undefined) {
+      const at = typeof options.expires === 'function' ? options.expires() : options.expires
+      if (Number.isNaN(at.getTime())) {
+        throw new Error(`Cookie '${name}': expires is an invalid Date.`)
+      }
+      parts.push(`Expires=${at.toUTCString()}`)
+    }
     if (options?.httpOnly !== false) parts.push('HttpOnly')
     if (options?.secure) parts.push('Secure')
     if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`)
+    // Partitioned only means anything on a Secure cookie, and browsers drop it
+    // otherwise — say so rather than emit an attribute that will be ignored.
+    if (options?.partitioned) {
+      if (!options.secure) {
+        throw new Error(
+          `Cookie '${name}': partitioned requires Secure: true (browsers ignore partitioned cookies without it).`,
+        )
+      }
+      parts.push('Partitioned')
+    }
+    if (options?.priority) parts.push(`Priority=${options.priority}`)
     this.#cookies.push(parts.join('; '))
     return this
   }

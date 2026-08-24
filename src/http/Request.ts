@@ -72,6 +72,8 @@ export class Request extends Macroable {
   #parsedQs: Dict<unknown> | undefined
   #merged: Dict<unknown> | undefined
   #original: Dict<unknown> | undefined
+  /** Set by {@link updateRawBody}; `raw()` reports it instead of the wire body. */
+  #rawBodyOverride: string | undefined
   #files: Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> = new Map()
   #validated: unknown
 
@@ -201,6 +203,22 @@ export class Request extends Macroable {
    */
   setTrustProxy(enabled: boolean): void {
     this.#trustProxy = enabled
+  }
+
+  /**
+   * The HTTP/2 `:authority` pseudo-header, falling back to `Host` (AdonisJS
+   * `authority`).
+   *
+   * Deliberately does NOT consult `X-Forwarded-Host` and ignores trust-proxy,
+   * as Adonis does: no proxy convention forwards the original `:authority`,
+   * so honouring a forwarded header here would let a proxy rewrite the value
+   * you validate a redirect target against. Use {@link host} when you do want
+   * the proxy-aware value.
+   */
+  authority(): string | null {
+    const pseudo = this.#raw.headers[':authority']
+    if (pseudo) return pseudo
+    return this.#raw.headers.host ?? null
   }
 
   /**
@@ -371,6 +389,7 @@ export class Request extends Macroable {
 
   /** Get the raw body as a string (decoded from base64 if binary). */
   raw(): string {
+    if (this.#rawBodyOverride !== undefined) return this.#rawBodyOverride
     if (this.#raw.bodyEncoding === 'base64') {
       return Buffer.from(this.#raw.body, 'base64').toString('utf8')
     }
@@ -518,9 +537,51 @@ export class Request extends Macroable {
     return this.#negotiated('accept-charset')
   }
 
+  /**
+   * The best of the offered charsets per `Accept-Charset` (AdonisJS
+   * `charset`), or null when none matches. The plural {@link charsets} lists
+   * everything the client will take.
+   */
+  charset<T extends string>(charsets: T[]): T | null {
+    return this.#bestOf('accept-charset', charsets)
+  }
+
   /** Every encoding the client accepts, best first (AdonisJS `encodings`). */
   encodings(): string[] {
     return this.#negotiated('accept-encoding')
+  }
+
+  /**
+   * The best of the offered encodings per `Accept-Encoding` (AdonisJS
+   * `encoding`), or null when none matches.
+   */
+  encoding<T extends string>(encodings: T[]): T | null {
+    return this.#bestOf('accept-encoding', encodings)
+  }
+
+  /**
+   * The best of the offered values for one `Accept-*` header (AdonisJS
+   * `charset` / `encoding`).
+   *
+   * Client preference decides: the header's q-order is walked first, and the
+   * order the server offered them only breaks a tie within one q-bucket —
+   * the same rule {@link accepts} follows. An absent header means the client
+   * expressed no preference, so the server's first offer wins.
+   */
+  #bestOf<T extends string>(header: string, offered: T[]): T | null {
+    const raw = this.#raw.headers[header]
+    if (!raw?.trim()) return offered[0] ?? null
+    const entries = parseAcceptHeader(raw)
+    if (entries.length === 0) return null
+    for (const bucket of bucketByQ(entries)) {
+      for (const value of offered) {
+        for (const entry of bucket) {
+          const candidate = entry.value.toLowerCase()
+          if (candidate === '*' || candidate === value.toLowerCase()) return value
+        }
+      }
+    }
+    return null
   }
 
   /**
@@ -676,7 +737,7 @@ export class Request extends Macroable {
    * Aliases (`'json'` ↔ `application/json`, `'html'` ↔ `text/html`,
    * `'xml'` ↔ any subtype containing `xml`) are honoured.
    */
-  accepts(types: string[]): string | null {
+  accepts<T extends string>(types: T[]): T | null {
     const header = this.#raw.headers.accept ?? '*/*'
     const entries = parseAcceptHeader(header)
     if (entries.length === 0) return null
@@ -699,7 +760,7 @@ export class Request extends Macroable {
    * primary subtag) matches the highest-q client entry, falling back to
    * `langs[0]` when nothing matches and the client header is empty/absent.
    */
-  language(langs: string[]): string | null {
+  language<T extends string>(langs: T[]): T | null {
     const header = this.#raw.headers['accept-language'] ?? ''
     if (!header.trim()) return langs[0] ?? null
     const entries = parseAcceptHeader(header)
@@ -775,6 +836,39 @@ export class Request extends Macroable {
   setParsedBody(body: Dict<unknown>): void {
     this.#parsedBody = body
     this.#merged = undefined // reset merged cache
+  }
+
+  /**
+   * Replace the request body (AdonisJS `updateBody`) — what a middleware that
+   * sanitizes or normalises input calls. {@link all} is recomputed from the
+   * query string and the new body on the next read.
+   *
+   * {@link original} keeps the first-seen input: flash old-input must show
+   * what the user actually sent, not what a middleware rewrote it into.
+   */
+  updateBody(body: Dict<unknown>): void {
+    this.all() // snapshot the original before it is replaced
+    this.setParsedBody(body)
+  }
+
+  /**
+   * Replace the query string data (AdonisJS `updateQs`). {@link all} is
+   * recomputed on the next read; the raw query string is left alone, so
+   * `parsedUrl()` still reports what the client sent.
+   */
+  updateQs(data: Dict<unknown>): void {
+    this.all()
+    this.#parsedQs = { ...data }
+    this.#merged = undefined
+  }
+
+  /**
+   * Replace the raw body (AdonisJS `updateRawBody`) — what the bodyparser
+   * sets when it cannot parse the body, or for multipart. Does NOT reparse:
+   * the parsed body is whatever {@link updateBody} last set.
+   */
+  updateRawBody(rawBody: string): void {
+    this.#rawBodyOverride = rawBody
   }
 
   /**

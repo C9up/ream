@@ -309,7 +309,7 @@ export function createHttpKernel(
         path: reqData.path,
         status: ctx.response.getStatus(),
       })
-      const serialized = serializeResponse(ctx)
+      const serialized = await serializeResponse(ctx)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
       ctx.response.runFinishCallbacks()
@@ -351,7 +351,7 @@ export function createHttpKernel(
         path: reqData.path,
         status: ctx.response.getStatus(),
       })
-      const serialized = serializeResponse(ctx)
+      const serialized = await serializeResponse(ctx)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
       ctx.response.runFinishCallbacks()
@@ -402,7 +402,10 @@ function readControllerGuardMetadata(
   }
 }
 
-function serializeResponse(ctx: HttpContext): HttpKernelResponse {
+async function serializeResponse(ctx: HttpContext): Promise<HttpKernelResponse> {
+  // A body still being drained by `response.stream()` — upstream returns void
+  // there, so a migrated controller does not await it.
+  await ctx.response.settle()
   const streamId = ctx.response.getStreamId()
   return {
     status: ctx.response.getStatus(),
