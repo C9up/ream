@@ -116,7 +116,9 @@ export default class SessionMiddleware {
       const data = await this.#driver.read(sessionId ?? '')
       sessionId = sessionId ?? generateSessionId()
       const session = new Session(sessionId, data)
-      session.setDriver(this.#driver, !hadIncomingCookie)
+      // No store to commit to: the cookie written below IS the storage, so the
+      // session is seated without one and `commit()` has nothing to do.
+      session.setStore(this.#driver, { fresh: !hadIncomingCookie, ttl: maxAge })
       ctx.store.set('session', session)
       ctx.session = session
       session.setInputReader(() => ctx.request.original())
@@ -162,9 +164,9 @@ export default class SessionMiddleware {
       sessionId = generateSessionId()
     }
 
-    const data = await this.#driver.read(sessionId)
-    const session = new Session(sessionId, data)
-    session.setDriver(this.#driver, !hadIncomingCookie)
+    const session = new Session(sessionId)
+    session.setStore(this.#driver, { fresh: !hadIncomingCookie, ttl: maxAge })
+    await session.initiate()
     ctx.store.set('session', session)
     ctx.session = session
     // `flashAll()` takes no argument (AdonisJS): it reads the request's own
@@ -174,32 +176,11 @@ export default class SessionMiddleware {
 
     await next()
 
-    // Session-fixation mitigation: if the handler called `session.regenerate()`
-    // (typically via Warden's SessionStrategy.login), the session id has been
-    // rotated. Migrate the driver storage atomically — write under the new
-    // id first, then destroy the old entry so a crash between calls leaves
-    // the user with a valid session under one of the two ids rather than
-    // none. The cookie below picks up `session.sessionId` which already
-    // returns the new value.
+    // The store half of the lifecycle — including the session-fixation
+    // migration when the handler called `regenerate()` — belongs to the
+    // session, as it does upstream.
     const regenerated = session.wasRegenerated()
-    const isNew = !hadIncomingCookie
-    if (regenerated) {
-      const originalId = session.originalSessionId()
-      const currentId = session.sessionId
-      await this.#driver.write(currentId, session.toJSON(), maxAge)
-      // Best-effort: a destroy failure leaves a stale entry that TTL will
-      // sweep, but should not crash the request. The new session is already
-      // live under `currentId`.
-      try {
-        await this.#driver.destroy(originalId)
-      } catch {
-        // benign — TTL will reclaim it.
-      }
-    } else if (session.isDirty()) {
-      await this.#driver.write(sessionId, session.toJSON(), maxAge)
-    } else if (!isNew) {
-      await this.#driver.touch(sessionId, maxAge)
-    }
+    await session.commit()
 
     // Emit Set-Cookie only when there is server-side state worth
     // pinning to the browser: the session was modified (isDirty → we

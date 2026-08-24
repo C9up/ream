@@ -18,7 +18,7 @@ const TTL = 3600
 
 function sessionOn(driver: MemoryDriver, id = 'sess-1'): Session {
   const session = new Session(id)
-  session.setDriver(driver, true)
+  session.setStore(driver, { fresh: true, ttl: 3600 })
   return session
 }
 
@@ -120,9 +120,12 @@ describe('session > tagging through the Session API', () => {
 
   it('reports whether the store can tag at all', () => {
     const tagging = new Session('x')
-    tagging.setDriver(new MemoryDriver(), true)
+    tagging.setStore(new MemoryDriver(), { fresh: true, ttl: 3600 })
     const plain = new Session('x')
-    plain.setDriver(new CookieDriver('a-secret-long-enough-for-the-driver'), true)
+    plain.setStore(new CookieDriver('a-secret-long-enough-for-the-driver'), {
+      fresh: true,
+      ttl: 3600,
+    })
 
     expect(tagging.supportsTagging()).toBe(true)
     expect(plain.supportsTagging()).toBe(false)
@@ -132,7 +135,10 @@ describe('session > tagging through the Session API', () => {
     // A login that believes it tagged the session would leave "log out
     // everywhere" silently logging nobody out.
     const session = new Session('x')
-    session.setDriver(new CookieDriver('a-secret-long-enough-for-the-driver'), true)
+    session.setStore(new CookieDriver('a-secret-long-enough-for-the-driver'), {
+      fresh: true,
+      ttl: 3600,
+    })
 
     await expect(session.tag('u1')).rejects.toThrow(/not supported/)
   })
@@ -205,9 +211,9 @@ describe('session > tagging on the database store', () => {
 describe('session > state getters (AdonisJS parity)', () => {
   it('reports a session created for this request as fresh', () => {
     const incoming = new Session('x', { a: 1 })
-    incoming.setDriver(new MemoryDriver(), false)
+    incoming.setStore(new MemoryDriver(), { fresh: false, ttl: 3600 })
     const created = new Session('y')
-    created.setDriver(new MemoryDriver(), true)
+    created.setStore(new MemoryDriver(), { fresh: true, ttl: 3600 })
 
     expect(incoming.fresh).toBe(false)
     expect(created.fresh).toBe(true)

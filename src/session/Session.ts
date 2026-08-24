@@ -150,10 +150,25 @@ export class Session {
   #fresh = false
   /** The store behind it, when there is one — absent for a bare unit-test session. */
   #driver?: SessionDriver
+  /** Session lifetime in seconds, used by {@link commit}. */
+  #ttl = 0
+  /** Whether {@link initiate} already ran, so a second call is a no-op. */
+  #initiated = false
 
   constructor(sessionId: string, data: Record<string, unknown> = {}) {
     this.#sessionId = sessionId
     this.#originalSessionId = sessionId
+    this.#hydrate(data)
+  }
+
+  /**
+   * Seat stored data: the payload becomes the session, and the flash bag it
+   * carried becomes THIS request's `old()` / `flashMessages`.
+   *
+   * Shared by the constructor and {@link initiate}, so a session loaded from
+   * the store lands in exactly the same state as one handed its data directly.
+   */
+  #hydrate(data: Record<string, unknown>): void {
     this.#data = { ...data }
     const flash = data.__flash
     this.#previousFlash = isPlainRecord(flash) ? { ...flash } : {}
@@ -457,12 +472,57 @@ export class Session {
   }
 
   /**
-   * @internal Wire the store and the freshness flag. Called by
-   * `SessionMiddleware`; a session built by hand in a test has neither.
+   * @internal Wire the store this session lives in. Called by
+   * `SessionMiddleware`; a session built by hand in a test has none, and
+   * {@link initiate} / {@link commit} then have nothing to do.
    */
-  setDriver(driver: SessionDriver, fresh: boolean): void {
+  setStore(driver: SessionDriver, options: { fresh: boolean; ttl: number }): void {
     this.#driver = driver
-    this.#fresh = fresh
+    this.#fresh = options.fresh
+    this.#ttl = options.ttl
+  }
+
+  /**
+   * Load the session from its store (AdonisJS `initiate`).
+   *
+   * Idempotent, as upstream: calling it twice is a no-op, so a middleware that
+   * runs on a sub-request cannot wipe what the outer one already read.
+   */
+  async initiate(): Promise<void> {
+    if (this.#initiated || this.#driver === undefined) return
+    this.#initiated = true
+    this.#hydrate(await this.#driver.read(this.#sessionId))
+  }
+
+  /**
+   * Persist the session to its store (AdonisJS `commit`).
+   *
+   * - regenerated: write under the NEW id first, then drop the old entry, so a
+   *   crash between the two leaves the user with a valid session under one id
+   *   rather than none.
+   * - modified: write.
+   * - untouched but pre-existing: touch, to slide the expiry.
+   * - untouched and brand new: nothing. Writing here would hand out a session
+   *   id pointing at a row nobody asked for.
+   */
+  async commit(): Promise<void> {
+    const driver = this.#driver
+    if (driver === undefined) return
+    if (this.#regenerated) {
+      await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+      try {
+        await driver.destroy(this.#originalSessionId)
+      } catch {
+        // Benign: a stale entry the TTL reclaims. The session is already live
+        // under the new id, and failing the request here would be worse.
+      }
+      return
+    }
+    if (this.#dirty) {
+      await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+      return
+    }
+    if (!this.#fresh) await driver.touch(this.#sessionId, this.#ttl)
   }
 
   /**
