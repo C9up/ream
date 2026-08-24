@@ -38,6 +38,12 @@ export interface ContainerResolver {
   make<T>(target: new (...args: never[]) => T): Promise<T>
 }
 
+/**
+ * What `on` / `once` / `onAny` hand back: call it to stop listening. Named
+ * after the AdonisJS type of the same shape.
+ */
+export type UnsubscribeFunction = () => void
+
 export class Emitter {
   private bus: EventBus
   private resolver?: ContainerResolver
@@ -56,22 +62,34 @@ export class Emitter {
    *   emitter.on(TaskDeclared, SendNotification)        // listener class
    *   emitter.on(TaskDeclared, (event) => { ... })       // inline function
    */
-  on<T>(event: EventConstructor<T>, listener: Listener<T>): void
+  on<T>(event: EventConstructor<T>, listener: Listener<T>): UnsubscribeFunction
   /**
    * Listen for a string-based event.
    *   emitter.on('user:registered', (user) => { ... })
    *   emitter.on<User>('user:registered', (user) => { ... })  // typed payload
+   *
+   * Returns an unsubscribe function, as AdonisJS does — keeping the listener
+   * reference around just to pass it back to `off` is the boilerplate that
+   * function removes.
    */
-  on<T>(event: string, listener: ListenerFn<T>): void
-  on(event: EventConstructor | string, listener: Listener): void {
+  on<T>(event: string, listener: ListenerFn<T>): UnsubscribeFunction
+  on(event: EventConstructor | string, listener: Listener): UnsubscribeFunction {
     if (typeof event === 'string') {
       const list = this.stringListeners.get(event) ?? []
       list.push(listener as ListenerFn)
       this.stringListeners.set(event, list)
-    } else {
-      const list = this.classListeners.get(event) ?? []
-      list.push(listener)
-      this.classListeners.set(event, list)
+      return () => {
+        this.off(event, listener as ListenerFn)
+      }
+    }
+    const list = this.classListeners.get(event) ?? []
+    list.push(listener)
+    this.classListeners.set(event, list)
+    return () => {
+      const current = this.classListeners.get(event)
+      if (!current) return
+      const index = current.indexOf(listener)
+      if (index !== -1) current.splice(index, 1)
     }
   }
 
@@ -287,7 +305,27 @@ export class Emitter {
    *   emitter.onAny('order.*', (name, data) => { ... })   // single segment
    *   emitter.onAny('order.**', (name, data) => { ... })  // deep match
    */
+  async onAny(listener: (eventName: string, data: unknown) => void): Promise<number>
   async onAny(
+    pattern: string,
+    listener: (eventName: string, data: unknown) => void,
+  ): Promise<number>
+  async onAny(
+    patternOrListener: string | ((eventName: string, data: unknown) => void),
+    maybeListener?: (eventName: string, data: unknown) => void,
+  ): Promise<number> {
+    // `onAny(listener)` — every event, the AdonisJS signature. `**` is the
+    // deep-match pattern the Rust matcher already understands, so the two
+    // forms share one implementation.
+    const pattern = typeof patternOrListener === 'string' ? patternOrListener : '**'
+    const listener = typeof patternOrListener === 'string' ? maybeListener : patternOrListener
+    if (listener === undefined) {
+      throw new TypeError('onAny() requires a listener')
+    }
+    return this.#subscribeAny(pattern, listener)
+  }
+
+  async #subscribeAny(
     pattern: string,
     listener: (eventName: string, data: unknown) => void,
   ): Promise<number> {

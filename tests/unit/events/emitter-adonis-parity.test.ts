@@ -6,6 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { Emitter } from '../../../src/events/Emitter.js'
+import { FakeBus } from '../../../src/events/testing/FakeBus.js'
 
 function emitter(): Emitter {
   return new Emitter({
@@ -117,5 +118,75 @@ describe('ream > listener management', () => {
 
     e.clearAllListeners()
     expect(e.listenerCount()).toBe(0)
+  })
+})
+
+/**
+ * Surface checked against `@adonisjs/events`' published `emitter.d.ts`:
+ *
+ *   on(...): UnsubscribeFunction
+ *   onAny(listener): UnsubscribeFunction        // ONE argument, every event
+ *
+ * An audit also claimed wildcard listeners were never dispatched in-process.
+ * They are — through the bus — and the last test pins that, because the private
+ * `#wildcardListenersFor` returning `[]` reads like the opposite.
+ */
+describe('events > Emitter unsubscribe + onAny (AdonisJS parity)', () => {
+  it('on() hands back an unsubscribe function', async () => {
+    const e = new Emitter(new FakeBus())
+    const seen: unknown[] = []
+    const off = e.on('user:registered', (data) => seen.push(data))
+
+    await e.emit('user:registered', { id: 1 })
+    off()
+    await e.emit('user:registered', { id: 2 })
+
+    // Keeping the listener around just to pass it back to off() is the
+    // boilerplate this return value removes.
+    expect(seen).toEqual([{ id: 1 }])
+  })
+
+  it('the unsubscribe from on() also works for a class event', async () => {
+    class OrderShipped {
+      constructor(readonly id: number) {}
+    }
+    const e = new Emitter(new FakeBus())
+    const seen: unknown[] = []
+    const off = e.on(OrderShipped, (event) => seen.push(event))
+
+    // Class events go through dispatchEvent (what BaseEvent#emit calls).
+    await e.dispatchEvent(new OrderShipped(1))
+    off()
+    await e.dispatchEvent(new OrderShipped(2))
+
+    expect(seen).toHaveLength(1)
+  })
+
+  it('onAny(listener) listens to every event, as in AdonisJS', async () => {
+    const e = new Emitter(new FakeBus())
+    const seen: string[] = []
+    await e.onAny((name) => {
+      seen.push(name)
+    })
+
+    await e.emit('order.placed', { id: 1 })
+    await e.emit('user.created', { id: 2 })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(seen.sort()).toEqual(['order.placed', 'user.created'])
+  })
+
+  it('onAny(pattern, listener) filters — and DOES receive local emits', async () => {
+    const e = new Emitter(new FakeBus())
+    const seen: string[] = []
+    await e.onAny('order.*', (name) => {
+      seen.push(name)
+    })
+
+    await e.emit('order.placed', { id: 1 })
+    await e.emit('user.created', { id: 2 })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(seen).toEqual(['order.placed'])
   })
 })
