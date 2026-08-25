@@ -331,6 +331,9 @@ export class Request extends Macroable {
    * `defaultValue` (or null) when absent OR when the signature is invalid
    * (tampered / not signed).
    */
+  cookie(name: string): string | null
+  cookie(name: string, defaultValue: string): string
+  cookie(name: string, defaultValue?: string): string | null
   cookie(name: string, defaultValue?: string): string | null {
     const raw = this.plainCookie<string>(name, undefined, { encoded: false })
     const value = raw === null ? null : this.#cookieSigner ? this.#cookieSigner.unsign(raw) : raw
@@ -347,6 +350,14 @@ export class Request extends Macroable {
    *
    * Pass `encoded: false` to skip unpacking entirely.
    */
+  plainCookie<T = string>(name: string): T | null
+  plainCookie<T = string>(name: string, defaultValue: T, options?: { encoded?: boolean }): T
+  plainCookie<T = string>(
+    name: string,
+    defaultValue: undefined,
+    options?: { encoded?: boolean },
+  ): T | null
+  plainCookie<T = string>(name: string, defaultValue?: T, options?: { encoded?: boolean }): T | null
   plainCookie<T = string>(
     name: string,
     defaultValue?: T,
@@ -365,6 +376,9 @@ export class Request extends Macroable {
    * Returns `defaultValue` (or null) when absent, undecryptable, or no
    * encryption service.
    */
+  encryptedCookie(name: string): string | null
+  encryptedCookie(name: string, defaultValue: string): string
+  encryptedCookie(name: string, defaultValue?: string): string | null
   encryptedCookie(name: string, defaultValue?: string): string | null {
     const raw = this.plainCookie<string>(name, undefined, { encoded: false })
     const value = raw === null || !this.#cookieSigner ? null : this.#cookieSigner.decrypt(raw)
@@ -407,6 +421,9 @@ export class Request extends Macroable {
   // ─── Headers ──────────────────────────────────────────────
 
   /** Get a single request header (case-insensitive), or `defaultValue` when absent. */
+  header(key: string): string | undefined
+  header(key: string, defaultValue: string): string
+  header(key: string, defaultValue?: string): string | undefined
   header(key: string, defaultValue?: string): string | undefined {
     return this.#raw.headers[key.toLowerCase()] ?? defaultValue
   }
@@ -426,6 +443,9 @@ export class Request extends Macroable {
    * value was not a string would be worse than the path it describes.
    * Use {@link params} to get the segments themselves.
    */
+  param(key: string): string | undefined
+  param(key: string, defaultValue: string): string
+  param(key: string, defaultValue?: string): string | undefined
   param(key: string, defaultValue?: string): string | undefined {
     const value = this.#params[key]
     if (value === undefined) return defaultValue

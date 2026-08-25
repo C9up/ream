@@ -24,6 +24,9 @@ export class ConfigStore {
    * Read a value by dot-notation key, returning `defaultValue` when the path
    * is absent or resolves to `undefined` (AdonisJS `config.get`).
    */
+  get<T = unknown>(key: string): T | undefined
+  get<T = unknown>(key: string, defaultValue: T): T
+  get<T = unknown>(key: string, defaultValue?: T): T | undefined
   get<T = unknown>(key: string, defaultValue?: T): T | undefined {
     // Untyped store: the caller declares the shape it configured (same
     // contract as `@adonisjs/config`, whose `get<T>` returns the loose value).
@@ -70,6 +73,9 @@ export class ConfigStore {
  * Read an environment variable with optional default.
  * @implements FR19
  */
+export function env(key: string): string | undefined
+export function env(key: string, defaultValue: string): string
+export function env(key: string, defaultValue?: string): string | undefined
 export function env(key: string, defaultValue?: string): string | undefined {
   return process.env[key] ?? defaultValue
 }
