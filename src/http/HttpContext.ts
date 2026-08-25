@@ -218,6 +218,14 @@ export class HttpContext extends Macroable {
 
   /** Route parameters extracted from the URL pattern. */
   /** Matched route parameters — `*` holds the segments it swallowed, as an array. */
+  /**
+   * Route parameters.
+   *
+   * `string | string[]`, not AdonisJS's `any`: a catch-all `*` really is the
+   * ARRAY of segments on both sides, so the `any` upstream only hides it. Use
+   * {@link Request.param} when you want the single-value form — it joins a
+   * catch-all with `/` and returns `string | undefined`.
+   */
   readonly params: MatchedParams
 
   /** Information about the matched route. */
