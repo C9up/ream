@@ -12,6 +12,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,7 +20,10 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const tscBin = resolve(packageRoot, '../../node_modules/.bin/tsc')
+// Resolved through the `typescript` package itself rather than a path into a
+// workspace: this package is also built standalone, where `../../node_modules`
+// does not exist.
+const tscBin = resolve(dirname(createRequire(import.meta.url).resolve('typescript')), '../bin/tsc')
 const dir = mkdtempSync(join(tmpdir(), 'ream-tsconfig-'))
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
