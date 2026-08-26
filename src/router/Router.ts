@@ -57,8 +57,24 @@ export type LazyControllerAction = [loader: LazyControllerImport, method: string
  */
 export type RouteHandler = RouteHandlerFunction | ControllerAction | LazyControllerAction | string
 
-/** Param matcher — regex or predefined matcher. */
-export type ParamMatcher = RegExp | { pattern: RegExp }
+/**
+ * Param matcher — a bare RegExp, or the AdonisJS `{ match, cast }` shape.
+ *
+ * `cast` turns the captured string into the value the handler wants, so
+ * `where('id', matchers.number())` gives `params.id` as a NUMBER. Ream carried
+ * only the pattern, so a matched param stayed a string and every controller
+ * re-parsed it. `pattern` is ream's older spelling of `match`, still accepted.
+ */
+export type ParamMatcher =
+  | RegExp
+  | {
+      /** AdonisJS spelling. */
+      match?: RegExp
+      /** Ream's older spelling of {@link match}. */
+      pattern?: RegExp
+      /** Casts the captured segment before it reaches `ctx.params`. */
+      cast?: (value: string) => unknown
+    }
 
 export interface RouteDefinition {
   method: string
@@ -166,17 +182,22 @@ export interface MatchResult {
 // ─── Matchers ───────────────────────────────────────────────
 
 export const matchers = {
-  /** Match numeric params only. */
+  /** Match numeric params only, and hand the handler a number. */
   number(): ParamMatcher {
-    return { pattern: /^\d+$/ }
+    return { match: /^\d+$/, cast: (value) => Number(value) }
   },
   /** Match UUID v4 params only. */
   uuid(): ParamMatcher {
-    return { pattern: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i }
+    return {
+      match: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      // AdonisJS lowercases it, so a route keyed on the param is stable
+      // whatever case the client sent.
+      cast: (value) => value.toLowerCase(),
+    }
   },
   /** Match slug params only (lowercase alphanumeric + hyphens). */
   slug(): ParamMatcher {
-    return { pattern: /^[a-z0-9]+(?:-[a-z0-9]+)*$/ }
+    return { match: /^[a-z0-9]+(?:-[a-z0-9]+)*$/ }
   },
 }
 
@@ -190,15 +211,43 @@ export const matchers = {
  * anchoring here reproduces AdonisJS's *effective* full-segment semantics.
  */
 function compileMatcher(matcher: ParamMatcher | RegExp | string): ParamMatcher {
-  if (typeof matcher === 'string') return { pattern: new RegExp(`^(?:${matcher})$`) }
-  return matcher instanceof RegExp ? { pattern: matcher } : matcher
+  if (typeof matcher === 'string') return { match: new RegExp(`^(?:${matcher})$`) }
+  return matcher instanceof RegExp ? { match: matcher } : matcher
+}
+
+/**
+ * Run each matcher's `cast` over the params it matched.
+ *
+ * The wildcard holds several segments, so the cast applies to each of them.
+ * A matcher without a cast leaves its param untouched.
+ */
+function applyCasts(params: MatchedParams, matchers: Record<string, ParamMatcher>): MatchedParams {
+  let out: MatchedParams | undefined
+  for (const [param, value] of Object.entries(params)) {
+    const matcher = matchers[param]
+    const cast = matcher instanceof RegExp ? undefined : matcher?.cast
+    if (!cast) continue
+    out ??= { ...params }
+    // The cast's return is the caller's claim about its own param; the router
+    // only carries it.
+    out[param] = (
+      Array.isArray(value) ? value.map((v) => cast(v)) : cast(value)
+    ) as MatchedParams[string]
+  }
+  return out ?? params
+}
+
+/** The RegExp a matcher tests with, whichever spelling it used. */
+function matcherPattern(matcher: ParamMatcher): RegExp | undefined {
+  if (matcher instanceof RegExp) return matcher
+  return matcher.match ?? matcher.pattern
 }
 
 // ─── RouteBuilder ───────────────────────────────────────────
 
 /**
  * Fluent route builder — mutates the already-registered route definition(s).
- * Backed by an array so a multi-verb `router.route(['GET','POST'], …)` returns
+ * Backed by an array so a multi-verb `router.route(pattern, ['GET','POST'], …)` returns
  * ONE builder that fans every mutation across all its verbs; the single-verb
  * helpers (`get`/`post`/…) back it with a one-element array.
  */
@@ -808,14 +857,16 @@ export class Router extends Macroable {
   // ─── Route registration ───────────────────────────────────
 
   /**
-   * Register a route for one verb or several (AdonisJS `route(pattern, methods)`
-   * accepts an array). A multi-verb call returns a single builder that
-   * configures every verb at once.
+   * Register a route for one verb or several — `route(pattern, methods,
+   * handler)`, the AdonisJS argument order. Ream took `(method, path)`, so a
+   * call copied from an AdonisJS app registered the pattern as the verb.
+   *
+   * A multi-verb call returns a single builder that configures every verb.
    */
-  route(method: string | string[], path: string, handler: RouteHandler): RouteBuilder {
-    const methods = Array.isArray(method) ? method : [method]
-    const defs = methods.map((verb) => {
-      const def = this.#createDefinition(verb, path, handler)
+  route(pattern: string, methods: string | string[], handler: RouteHandler): RouteBuilder {
+    const verbs = Array.isArray(methods) ? methods : [methods]
+    const defs = verbs.map((verb) => {
+      const def = this.#createDefinition(verb, pattern, handler)
       this.#routes.push(def)
       return def
     })
@@ -824,36 +875,36 @@ export class Router extends Macroable {
   }
 
   get(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('GET', path, handler)
+    return this.route(path, 'GET', handler)
   }
 
   post(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('POST', path, handler)
+    return this.route(path, 'POST', handler)
   }
 
   put(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('PUT', path, handler)
+    return this.route(path, 'PUT', handler)
   }
 
   patch(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('PATCH', path, handler)
+    return this.route(path, 'PATCH', handler)
   }
 
   delete(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('DELETE', path, handler)
+    return this.route(path, 'DELETE', handler)
   }
 
   head(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('HEAD', path, handler)
+    return this.route(path, 'HEAD', handler)
   }
 
   options(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('OPTIONS', path, handler)
+    return this.route(path, 'OPTIONS', handler)
   }
 
   /** Register a route for all HTTP methods. */
   any(path: string, handler: RouteHandler): RouteBuilder {
-    return this.route('*', path, handler)
+    return this.route(path, '*', handler)
   }
 
   // ─── Resource routes ──────────────────────────────────────
@@ -1096,16 +1147,16 @@ export class Router extends Macroable {
         // separate gates meant the global always had the final say, so a route
         // could never loosen it — a global `id: /^[0-9]+$/` plus a route-level
         // slug matcher 404'd instead of matching.
-        if (
-          !this.#validateMatchers(params, {
-            ...this.#globalMatchers,
-            ...route.matchers,
-          })
-        ) {
+        const effective = { ...this.#globalMatchers, ...route.matchers }
+        if (!this.#validateMatchers(params, effective)) {
           continue
         }
 
-        return { route, params }
+        // A matcher's `cast` turns the captured segment into the value the
+        // handler wants — `where('id', matchers.number())` hands `params.id`
+        // a NUMBER, as in AdonisJS. Ream carried only the pattern, so every
+        // controller re-parsed a string the router had already validated.
+        return { route, params: applyCasts(params, effective) }
       }
     }
 
@@ -1302,7 +1353,8 @@ export class Router extends Macroable {
       // The wildcard holds several segments; every one has to satisfy the
       // matcher, or a `/assets/*` guard would pass on its first segment alone.
       const values = Array.isArray(value) ? value : [value]
-      const regex = matcher instanceof RegExp ? matcher : matcher.pattern
+      const regex = matcherPattern(matcher)
+      if (!regex) continue
       // A user-supplied /g or /y regex is stateful (`lastIndex` advances on
       // match) — without a reset, the same URL alternates match/no-match
       // across requests. Reset before every test.

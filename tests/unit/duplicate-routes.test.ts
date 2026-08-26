@@ -34,7 +34,7 @@ describe('ream > duplicate routes', () => {
 
   it('allows one name across the verbs of a single route', () => {
     const router = new Router()
-    router.route(['PUT', 'PATCH'], '/posts/:id', handler).as('posts.update')
+    router.route('/posts/:id', ['PUT', 'PATCH'], handler).as('posts.update')
     expect(router.match('PUT', '/posts/1')).toBeDefined()
     expect(router.match('PATCH', '/posts/1')).toBeDefined()
     expect(router.urlFor('posts.update', { id: '1' })).toBe('/posts/1')

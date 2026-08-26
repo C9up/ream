@@ -137,3 +137,50 @@ describe('HttpKernel > an error is reported before it is handled', () => {
     expect(res.status).toBe(500)
   })
 })
+
+describe('Router > matchers cast the param', () => {
+  it('hands the handler a number, not a string', async () => {
+    const { Router, matchers } = await import('../../src/index.js')
+    const router = new Router()
+    router.get('/orders/:id', async () => {}).where('id', matchers.number())
+
+    const match = router.match('GET', '/orders/42')
+
+    expect(match?.params.id).toBe(42)
+  })
+
+  it('lowercases a uuid, so a key built from it is stable', async () => {
+    const { Router, matchers } = await import('../../src/index.js')
+    const router = new Router()
+    router.get('/u/:id', async () => {}).where('id', matchers.uuid())
+    const upper = '3F2504E0-4F89-41D3-9A0C-0305E82C3301'
+
+    expect(router.match('GET', `/u/${upper}`)?.params.id).toBe(upper.toLowerCase())
+  })
+
+  it('leaves a param alone when its matcher has no cast', async () => {
+    const { Router, matchers } = await import('../../src/index.js')
+    const router = new Router()
+    router.get('/p/:slug', async () => {}).where('slug', matchers.slug())
+
+    expect(router.match('GET', '/p/hello-world')?.params.slug).toBe('hello-world')
+  })
+
+  it('still refuses a param the matcher rejects', async () => {
+    const { Router, matchers } = await import('../../src/index.js')
+    const router = new Router()
+    router.get('/orders/:id', async () => {}).where('id', matchers.number())
+
+    // No route matched — `match()` reports it as absent.
+    expect(router.match('GET', '/orders/abc')).toBeFalsy()
+  })
+
+  it('takes route(pattern, methods, handler), the AdonisJS order', async () => {
+    const { Router } = await import('../../src/index.js')
+    const router = new Router()
+    router.route('/things', ['GET', 'POST'], async () => {})
+
+    expect(router.match('GET', '/things')).toBeTruthy()
+    expect(router.match('POST', '/things')).toBeTruthy()
+  })
+})

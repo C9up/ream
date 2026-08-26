@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { Router } from '../../src/router/Router.js'
 
-describe('router.route(methods[]) — multi-verb (AdonisJS parity)', () => {
+describe('router.route(pattern, methods[]) — multi-verb (AdonisJS parity)', () => {
   it('registers one route for several verbs, configured together', () => {
     const router = new Router()
-    router.route(['GET', 'POST'], '/x', async () => {}).as('x')
+    router.route('/x', ['GET', 'POST'], async () => {}).as('x')
     expect(router.match('GET', '/x')?.route.name).toBe('x')
     expect(router.match('POST', '/x')?.route.name).toBe('x')
     expect(router.match('DELETE', '/x')).toBeUndefined()
