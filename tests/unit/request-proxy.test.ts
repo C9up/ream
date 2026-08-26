@@ -69,3 +69,28 @@ describe('Request.fresh / stale / matchesRoute', () => {
     expect(r.matchesRoute([])).toBe(false)
   })
 })
+
+describe('Request.matchesRoute matches the controller reference', () => {
+  it('matches a route by its ControllerName.method identity', () => {
+    const r = req({})
+    r.setRouteInfo({
+      name: 'users.show',
+      pattern: '/users/:id',
+      reference: 'UsersController.show',
+    })
+
+    // The identity AdonisJS matches through route.handler.reference, and the
+    // form our own router already accepts as a handler.
+    expect(r.matchesRoute('UsersController.show')).toBe(true)
+    expect(r.matchesRoute(['PostsController.index', 'UsersController.show'])).toBe(true)
+    expect(r.matchesRoute('UsersController.destroy')).toBe(false)
+  })
+
+  it('an inline handler has no reference to match', () => {
+    const r = req({})
+    r.setRouteInfo({ pattern: '/inline' })
+
+    expect(r.matchesRoute('/inline')).toBe(true)
+    expect(r.matchesRoute('Something.method')).toBe(false)
+  })
+})

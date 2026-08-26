@@ -66,7 +66,7 @@ export class Request extends Macroable {
   #signedUrl?: SignedUrl
   #allowMethodSpoofing = false
   #trustProxy = false
-  #routeInfo?: { name?: string; pattern: string }
+  #routeInfo?: { name?: string; pattern: string; reference?: string }
   #response?: { fresh(): boolean }
   #parsedBody: Dict<unknown> | undefined
   #parsedQs: Dict<unknown> | undefined
@@ -128,7 +128,7 @@ export class Request extends Macroable {
   }
 
   /** @internal Record the matched route — wired by HttpContext (for `matchesRoute()`). */
-  setRouteInfo(info: { name?: string; pattern: string }): void {
+  setRouteInfo(info: { name?: string; pattern: string; reference?: string }): void {
     this.#routeInfo = info
   }
 
@@ -147,18 +147,24 @@ export class Request extends Macroable {
   }
 
   /**
-   * True when the matched route's name or pattern is one of `identifier`
-   * (AdonisJS `matchesRoute`).
+   * True when the matched route's name, pattern, or controller reference is one
+   * of `identifier` (AdonisJS `matchesRoute`).
    *
    * Takes a list as well as a single value, as upstream does — the usual call
    * is "am I on any of these routes", and a caller with several had to write
    * the `.some()` themselves.
+   *
+   * The reference is the `'ControllerName.method'` form the router already
+   * accepts as a handler, which is the identity AdonisJS matches on through
+   * `route.handler.reference`. Absent for an inline handler, which has no name
+   * to be addressed by.
    */
   matchesRoute(identifier: string | string[]): boolean {
-    if (!this.#routeInfo) return false
+    const info = this.#routeInfo
+    if (!info) return false
     const candidates = Array.isArray(identifier) ? identifier : [identifier]
     return candidates.some(
-      (one) => this.#routeInfo?.name === one || this.#routeInfo?.pattern === one,
+      (one) => info.name === one || info.pattern === one || info.reference === one,
     )
   }
 

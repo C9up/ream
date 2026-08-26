@@ -168,6 +168,17 @@ export interface RouteInfo {
   action?: string
 }
 
+/**
+ * The `'ControllerName.method'` identity of a route, or undefined for an inline
+ * handler. This is what `request.matchesRoute()` matches on besides the name and
+ * the pattern, the way AdonisJS matches `route.handler.reference`.
+ */
+function controllerReference(route: RouteInfo): string | undefined {
+  const controller = route.controller as { name?: string } | undefined
+  if (!controller?.name || !route.action) return undefined
+  return `${controller.name}.${route.action}`
+}
+
 /** Ambient per-request context store (AdonisJS `HttpContext` ALS accessor). */
 const httpContextStorage = new AsyncLocalStorage<HttpContext>()
 
@@ -388,7 +399,11 @@ export class HttpContext extends Macroable {
     // And the reverse, so `request.fresh()`/`stale()` delegate to it, plus the
     // matched-route info for `request.matchesRoute()`.
     this.request.setResponse(this.response)
-    this.request.setRouteInfo({ name: route.name, pattern: route.pattern })
+    this.request.setRouteInfo({
+      name: route.name,
+      pattern: route.pattern,
+      reference: controllerReference(route),
+    })
     // APP_KEY-backed encryption / signed-URL services + the base logger are
     // resolved asynchronously by HttpKernel and injected via the setters above
     // (the container is async now, so a constructor can't resolve them itself).
