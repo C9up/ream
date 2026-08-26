@@ -1,7 +1,7 @@
 {
   "name": "@c9up/ream",
   "version": "0.1.34",
-  "description": "Ream — Rust-powered Node.js application framework",
+  "description": "Ream \u2014 Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -124,7 +124,17 @@
       "import": "./src/events/configure.ts"
     },
     "./tsconfig.app.json": "./tsconfig.app.json",
-    "./swcrc.app.json": "./swcrc.app.json"
+    "./swcrc.app.json": "./swcrc.app.json",
+    "./tsconfig.package.json": "./tsconfig.package.json",
+    "./tsconfig.client.json": "./tsconfig.client.json",
+    "./session_middleware": {
+      "types": "./src/session/SessionMiddleware.ts",
+      "import": "./src/session/SessionMiddleware.ts"
+    },
+    "./bodyparser_middleware": {
+      "types": "./src/bodyparser/BodyParserMiddleware.ts",
+      "import": "./src/bodyparser/BodyParserMiddleware.ts"
+    }
   },
   "files": [
     "LICENSE",
@@ -136,7 +146,10 @@
     "scripts",
     "src",
     "swcrc.app.json",
-    "tsconfig.app.json"
+    "tsconfig.app.json",
+    "tsconfig.base.json",
+    "tsconfig.package.json",
+    "tsconfig.client.json"
   ],
   "scripts": {
     "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",

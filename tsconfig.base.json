@@ -1,12 +1,12 @@
 {
+  // Shared by tsconfig.app / tsconfig.package / tsconfig.client. Emit options
+  // (declaration, sourceMap, outDir) belong to the leaf that knows what it is
+  // building — a base that decides them makes every leaf fight it.
   "compilerOptions": {
     "strict": true,
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,

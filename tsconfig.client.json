@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    // Browser code is bundled, so resolution follows the bundler rather than
+    // Node, and the DOM libs replace the Node types.
+    "moduleResolution": "Bundler",
+    "module": "ESNext",
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "types": [],
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["${configDir}/**/*"],
+  "exclude": ["${configDir}/node_modules", "${configDir}/dist"]
+}

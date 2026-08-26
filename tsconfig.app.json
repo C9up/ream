@@ -1,21 +1,21 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "strict": true,
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
     "lib": ["ES2023"],
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
     "declaration": false,
     "sourceMap": true,
-    "outDir": "./dist"
+    "types": ["node"],
+    // `${configDir}` resolves against the config that EXTENDS this one, not
+    // against this file. Without it every path here pointed inside
+    // `node_modules/@c9up/ream`: an app's build output landed in ream's own
+    // dist, and its node_modules was never excluded.
+    "outDir": "${configDir}/dist"
   },
-  "exclude": ["node_modules", "dist", "build"]
+  "include": ["${configDir}/**/*"],
+  "exclude": [
+    "${configDir}/node_modules",
+    "${configDir}/dist",
+    "${configDir}/build"
+  ]
 }
