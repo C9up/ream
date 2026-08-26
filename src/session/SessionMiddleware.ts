@@ -106,10 +106,16 @@ export default class SessionMiddleware {
     const rolling = this.#config.rolling
     const isProduction = process.env.NODE_ENV === 'production'
 
-    // Read session ID from cookie — pre-parsed by the Rust HyperServer.
-    let sessionId = ctx.request.plainCookie<string>(cookieName, undefined, {
-      encoded: false,
-    })
+    // Read the session cookie — pre-parsed by the Rust HyperServer.
+    //
+    // The COOKIE driver's value is its own AEAD ciphertext, so it is read raw
+    // and the driver authenticates it. The server-side drivers store a bare id,
+    // which is SIGNED on the way out (see the write below): `request.cookie()`
+    // verifies the HMAC and returns null when it does not hold, so a planted or
+    // foreign id is refused here instead of reaching the store.
+    let sessionId = this.#cookieDriver
+      ? ctx.request.plainCookie<string>(cookieName, undefined, { encoded: false })
+      : ctx.request.cookie(cookieName)
     const hadIncomingCookie = sessionId !== null
 
     // Cookie driver: the cookie value IS the session data (encrypted)
@@ -193,10 +199,12 @@ export default class SessionMiddleware {
     // defeats HTTP caching, and leaks a Set-Cookie to CDNs. This mirrors
     // the cookie-driver path above (which already omits `isNew`).
     if (session.isDirty() || regenerated || (rolling && hadIncomingCookie)) {
-      ctx.response.plainCookie(cookieName, session.sessionId, {
-        // An opaque id — packing it would invalidate every session cookie
-        // already in a browser for no gain.
-        encode: false,
+      // SIGNED, as AdonisJS signs it (`response.cookie(cookieName, id, …)`).
+      // The id is 192 bits of entropy, so it was never guessable — what the
+      // signature buys is that a cookie the app did not issue is rejected on
+      // read, before any store lookup, and that an id from another deployment
+      // (a different APP_KEY) cannot be presented here.
+      ctx.response.cookie(cookieName, session.sessionId, {
         maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
         path: '/',
         httpOnly: true,
