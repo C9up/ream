@@ -6,12 +6,19 @@
  * Configured via config/bodyparser.ts.
  */
 
+import { Exception } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
 import { parseSize } from './parseSize.js'
 import { parseQueryString, type QsParseOptions } from './qsParse.js'
 
 export interface BodyParserConfig {
+  /**
+   * HTTP methods whose body is parsed at all. AdonisJS defaults to
+   * `['POST', 'PUT', 'PATCH', 'DELETE']` and returns early for anything else,
+   * so a GET that happens to carry a JSON content-type is left untouched.
+   */
+  allowedMethods?: string[]
   json?: {
     limit?: string // e.g. '1mb'
     types?: string[]
@@ -37,15 +44,21 @@ export interface BodyParserConfig {
   multipart?: {
     /** Total multipart body size cap (sum of all file sizes). Default: '20mb'. */
     limit?: string
-    /** Maximum number of files per request. Default: 20. */
+    /**
+     * Maximum number of files per request. AdonisJS has no such option — it
+     * bounds a multipart body by total size and field count only, so ten
+     * thousand one-byte files pass. Kept as a DoS bound, at the same scale as
+     * `maxFields` so it never rejects an upload AdonisJS would have accepted.
+     */
     maxFiles?: number
+    /** Maximum number of form fields. AdonisJS default: 1000. */
     maxFields?: number
-    tmpDir?: string
     types?: string[]
   }
 }
 
 interface ResolvedBodyParserConfig {
+  allowedMethods: string[]
   json: Required<NonNullable<BodyParserConfig['json']>>
   form: Required<NonNullable<BodyParserConfig['form']>>
   raw: Required<NonNullable<BodyParserConfig['raw']>>
@@ -53,6 +66,9 @@ interface ResolvedBodyParserConfig {
 }
 
 const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
+  // AdonisJS define_config: allowedMethods. A body is parsed only for methods
+  // that are supposed to carry one.
+  allowedMethods: ['POST', 'PUT', 'PATCH', 'DELETE'],
   json: {
     limit: '1mb',
     types: ['application/json', 'application/vnd.api+json'],
@@ -73,9 +89,8 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
   },
   multipart: {
     limit: '20mb',
-    maxFiles: 20,
-    maxFields: 500,
-    tmpDir: '/tmp',
+    maxFiles: 1000,
+    maxFields: 1000,
     types: ['multipart/form-data'],
   },
 }
@@ -86,6 +101,7 @@ export default class BodyParserMiddleware {
   constructor(config?: BodyParserConfig) {
     assertNoEnabledFlag(config)
     this.#config = {
+      allowedMethods: config?.allowedMethods ?? DEFAULT_CONFIG.allowedMethods,
       json: { ...DEFAULT_CONFIG.json, ...config?.json },
       form: { ...DEFAULT_CONFIG.form, ...config?.form },
       raw: { ...DEFAULT_CONFIG.raw, ...config?.raw },
@@ -94,15 +110,28 @@ export default class BodyParserMiddleware {
   }
 
   async handle(ctx: HttpContext, next: () => Promise<void>) {
+    // Only methods that are supposed to carry a body get one parsed
+    // (AdonisJS `allowedMethods`). Comparison is case-sensitive on the
+    // canonical upper-case verb, as AdonisJS' `includes()` is.
+    if (!this.#config.allowedMethods.includes(ctx.request.method())) {
+      return next()
+    }
+
+    // Many clients send `content-length: 0` on a bodyless request, which the
+    // parsers below do not recognise as empty (AdonisJS returns early here for
+    // the same reason).
+    if (!ctx.request.hasBody()) {
+      return next()
+    }
+
     const contentType = ctx.request.header('content-type') ?? ''
     const rawBody = ctx.request.raw()
 
-    // Size check
+    // Size check. Thrown rather than written: the app's exception handler
+    // negotiates the response, so an HTML app gets an error page instead of a
+    // JSON envelope it never asked for — and can override the rendering.
     if (Buffer.byteLength(rawBody, 'utf8') > parseSize(this.#getLimit(contentType))) {
-      ctx.response.status(413).json({
-        error: { code: 'E_REQUEST_ENTITY_TOO_LARGE', message: 'Request body exceeds size limit' },
-      })
-      return
+      throw entityTooLarge('request entity too large')
     }
 
     // JSON
@@ -134,7 +163,7 @@ export default class BodyParserMiddleware {
     if (matchesType(contentType, this.#config.multipart.types)) {
       const payload = ctx.request.multipart()
       if (payload) {
-        if (this.#rejectMultipart(ctx, payload.files, payload.fields)) return
+        this.#assertMultipartWithinLimits(payload.files, payload.fields)
         const { fields, files } = hydrateMultipartPayload(payload)
         // Fingerprint each file's real type from its magic bytes BEFORE handlers
         // run, so `request.file(field, { extnames })` validates against the
@@ -155,42 +184,34 @@ export default class BodyParserMiddleware {
     return this.#config.raw.limit
   }
 
-  /** Returns true (and writes a 413/400) when the multipart payload exceeds configured limits. */
-  #rejectMultipart(
-    ctx: HttpContext,
-    files: Array<{ size: number }>,
-    fields: Array<unknown>,
-  ): boolean {
+  /**
+   * Throws when the multipart payload exceeds a configured limit.
+   *
+   * All three raise the same 413 `E_REQUEST_ENTITY_TOO_LARGE` AdonisJS raises
+   * for `maxFields` and for an oversized body — one code for "you sent too
+   * much", whichever dimension it was.
+   */
+  #assertMultipartWithinLimits(files: Array<{ size: number }>, fields: Array<unknown>): void {
     const cfg = this.#config.multipart
-    const maxBytes = parseSize(cfg.limit)
 
     if (fields.length > cfg.maxFields) {
-      ctx.response.status(400).json({
-        error: {
-          code: 'E_TOO_MANY_FIELDS',
-          message: `Upload exceeds maxFields (${cfg.maxFields})`,
-        },
-      })
-      return true
+      throw entityTooLarge('Fields length limit exceeded')
     }
 
     if (files.length > cfg.maxFiles) {
-      ctx.response.status(400).json({
-        error: { code: 'E_TOO_MANY_FILES', message: `Upload exceeds maxFiles (${cfg.maxFiles})` },
-      })
-      return true
+      throw entityTooLarge('Files length limit exceeded')
     }
 
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
-    if (totalBytes > maxBytes) {
-      ctx.response.status(413).json({
-        error: { code: 'E_REQUEST_ENTITY_TOO_LARGE', message: 'Upload exceeds size limit' },
-      })
-      return true
+    if (totalBytes > parseSize(cfg.limit)) {
+      throw entityTooLarge('request entity too large')
     }
-
-    return false
   }
+}
+
+/** The one exception every body-size limit raises (AdonisJS parity). */
+function entityTooLarge(message: string): Exception {
+  return new Exception(message, { status: 413, code: 'E_REQUEST_ENTITY_TOO_LARGE' })
 }
 
 /**
@@ -232,5 +253,18 @@ function assertNoEnabledFlag(config?: BodyParserConfig): void {
           `To disable this parser, give it no types: \`${section}: { types: [] }\`.`,
       )
     }
+  }
+
+  // `multipart.tmpDir` was accepted and never read by anything: the Rust
+  // multipart parser hands the body over in memory, so no file is ever written
+  // to a temporary directory — an app pointing it at a volume was silently
+  // getting nothing. Saying so beats letting it keep believing.
+  const multipart: unknown = config.multipart
+  if (multipart !== null && typeof multipart === 'object' && 'tmpDir' in multipart) {
+    throw new Error(
+      '[E_BODYPARSER_CONFIG] `multipart.tmpDir` is not supported — uploaded files are held in ' +
+        'memory and never written to a temporary directory. Choose the destination when you ' +
+        'store the file: `await file.moveToDisk(directory)`.',
+    )
   }
 }
