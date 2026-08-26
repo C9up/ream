@@ -11,12 +11,19 @@
 
 export type { EventsConfig } from './config.js'
 export { defineConfig } from './config.js'
+export type { AsyncUnsubscribeFunction, UnsubscribeFunction } from './Emitter.js'
 export {
   BaseEvent,
   type ContainerResolver,
   Emitter,
   type ListenerClass,
 } from './Emitter.js'
+export {
+  type BufferedEvent,
+  type BufferedEventName,
+  type EventFinder,
+  EventsBuffer,
+} from './EventsBuffer.js'
 export type { EventsAppContext } from './EventsProvider.js'
 export { default as EventsProvider } from './EventsProvider.js'
 export { EventBus } from './native.js'

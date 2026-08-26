@@ -13,6 +13,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { type BufferedEventName, EventsBuffer } from './EventsBuffer.js'
 import type { EventBus } from './native.js'
 
 /** Per-request correlation ID stored in async context so concurrent requests don't corrupt each other. */
@@ -55,11 +56,26 @@ export type ContainerResolver = EmitterResolver
  */
 export type UnsubscribeFunction = () => void
 
+/**
+ * What `onAny` hands back. Same shape as {@link UnsubscribeFunction} — and
+ * assignable wherever one is expected — but awaitable, because dropping a
+ * wildcard subscription is a NAPI call into the Rust bus. Ignore the promise
+ * for the AdonisJS behaviour; await it when the next assertion depends on the
+ * subscription being gone.
+ */
+export type AsyncUnsubscribeFunction = () => Promise<void>
+
 export class Emitter {
   private bus: EventBus
   private resolver?: EmitterResolver
   private classListeners: Map<EventConstructor, Listener[]> = new Map()
   private stringListeners: Map<string, ListenerFn[]> = new Map()
+  /** Set while faking; every emission lands here instead of running. */
+  #buffer?: EventsBuffer
+  /** Which events are faked. `undefined` means all of them. */
+  #fakedEvents?: Set<BufferedEventName>
+  /** Wildcard subscriptions, so `offAny(listener)` can find its Rust handle. */
+  readonly #anySubscriptions = new Map<(eventName: string, data: unknown) => void, Set<number>>()
 
   constructor(bus: EventBus, resolver?: EmitterResolver) {
     this.bus = bus
@@ -122,8 +138,10 @@ export class Emitter {
    * Register the listener only when `condition` holds (AdonisJS `listenIf`) —
    * the shape a feature flag takes at boot, without an `if` around every call.
    */
-  listenIf<T>(condition: boolean, event: string, listener: ListenerFn<T>): void {
-    if (condition) this.on(event, listener)
+  listenIf<T>(condition: boolean | (() => boolean), event: string, listener: ListenerFn<T>): void {
+    // AdonisJS takes either — a thunk lets the flag be read at registration
+    // time rather than at the call site.
+    if (typeof condition === 'function' ? condition() : condition) this.on(event, listener)
   }
 
   /** Alias of {@link on} (AdonisJS names it `listen`). */
@@ -213,6 +231,7 @@ export class Emitter {
    * Use it when order matters — a listener that seeds what the next one reads.
    */
   async emitSerial(event: string, data: unknown): Promise<void> {
+    if (this.#capture(event, data)) return
     await this.#dispatchListeners(event, data, true)
     this.#publishToBus(event, data)
   }
@@ -229,6 +248,7 @@ export class Emitter {
    * rejects is reported through `emitError`, never left unhandled.
    */
   async emit(event: string, data: unknown): Promise<void> {
+    if (this.#capture(event, data)) return
     await this.#dispatchListeners(event, data, false)
     this.#publishToBus(event, data)
   }
@@ -277,6 +297,9 @@ export class Emitter {
    */
   async dispatchEvent<T extends object>(event: T): Promise<void> {
     const EventClass = event.constructor as EventConstructor<T>
+    // Faked by the class, as AdonisJS does — `fake([TaskDeclared])` catches
+    // `new TaskDeclared(...).emit()`.
+    if (this.#capture(EventClass, event)) return
     const listeners = this.classListeners.get(EventClass) ?? []
     const name = (EventClass as { eventName?: string }).eventName ?? classToEventName(EventClass)
 
@@ -307,6 +330,51 @@ export class Emitter {
     await this.bus.emit(name, JSON.stringify(this.#wrapForBus(event)))
   }
 
+  // ─── Faking (AdonisJS `fake` / `restore`) ─────────────────
+
+  /**
+   * Stop the named events from reaching their listeners and the bus, and
+   * collect them instead.
+   *
+   * With no argument every event is faked. Calling it again drops the previous
+   * fake and starts a fresh buffer, as AdonisJS does.
+   *
+   * ```ts
+   * const events = emitter.fake(['user:registered'])
+   * await register(payload)
+   * events.assertEmitted('user:registered')
+   * emitter.restore()
+   * ```
+   */
+  fake(events?: BufferedEventName[]): EventsBuffer {
+    this.restore()
+    this.#fakedEvents = events === undefined ? undefined : new Set(events)
+    this.#buffer = new EventsBuffer(() => {
+      this.restore()
+    })
+    return this.#buffer
+  }
+
+  /** Let events through again (AdonisJS `restore`). */
+  restore(): void {
+    this.#buffer = undefined
+    this.#fakedEvents = undefined
+  }
+
+  /**
+   * Record the emission and report whether it was swallowed.
+   *
+   * Returns `true` when the event is faked — the caller must then return
+   * without dispatching or publishing, which is what "the listeners are not
+   * invoked" means.
+   */
+  #capture(event: BufferedEventName, data: unknown): boolean {
+    if (this.#buffer === undefined) return false
+    if (this.#fakedEvents !== undefined && !this.#fakedEvents.has(event)) return false
+    this.#buffer.add(event, data)
+    return true
+  }
+
   // ─── Wildcard subscriptions (via Rust NAPI) ───────────────
 
   /**
@@ -316,15 +384,15 @@ export class Emitter {
    *   emitter.onAny('order.*', (name, data) => { ... })   // single segment
    *   emitter.onAny('order.**', (name, data) => { ... })  // deep match
    */
-  async onAny(listener: (eventName: string, data: unknown) => void): Promise<number>
+  async onAny(listener: (eventName: string, data: unknown) => void): Promise<UnsubscribeFunction>
   async onAny(
     pattern: string,
     listener: (eventName: string, data: unknown) => void,
-  ): Promise<number>
+  ): Promise<UnsubscribeFunction>
   async onAny(
     patternOrListener: string | ((eventName: string, data: unknown) => void),
     maybeListener?: (eventName: string, data: unknown) => void,
-  ): Promise<number> {
+  ): Promise<UnsubscribeFunction> {
     // `onAny(listener)` — every event, the AdonisJS signature. `**` is the
     // deep-match pattern the Rust matcher already understands, so the two
     // forms share one implementation.
@@ -333,7 +401,21 @@ export class Emitter {
     if (listener === undefined) {
       throw new TypeError('onAny() requires a listener')
     }
-    return this.#subscribeAny(pattern, listener)
+    const id = await this.#subscribeAny(pattern, listener)
+
+    // AdonisJS hands back the unsubscribe function, not the handle. The Rust
+    // subscription id stays reachable through `offAny(id)` because that is what
+    // the bus needs, but a caller following the AdonisJS shape never sees it.
+    let ids = this.#anySubscriptions.get(listener)
+    if (!ids) {
+      ids = new Set()
+      this.#anySubscriptions.set(listener, ids)
+    }
+    ids.add(id)
+
+    return async () => {
+      await this.offAny(id)
+    }
   }
 
   async #subscribeAny(
@@ -363,9 +445,28 @@ export class Emitter {
     })
   }
 
-  /** Unsubscribe a wildcard subscription by ID. */
-  async offAny(subscriptionId: number): Promise<void> {
-    await this.bus.unsubscribe(subscriptionId)
+  /**
+   * Stop a wildcard subscription (AdonisJS `offAny`).
+   *
+   * Takes the listener, as AdonisJS does. The numeric handle the Rust bus
+   * issued is also accepted, because that is what the unsubscribe crosses NAPI
+   * with and `onAny`'s unsubscribe function closes over it.
+   *
+   * Async where AdonisJS is sync: dropping the subscription is a NAPI call, and
+   * returning before it lands would let an event through after `offAny`.
+   */
+  async offAny(listenerOrId: number | ((eventName: string, data: unknown) => void)): Promise<this> {
+    if (typeof listenerOrId === 'number') {
+      await this.bus.unsubscribe(listenerOrId)
+      for (const ids of this.#anySubscriptions.values()) ids.delete(listenerOrId)
+      return this
+    }
+
+    const ids = this.#anySubscriptions.get(listenerOrId)
+    if (!ids) return this
+    this.#anySubscriptions.delete(listenerOrId)
+    await Promise.all([...ids].map((id) => this.bus.unsubscribe(id)))
+    return this
   }
 
   /** Check if a pattern matches an event name (wildcard matching via Rust). */
@@ -446,10 +547,11 @@ export class Emitter {
   /**
    * Check if any listeners are registered for an event.
    */
-  hasListeners(event: EventConstructor | string): boolean {
-    if (typeof event === 'string') {
-      return (this.stringListeners.get(event)?.length ?? 0) > 0
-    }
+  hasListeners(event?: EventConstructor | string): boolean {
+    // AdonisJS makes the argument optional: no argument asks whether ANY event
+    // has a listener at all.
+    if (event === undefined) return this.listenerCount() > 0
+    if (typeof event === 'string') return (this.stringListeners.get(event)?.length ?? 0) > 0
     return (this.classListeners.get(event)?.length ?? 0) > 0
   }
 

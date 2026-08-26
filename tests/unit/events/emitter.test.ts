@@ -184,11 +184,22 @@ describe('events > Emitter > wildcard subscriptions', () => {
     expect(received[0].name).toBe('plain.x')
   })
 
-  it('offAny removes the bus subscription', async () => {
+  it('the unsubscribe function onAny returns removes the bus subscription', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
-    const id = await emitter.onAny('a.*', () => {})
-    await emitter.offAny(id)
+    // AdonisJS hands back an unsubscribe function; awaiting it is ours, because
+    // dropping the subscription crosses NAPI.
+    const unsubscribe = await emitter.onAny('a.*', () => {})
+    await unsubscribe()
+    expect(await bus.subscriptionCount()).toBe(0)
+  })
+
+  it('offAny removes the bus subscription for a listener', async () => {
+    const bus = new FakeBus()
+    const emitter = new Emitter(bus)
+    const listener = () => {}
+    await emitter.onAny('a.*', listener)
+    await emitter.offAny(listener)
     expect(await bus.subscriptionCount()).toBe(0)
   })
 

@@ -290,12 +290,22 @@ export { setServer } from './services/server.js'
 // `@c9up/ream/events` subpath so importing the main barrel stays lazy.
 export type { EventsConfig } from './events/config.js'
 export { defineConfig as defineEventsConfig } from './events/config.js'
+export type {
+  AsyncUnsubscribeFunction,
+  UnsubscribeFunction,
+} from './events/Emitter.js'
 export {
   BaseEvent,
   Emitter,
   type EmitterResolver,
   type ListenerClass,
 } from './events/Emitter.js'
+export {
+  type BufferedEvent,
+  type BufferedEventName,
+  type EventFinder,
+  EventsBuffer,
+} from './events/EventsBuffer.js'
 export type {
   ErrorReporter,
   LockBackend,

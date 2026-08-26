@@ -95,7 +95,7 @@ describe('BodyParserMiddleware — which requests get parsed', () => {
 
 describe('BodyParserMiddleware — body size', () => {
   it('throws 413 rather than writing its own JSON envelope', async () => {
-    const ctx = makeCtxWith('a=' + 'x'.repeat(2000), 'application/x-www-form-urlencoded', {})
+    const ctx = makeCtxWith(`a=${'x'.repeat(2000)}`, 'application/x-www-form-urlencoded', {})
     await expect(
       new BodyParserMiddleware({ form: { limit: '1kb' } }).handle(ctx, noop),
     ).rejects.toMatchObject({ status: 413, code: 'E_REQUEST_ENTITY_TOO_LARGE' })
