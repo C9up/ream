@@ -8,8 +8,8 @@ function makeCtx(): HttpContext {
 }
 
 describe('ream > HttpContext > ALS get/getOrFail (AdonisJS parity)', () => {
-  it('get() is undefined and getOrFail() throws outside a request', () => {
-    expect(HttpContext.get()).toBeUndefined()
+  it('get() is null and getOrFail() throws outside a request', () => {
+    expect(HttpContext.get()).toBe(null)
     expect(() => HttpContext.getOrFail()).toThrow(/E_HTTP_CONTEXT_NOT_FOUND/)
   })
 
@@ -23,7 +23,7 @@ describe('ream > HttpContext > ALS get/getOrFail (AdonisJS parity)', () => {
     })
     expect(seen).toBe(ctx)
     // Ambient context is cleared once run() returns.
-    expect(HttpContext.get()).toBeUndefined()
+    expect(HttpContext.get()).toBe(null)
   })
 })
 
@@ -53,5 +53,39 @@ describe('ream > HttpContext > logger', () => {
     ctx.setBaseLogger(baseLogger)
     expect(ctx.logger).toBe(childLogger)
     expect(childCalls).toEqual([{ correlationId: 'req-9' }])
+  })
+})
+
+describe('HttpContext ambient-context switch (AdonisJS parity)', () => {
+  it('reports whether tracking is on', () => {
+    // On by default, where AdonisJS makes it opt-in — ream's own middleware
+    // reads the ambient context.
+    expect(HttpContext.usingAsyncLocalStorage).toBe(true)
+  })
+
+  it('answers null and throws once tracking is off', () => {
+    const ctx = makeCtx()
+    try {
+      HttpContext.useAsyncLocalStorage(false)
+      expect(HttpContext.usingAsyncLocalStorage).toBe(false)
+
+      HttpContext.run(ctx, () => {
+        // The callback still runs; only the tracking is gone.
+        expect(HttpContext.get()).toBe(null)
+        expect(() => HttpContext.getOrFail()).toThrow(/tracking is off/)
+      })
+    } finally {
+      HttpContext.useAsyncLocalStorage(true)
+    }
+  })
+
+  it('resumes tracking when turned back on', () => {
+    const ctx = makeCtx()
+    HttpContext.useAsyncLocalStorage(false)
+    HttpContext.useAsyncLocalStorage(true)
+
+    HttpContext.run(ctx, () => {
+      expect(HttpContext.get()).toBe(ctx)
+    })
   })
 })

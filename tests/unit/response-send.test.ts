@@ -306,3 +306,35 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     expect(r.getHeaders()['set-cookie'] ?? '').toContain('sid=abc')
   })
 })
+
+describe('Response.jsonp default callback name', () => {
+  it('defaults to `callback`, as AdonisJS does', () => {
+    const res = new Response()
+    res.jsonp({ a: 1 })
+    expect(res.getBody()).toContain('callback({"a":1})')
+  })
+
+  it('honours the configured default (AdonisJS http.jsonpCallbackName)', () => {
+    // The name used to be hardcoded, so a config asking for a different one
+    // was ignored.
+    const res = new Response()
+    res.setJsonpCallbackName('cb')
+    res.jsonp({ a: 1 })
+    expect(res.getBody()).toContain('cb({"a":1})')
+  })
+
+  it('an explicit argument still wins over the configured default', () => {
+    const res = new Response()
+    res.setJsonpCallbackName('cb')
+    res.jsonp({ a: 1 }, 'other')
+    expect(res.getBody()).toContain('other({"a":1})')
+  })
+
+  it('sanitises the configured name too', () => {
+    // The JSONP XSS guard must not depend on where the name came from.
+    const res = new Response()
+    res.setJsonpCallbackName('evil()<script>')
+    res.jsonp({ a: 1 })
+    expect(res.getBody()).not.toContain('<script>')
+  })
+})

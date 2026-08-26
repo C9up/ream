@@ -36,7 +36,7 @@ describe('HttpContext ambient helpers', () => {
     HttpContext.run(ctx, () => {
       expect(HttpContext.get()).toBe(ctx)
       HttpContext.runOutsideContext(() => {
-        expect(HttpContext.get()).toBeUndefined()
+        expect(HttpContext.get()).toBe(null)
       })
       expect(HttpContext.get()).toBe(ctx)
     })

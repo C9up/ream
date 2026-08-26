@@ -18,14 +18,14 @@ export class CookieDriver implements SessionDriver {
     this.signer = new CookieSigner(secret)
   }
 
-  async read(sessionId: string): Promise<Record<string, unknown>> {
-    if (!sessionId) return {}
+  async read(sessionId: string): Promise<Record<string, unknown> | null> {
+    if (!sessionId) return null
     const decrypted = this.signer.decrypt(sessionId)
-    if (!decrypted) return {}
+    if (!decrypted) return null
     try {
       return JSON.parse(decrypted)
     } catch {
-      return {}
+      return null
     }
   }
 

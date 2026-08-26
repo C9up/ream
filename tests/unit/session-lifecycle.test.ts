@@ -93,7 +93,7 @@ describe('session > commit', () => {
 
     await session.commit()
 
-    expect(await driver.read('sess-new')).toEqual({})
+    expect(await driver.read('sess-new')).toBe(null)
   })
 
   it('migrates the data to the new id after regenerate(), and drops the old', async () => {
@@ -110,7 +110,7 @@ describe('session > commit', () => {
 
     expect(session.sessionId).not.toBe('old-id')
     expect(await driver.read(session.sessionId)).toMatchObject({ user: 7 })
-    expect(await driver.read('old-id')).toEqual({})
+    expect(await driver.read('old-id')).toBe(null)
   })
 
   it('survives a store that cannot drop the old entry', async () => {
@@ -131,5 +131,44 @@ describe('session > commit', () => {
     const session = new Session('sess-1')
     session.put('user', 1)
     await expect(session.commit()).resolves.toBeUndefined()
+  })
+})
+
+describe('session > the store decides whether a session is fresh', () => {
+  it('treats a cookie whose row is gone as a fresh session', async () => {
+    const driver = new MemoryDriver()
+    // The id came in on a cookie, so the middleware seated it as NOT fresh —
+    // but the store has no row for it (expired, evicted, or a different host).
+    const session = seated(driver, 'stale-id', false)
+
+    await session.initiate()
+
+    // Otherwise commit() would touch() a row that is not there, and `fresh`
+    // would lie to anything branching on it.
+    expect(session.fresh).toBe(true)
+    expect(session.all()).toEqual({})
+  })
+
+  it('leaves a session with a stored row alone', async () => {
+    const driver = new MemoryDriver()
+    await driver.write('live-id', { user: 1 }, TTL)
+    const session = seated(driver, 'live-id', false)
+
+    await session.initiate()
+
+    expect(session.fresh).toBe(false)
+    expect(session.all()).toEqual({ user: 1 })
+  })
+
+  it('reads an empty stored session as stored, not as absent', async () => {
+    const driver = new MemoryDriver()
+    // A session that exists and happens to hold nothing is not the same as no
+    // session at all — the whole reason read() answers null rather than {}.
+    await driver.write('empty-id', {}, TTL)
+    const session = seated(driver, 'empty-id', false)
+
+    await session.initiate()
+
+    expect(session.fresh).toBe(false)
   })
 })

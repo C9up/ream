@@ -42,8 +42,8 @@ describe('session RedisDriver', () => {
     expect(client.set).toHaveBeenCalledWith('ream:session:sid', '{}', 'EX', 90)
   })
 
-  it('reads an absent session as empty, not as an error', async () => {
-    expect(await new RedisDriver(fakeClient()).read('never-seen')).toEqual({})
+  it('reports an absent session as absent, not as an empty one', async () => {
+    expect(await new RedisDriver(fakeClient()).read('never-seen')).toBe(null)
   })
 
   it('treats a corrupt payload as an absent session', async () => {
@@ -51,13 +51,13 @@ describe('session RedisDriver', () => {
     client.store.set('ream:session:sid', '{ not json')
     // Throwing here would 500 every request carrying that cookie, with no way
     // for the visitor to recover.
-    expect(await new RedisDriver(client).read('sid')).toEqual({})
+    expect(await new RedisDriver(client).read('sid')).toBe(null)
   })
 
   it('treats a non-object payload as an absent session', async () => {
     const client = fakeClient()
     client.store.set('ream:session:sid', '"a string"')
-    expect(await new RedisDriver(client).read('sid')).toEqual({})
+    expect(await new RedisDriver(client).read('sid')).toBe(null)
   })
 
   it('destroys a session', async () => {
@@ -65,7 +65,7 @@ describe('session RedisDriver', () => {
     const driver = new RedisDriver(client)
     await driver.write('sid', { a: 1 }, 60)
     await driver.destroy('sid')
-    expect(await driver.read('sid')).toEqual({})
+    expect(await driver.read('sid')).toBe(null)
   })
 
   it('slides the expiry on touch', async () => {

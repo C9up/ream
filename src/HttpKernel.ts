@@ -49,6 +49,11 @@ export interface HttpKernelConfig {
    * could rewrite itself into a DELETE.
    */
   allowMethodSpoofing?: boolean
+  /**
+   * Default callback name for `response.jsonp()` (AdonisJS
+   * `http.jsonpCallbackName`). Falls back to `callback`.
+   */
+  jsonpCallbackName?: string
 }
 
 export interface HttpKernelResponse {
@@ -170,6 +175,9 @@ export function createHttpKernel(
     // What Adonis binds on every request's resolver: the context itself, so a
     // controller or service can take `HttpContext` as a constructor dependency.
     resolver?.bindValue(HttpContext, ctx)
+    if (config.jsonpCallbackName !== undefined) {
+      ctx.response.setJsonpCallbackName(config.jsonpCallbackName)
+    }
     if (config.allowMethodSpoofing === true) {
       // Was never wired: the setter existed but nothing called it, so a
       // migrated config asking for spoofing got a `_method` field that did

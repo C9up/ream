@@ -114,16 +114,16 @@ export class RedisDriver implements SessionDriverWithTagging {
    * A corrupt value would otherwise 500 every request carrying that cookie,
    * with no way for the visitor to recover — a new session is the safe answer.
    */
-  async read(sessionId: string): Promise<Record<string, unknown>> {
+  async read(sessionId: string): Promise<Record<string, unknown> | null> {
     const client = await this.#client()
     const raw = await client.get(this.#key(sessionId))
-    if (raw === null) return {}
+    if (raw === null) return null
 
     try {
       const parsed: unknown = JSON.parse(raw)
-      return isPlainRecord(parsed) ? parsed : {}
+      return isPlainRecord(parsed) ? parsed : null
     } catch {
-      return {}
+      return null
     }
   }
 
@@ -169,7 +169,14 @@ export class RedisDriver implements SessionDriverWithTagging {
         stale.push(id)
         continue
       }
-      sessions.push({ id, data: await this.read(id) })
+      // The EXISTS check above already established the key is there; a null
+      // here means it expired in the gap, and that device is no longer active.
+      const data = await this.read(id)
+      if (data === null) {
+        stale.push(id)
+        continue
+      }
+      sessions.push({ id, data })
     }
     if (stale.length > 0) await client.srem(key, ...stale)
     return sessions

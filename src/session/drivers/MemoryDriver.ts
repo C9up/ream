@@ -29,11 +29,11 @@ export class MemoryDriver implements SessionDriverWithTagging {
     this.#maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES)
   }
 
-  async read(sessionId: string): Promise<Record<string, unknown>> {
+  async read(sessionId: string): Promise<Record<string, unknown> | null> {
     const entry = this.#store.get(sessionId)
     if (!entry || entry.expiresAt < Date.now()) {
       this.#store.delete(sessionId)
-      return {}
+      return null
     }
     return { ...entry.data }
   }

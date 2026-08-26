@@ -36,26 +36,26 @@ export class FileDriver implements SessionDriver {
     return path.join(this.#location, `${name}.json`)
   }
 
-  async read(sessionId: string): Promise<Record<string, unknown>> {
+  async read(sessionId: string): Promise<Record<string, unknown> | null> {
     let raw: string
     try {
       raw = await fs.promises.readFile(this.#pathFor(sessionId), 'utf8')
     } catch {
-      return {}
+      return null
     }
     try {
       const parsed: unknown = JSON.parse(raw)
-      if (typeof parsed !== 'object' || parsed === null) return {}
+      if (typeof parsed !== 'object' || parsed === null) return null
       const entry = parsed as { expiresAt?: number; data?: Record<string, unknown> }
       if (typeof entry.expiresAt === 'number' && entry.expiresAt < Date.now()) {
         await this.destroy(sessionId)
-        return {}
+        return null
       }
       return entry.data ?? {}
     } catch {
       // A truncated or hand-edited file is a session we cannot trust; treat it
       // as absent rather than handing a half-parsed object to the app.
-      return {}
+      return null
     }
   }
 
@@ -76,7 +76,9 @@ export class FileDriver implements SessionDriver {
 
   async touch(sessionId: string, ttl: number): Promise<void> {
     const data = await this.read(sessionId)
-    if (Object.keys(data).length === 0) return
+    // Nothing stored: there is no expiry to slide, and writing here would
+    // create the very session that was not there.
+    if (data === null || Object.keys(data).length === 0) return
     await this.write(sessionId, data, ttl)
   }
 }

@@ -171,6 +171,17 @@ export interface RouteInfo {
 /** Ambient per-request context store (AdonisJS `HttpContext` ALS accessor). */
 const httpContextStorage = new AsyncLocalStorage<HttpContext>()
 
+/**
+ * Whether the ambient context is being tracked.
+ *
+ * NAMED DEVIATION — on by default, where AdonisJS makes it opt-in through
+ * `useAsyncLocalStorage` in `config/app.ts`. Ream's own middleware and service
+ * accessors read the ambient context, so defaulting it off would break the
+ * framework's own wiring rather than just an app's. Turn it off with
+ * {@link HttpContext.useAsyncLocalStorage} to reclaim the tracking cost.
+ */
+let asyncLocalStorageEnabled = true
+
 export class HttpContext extends Macroable {
   /**
    * @internal Run `fn` with `ctx` as the ambient HttpContext, so code deep in
@@ -179,16 +190,50 @@ export class HttpContext extends Macroable {
    * request pipeline in this.
    */
   static run<T>(ctx: HttpContext, fn: () => T): T {
+    if (!asyncLocalStorageEnabled) return fn()
     return httpContextStorage.run(ctx, fn)
   }
 
-  /** The ambient HttpContext, or `undefined` outside a request (AdonisJS `HttpContext.get()`). */
-  static get(): HttpContext | undefined {
-    return httpContextStorage.getStore()
+  /**
+   * Whether the ambient context is being tracked (AdonisJS
+   * `HttpContext.usingAsyncLocalStorage`). When false, {@link get} always
+   * answers `null` and {@link getOrFail} always throws.
+   */
+  static get usingAsyncLocalStorage(): boolean {
+    return asyncLocalStorageEnabled
+  }
+
+  /**
+   * Turn ambient-context tracking on or off.
+   *
+   * AdonisJS decides this from `useAsyncLocalStorage` in `config/app.ts`; ream
+   * has it on by default (see the note on the storage above) and exposes the
+   * switch instead of a config key, so a benchmark or a worker process can
+   * drop the tracking without a config file.
+   */
+  static useAsyncLocalStorage(enabled: boolean): void {
+    asyncLocalStorageEnabled = enabled
+  }
+
+  /**
+   * The ambient HttpContext, or `null` outside a request (AdonisJS
+   * `HttpContext.get()`).
+   *
+   * `null`, not `undefined`: upstream's contract is `HttpContext | null`, and a
+   * migrated `=== null` check has to keep working.
+   */
+  static get(): HttpContext | null {
+    if (!asyncLocalStorageEnabled) return null
+    return httpContextStorage.getStore() ?? null
   }
 
   /** The ambient HttpContext, or throw outside a request (AdonisJS `HttpContext.getOrFail()`). */
   static getOrFail(): HttpContext {
+    if (!asyncLocalStorageEnabled) {
+      throw new Error(
+        '[E_HTTP_CONTEXT_NOT_FOUND] HttpContext.getOrFail() called while ambient-context tracking is off. Re-enable it with HttpContext.useAsyncLocalStorage(true), or pass ctx explicitly.',
+      )
+    }
     const ctx = httpContextStorage.getStore()
     if (!ctx) {
       throw new Error(

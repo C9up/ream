@@ -13,7 +13,16 @@
 import type { SessionRedisClientSource } from './drivers/RedisDriver.js'
 
 export interface SessionDriver {
-  read(sessionId: string): Promise<Record<string, unknown>>
+  /**
+   * The stored session, or `null` when the store has no entry for this id
+   * (AdonisJS `SessionStoreContract.read`).
+   *
+   * `null` and `{}` mean different things: the first is "no session here",
+   * the second "a session that happens to be empty". Without the difference a
+   * cookie whose server-side row has expired looked like a live session, and
+   * `commit()` touched a row that was not there.
+   */
+  read(sessionId: string): Promise<Record<string, unknown> | null>
   write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void>
   destroy(sessionId: string): Promise<void>
   touch(sessionId: string, ttl: number): Promise<void>
@@ -496,7 +505,11 @@ export class Session {
   async initiate(): Promise<void> {
     if (this.#initiated || this.#driver === undefined) return
     this.#initiated = true
-    this.#hydrate(await this.#driver.read(this.#sessionId))
+    const stored = await this.#driver.read(this.#sessionId)
+    // The store is the authority on existence: a cookie can outlive the row it
+    // points at, and that session is fresh however old its id is.
+    if (stored === null) this.#fresh = true
+    this.#hydrate(stored ?? {})
   }
 
   /**

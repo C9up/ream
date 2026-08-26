@@ -122,7 +122,9 @@ export default class SessionMiddleware {
     if (this.#cookieDriver) {
       const data = await this.#driver.read(sessionId ?? '')
       sessionId = sessionId ?? generateSessionId()
-      const session = new Session(sessionId, data)
+      // `null` means the cookie carried nothing readable — an empty session,
+      // not an absent one, since for this driver the cookie IS the store.
+      const session = new Session(sessionId, data ?? {})
       // No store to commit to: the cookie written below IS the storage, so the
       // session is seated without one and `commit()` has nothing to do.
       session.setStore(this.#driver, { fresh: !hadIncomingCookie, ttl: maxAge })

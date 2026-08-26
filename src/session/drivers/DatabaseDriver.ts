@@ -70,16 +70,16 @@ export class DatabaseDriver implements SessionDriverWithTagging {
     this.#table = table
   }
 
-  async read(sessionId: string): Promise<Record<string, unknown>> {
+  async read(sessionId: string): Promise<Record<string, unknown> | null> {
     const rows = await this.#db.query<{ data: string; expires_at: number | string }>(
       `SELECT data, expires_at FROM ${this.#table} WHERE id = ?`,
       [sessionId],
     )
     const row = rows[0]
-    if (!row) return {}
+    if (!row) return null
     if (Number(row.expires_at) < Date.now()) {
       await this.destroy(sessionId)
-      return {}
+      return null
     }
     return parseData(row.data)
   }

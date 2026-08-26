@@ -39,7 +39,7 @@ describe('ream > file session driver', () => {
   it('treats an expired session as absent', async () => {
     const driver = new FileDriver({ location: dir })
     await driver.write('sid', { user: 1 }, -1)
-    expect(await driver.read('sid')).toEqual({})
+    expect(await driver.read('sid')).toBe(null)
   })
 
   it('treats an unreadable file as absent rather than half-parsing it', async () => {
@@ -47,7 +47,7 @@ describe('ream > file session driver', () => {
     await driver.write('sid', { user: 1 }, 3600)
     const [file] = fs.readdirSync(dir)
     fs.writeFileSync(path.join(dir, file), '{"data":{"user"')
-    expect(await driver.read('sid')).toEqual({})
+    expect(await driver.read('sid')).toBe(null)
   })
 
   it('destroys and touches', async () => {
@@ -56,7 +56,7 @@ describe('ream > file session driver', () => {
     await driver.touch('sid', 7200)
     expect(await driver.read('sid')).toEqual({ user: 1 })
     await driver.destroy('sid')
-    expect(await driver.read('sid')).toEqual({})
+    expect(await driver.read('sid')).toBe(null)
   })
 })
 
@@ -112,7 +112,7 @@ describe('ream > database session driver', () => {
     const db = fakeDb()
     const driver = new DatabaseDriver({ connection: db })
     await driver.write('sid', { user: 1 }, -1)
-    expect(await driver.read('sid')).toEqual({})
+    expect(await driver.read('sid')).toBe(null)
     expect(db.rows.size).toBe(0)
   })
 
@@ -128,6 +128,6 @@ describe('ream > database session driver', () => {
     const driver = new DatabaseDriver({ connection: db })
     await driver.write('sid', { user: 1 }, 3600)
     await driver.destroy('sid')
-    expect(await driver.read('sid')).toEqual({})
+    expect(await driver.read('sid')).toBe(null)
   })
 })

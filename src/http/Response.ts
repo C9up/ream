@@ -140,6 +140,8 @@ export class Response extends Macroable {
   #body = ''
   readonly #finishCallbacks: Array<(err: Error | null) => void> = []
   #finished = false
+  /** Default JSONP callback name (AdonisJS `http.jsonpCallbackName`). */
+  #jsonpCallbackName = 'callback'
   #redirectBuilderFactory?: () => RedirectBuilder
   #streamBackend?: StreamBackend
   #streamId?: string
@@ -268,7 +270,16 @@ export class Response extends Macroable {
    * (valid in JSON, but break JS), so neither the callback nor the payload can
    * inject script.
    */
-  jsonp(body: unknown, callbackName = 'callback'): void {
+  /**
+   * Default callback name when `jsonp()` is called without one (AdonisJS reads
+   * it from `http.jsonpCallbackName`). Injected by HttpKernel, the same way the
+   * cookie signer and signed-URL services are.
+   */
+  setJsonpCallbackName(name: string): void {
+    this.#jsonpCallbackName = name
+  }
+
+  jsonp(body: unknown, callbackName: string = this.#jsonpCallbackName): void {
     // Sanitise the callback name to identifier-safe characters — the JSONP XSS
     // guard (an attacker-controlled callback must not inject script).
     const safeCallback = callbackName.replace(/[^\w$.]/g, '')
