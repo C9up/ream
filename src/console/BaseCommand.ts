@@ -112,7 +112,7 @@ export abstract class BaseCommand {
 
   /**
    * The error thrown by `prepare` / `interact` / `run`, assigned before
-   * `completed()` runs so the hook can inspect it (Console parity).
+   * `completed()` runs so the hook can inspect it.
    */
   error?: unknown
 
@@ -124,6 +124,13 @@ export abstract class BaseCommand {
    * `run`, then `completed` — which runs even when one of the earlier stages
    * threw. Returning `true` from `completed()` marks the error handled, so the
    * kernel stops propagating it.
+   *
+   * A SUPERSET, not parity: AdonisJS carried these three through ace 13 and
+   * dropped them in ace 14, whose command lifecycle is `hydrate()` then
+   * `run()` — both of which {@link hydrate} and {@link run} match exactly.
+   * They are kept because a `completed()` that runs even after a failure is
+   * the only place a command can clean up after itself, and a command written
+   * against either lifecycle works here.
    */
   // Parameters are allowed: the container injects them (`@inject()` on a
   // lifecycle method), and a no-arg signature rejects those commands.
