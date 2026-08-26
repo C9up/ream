@@ -146,10 +146,20 @@ export class Request extends Macroable {
     return !this.fresh()
   }
 
-  /** True when the matched route's name or pattern equals `identifier` (AdonisJS `matchesRoute`). */
-  matchesRoute(identifier: string): boolean {
+  /**
+   * True when the matched route's name or pattern is one of `identifier`
+   * (AdonisJS `matchesRoute`).
+   *
+   * Takes a list as well as a single value, as upstream does — the usual call
+   * is "am I on any of these routes", and a caller with several had to write
+   * the `.some()` themselves.
+   */
+  matchesRoute(identifier: string | string[]): boolean {
     if (!this.#routeInfo) return false
-    return this.#routeInfo.name === identifier || this.#routeInfo.pattern === identifier
+    const candidates = Array.isArray(identifier) ? identifier : [identifier]
+    return candidates.some(
+      (one) => this.#routeInfo?.name === one || this.#routeInfo?.pattern === one,
+    )
   }
 
   /**
@@ -337,6 +347,10 @@ export class Request extends Macroable {
    * Signed cookie value, verified with APP_KEY (AdonisJS default). Returns
    * `defaultValue` (or null) when absent OR when the signature is invalid
    * (tampered / not signed).
+   *
+   * NAMED DEVIATION — the fallback is `??`, where AdonisJS writes `||`. A
+   * cookie legitimately holding `0`, `false` or `""` is a value, not an
+   * absence, and upstream hands back the default for all three. Kept.
    */
   cookie(name: string): string | null
   cookie(name: string, defaultValue: string): string

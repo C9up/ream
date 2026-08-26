@@ -56,4 +56,16 @@ describe('Request.fresh / stale / matchesRoute', () => {
     expect(r.matchesRoute('/users/:id')).toBe(true)
     expect(r.matchesRoute('posts.index')).toBe(false)
   })
+
+  it('matchesRoute() takes a list, as AdonisJS does', () => {
+    const r = req({})
+    r.setRouteInfo({ name: 'users.show', pattern: '/users/:id' })
+
+    // "am I on any of these routes" is the usual question; a caller with
+    // several identifiers had to write the .some() themselves.
+    expect(r.matchesRoute(['posts.index', 'users.show'])).toBe(true)
+    expect(r.matchesRoute(['posts.index', '/users/:id'])).toBe(true)
+    expect(r.matchesRoute(['posts.index', 'comments.store'])).toBe(false)
+    expect(r.matchesRoute([])).toBe(false)
+  })
 })
