@@ -76,18 +76,26 @@ export class CookieSigner {
     return JSON.stringify(envelope)
   }
 
-  /** Unwrap a sealed payload, refusing an expired one or the wrong purpose. */
+  /**
+   * Unwrap a sealed payload, refusing an expired one or the wrong purpose.
+   *
+   * Anything that is not an envelope is refused rather than handed back.
+   * `#seal` only ever produces one, so a non-envelope did not come from this
+   * class — and returning it would skip the expiry and purpose checks below,
+   * which is precisely the downgrade those checks exist to prevent. Failing
+   * closed costs a value nothing here produced; failing open costs the
+   * guarantee that a token sealed for one use cannot be replayed into another.
+   */
   #open(raw: string, purpose?: string): string | null {
-    let envelope: Envelope
+    let parsed: unknown
     try {
-      const parsed: unknown = JSON.parse(raw)
-      if (typeof parsed !== 'object' || parsed === null) return null
-      envelope = parsed as Envelope
+      parsed = JSON.parse(raw)
     } catch {
-      // Not an envelope — a value sealed before this format existed.
-      return raw
+      return null
     }
-    if (typeof envelope.m !== 'string') return raw
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const envelope = parsed as Envelope
+    if (typeof envelope.m !== 'string') return null
     if (envelope.e !== undefined && envelope.e < Date.now()) return null
     if ((envelope.p ?? undefined) !== purpose) return null
     return envelope.m

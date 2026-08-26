@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { CookieSigner } from '../../src/security/CookieSigner.js'
+import { hmacSign } from '../../src/security/crypto.js'
 
 const signer = new CookieSigner('super-secret-key')
 
@@ -99,5 +100,50 @@ describe('CookieSigner > purpose and expiry (AdonisJS parity)', () => {
   it('refuses a missing or trivially short APP_KEY', () => {
     expect(() => new CookieSigner('')).toThrow(/Missing APP_KEY/)
     expect(() => new CookieSigner('short')).toThrow(/at least 16 characters/)
+  })
+})
+
+describe('CookieSigner refuses what it did not seal', () => {
+  const secret = 'a-sufficiently-long-app-key-for-tests'
+
+  it('refuses a correctly-signed value that is not an envelope', () => {
+    // Forged the way an older format would have looked: a valid signature over
+    // a bare payload. The signature checks out, so the only thing standing
+    // between it and the caller is the envelope check.
+    const signer = new CookieSigner(secret)
+    const bare = Buffer.from('plain-old-value').toString('base64url')
+    const forged = `${bare}.${hmacSign(bare, secret)}`
+
+    // It used to be handed back verbatim, which skipped the purpose check
+    // below and let a value sealed for nothing pass as one sealed for a
+    // specific use.
+    expect(signer.unsign(forged)).toBe(null)
+    expect(signer.unsign(forged, 'password-reset')).toBe(null)
+  })
+
+  it('refuses a signed JSON value with no message field', () => {
+    const signer = new CookieSigner(secret)
+    const payload = Buffer.from(JSON.stringify({ p: 'password-reset' })).toString('base64url')
+    const forged = `${payload}.${hmacSign(payload, secret)}`
+
+    expect(signer.unsign(forged, 'password-reset')).toBe(null)
+  })
+
+  it('still round-trips what it did seal, purpose included', () => {
+    const signer = new CookieSigner(secret)
+    const signed = signer.sign('value', undefined, 'password-reset')
+
+    expect(signer.unsign(signed, 'password-reset')).toBe('value')
+    expect(signer.unsign(signed)).toBe(null)
+    expect(signer.unsign(signed, 'other')).toBe(null)
+  })
+
+  it('round-trips an encrypted value and refuses the wrong purpose', () => {
+    const signer = new CookieSigner(secret)
+    const sealed = signer.encrypt('secret-value', undefined, 'session')
+
+    expect(signer.decrypt(sealed, 'session')).toBe('secret-value')
+    expect(signer.decrypt(sealed)).toBe(null)
+    expect(signer.decrypt(sealed, 'other')).toBe(null)
   })
 })
