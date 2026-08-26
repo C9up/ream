@@ -161,8 +161,15 @@ export class Request extends Macroable {
     this.#allowMethodSpoofing = enabled
   }
 
-  /** Request URL (path + query string). */
-  url(includeQs = true): string {
+  /**
+   * The request URL — the PATHNAME by default, as in AdonisJS
+   * (`url(includeQueryString)`, false unless asked). Ream defaulted to
+   * including the query string, so a value used as a cache key, a log line or
+   * a route comparison silently carried the query with it.
+   *
+   * Pass `true` for path + query; {@link completeUrl} adds the origin.
+   */
+  url(includeQs = false): string {
     if (includeQs && this.#raw.query) {
       return `${this.#raw.path}?${this.#raw.query}`
     }
@@ -398,7 +405,9 @@ export class Request extends Macroable {
    */
   hasValidSignature(purpose?: string): boolean {
     if (!this.#signedUrl) return false
-    return this.#signedUrl.verify(this.url(), purpose)
+    // `url(true)`: the signature covers the path AND the query string —
+    // the expiry and the signature itself live in the query.
+    return this.#signedUrl.verify(this.url(true), purpose)
   }
 
   /** Get the raw body as a string (decoded from base64 if binary). */
@@ -683,7 +692,11 @@ export class Request extends Macroable {
   all(): Dict<unknown> {
     if (!this.#merged) {
       this.#ensureParsedBody()
-      this.#merged = { ...this.qs(), ...this.#parsedBody }
+      // `{ ...body, ...qs }` — the QUERY STRING wins, as in AdonisJS
+      // (`#requestData = { ...#requestBody, ...#requestQs }`). Ream had it the
+      // other way round, so `?id=1` with a body `{ id: 2 }` read 2 here and 1
+      // there — silently, on the request field an app trusts most.
+      this.#merged = { ...this.#parsedBody, ...this.qs() }
       // Snapshot the first-seen input as the immutable "original" (flash old-input).
       if (this.#original === undefined) this.#original = { ...this.#merged }
     }

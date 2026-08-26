@@ -588,14 +588,31 @@ export class Response extends Macroable {
 
   // ─── Redirect ─────────────────────────────────────────────
 
-  /** Get a redirect builder. */
-  redirect(): RedirectBuilder {
-    if (this.#redirectBuilderFactory) {
-      return this.#redirectBuilderFactory()
+  /**
+   * Redirect, or get the builder.
+   *
+   * `redirect()` with no argument hands back the builder to chain on. With a
+   * PATH it redirects immediately, as AdonisJS does
+   * (`redirect(path, forwardQueryString?, statusCode?)`); `'back'` goes to the
+   * referrer. Ream always returned the builder, so `response.redirect('/login')`
+   * — the shortest and most obvious spelling — silently did nothing.
+   */
+  redirect(): RedirectBuilder
+  redirect(path: string, forwardQueryString?: boolean, statusCode?: number): void
+  redirect(path?: string, forwardQueryString = false, statusCode = 302): RedirectBuilder | void {
+    if (!this.#redirectBuilderFactory) {
+      throw new Error(
+        'redirect() requires an HttpContext. Response was created outside a request handler.',
+      )
     }
-    throw new Error(
-      'redirect() requires an HttpContext. Response was created outside a request handler.',
-    )
+    const builder = this.#redirectBuilderFactory()
+    if (path === undefined) return builder
+    if (forwardQueryString) builder.withQs()
+    if (path === 'back') {
+      builder.status(statusCode).back()
+      return
+    }
+    builder.status(statusCode).toPath(path)
   }
 
   /** @internal Set the redirect builder factory (injected by HttpContext). */

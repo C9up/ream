@@ -35,14 +35,17 @@ describe('Request.input — dot-notation (AdonisJS parity)', () => {
     expect(r.input('email')).toBe('a@b.ch')
   })
 
-  it('merges query string with body (body wins)', () => {
+  it('merges query string with body — the QUERY wins', () => {
+    // AdonisJS composes `{ ...requestBody, ...requestQs }`, so a key present in
+    // both reads its query value. This test used to assert the opposite while
+    // claiming parity, which is how the divergence survived.
     const r = req({
       query: 'page=2&q=x',
       body: JSON.stringify({ q: 'body' }),
       headers: { 'content-type': 'application/json' },
     })
     expect(r.input('page')).toBe('2')
-    expect(r.input('q')).toBe('body')
+    expect(r.input('q')).toBe('x')
   })
 })
 

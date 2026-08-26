@@ -322,8 +322,13 @@ export function createHttpKernel(
       // the HyperServer keeps feeding a dead stream slot forever.
       await ctx.response.abortStream()
       try {
-        await handler.handle(error, ctx)
+        // REPORT first, then handle — the AdonisJS order
+        // (`#requestErrorResponder`: `await report(error, ctx)` before
+        // `handle`). Handling first meant a throwing `handle()` fell into the
+        // catch below and the error was never reported: it vanished from the
+        // logs and the operator saw only "ExceptionHandler failed".
         await handler.report(error, ctx)
+        await handler.handle(error, ctx)
       } catch (handlerError) {
         console.error('ExceptionHandler failed:', handlerError)
         ctx.response
