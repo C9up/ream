@@ -40,8 +40,12 @@ export class E_INSECURE_APP_KEY extends Error {
 
 /** The envelope carried inside an encrypted or signed value. */
 interface Envelope {
-  /** The payload. */
-  m: string
+  /**
+   * The payload. Any JSON value, not just a string: AdonisJS' verifier signs
+   * whatever you hand it, and a caller signing `{ id: 1 }` should not have to
+   * stringify it first.
+   */
+  m: unknown
   /** Epoch-ms expiry, when one was given. */
   e?: number
   /** The purpose it was sealed for, when one was given. */
@@ -69,7 +73,7 @@ export class CookieSigner {
    * another — a password-reset token presented as a session cookie fails here
    * rather than being honoured.
    */
-  #seal(value: string, expiresIn?: number, purpose?: string): string {
+  #seal(value: unknown, expiresIn?: number, purpose?: string): string {
     const envelope: Envelope = { m: value }
     if (expiresIn !== undefined) envelope.e = Date.now() + expiresIn
     if (purpose !== undefined) envelope.p = purpose
@@ -86,7 +90,7 @@ export class CookieSigner {
    * closed costs a value nothing here produced; failing open costs the
    * guarantee that a token sealed for one use cannot be replayed into another.
    */
-  #open(raw: string, purpose?: string): string | null {
+  #open(raw: string, purpose?: string): unknown {
     let parsed: unknown
     try {
       parsed = JSON.parse(raw)
@@ -95,7 +99,10 @@ export class CookieSigner {
     }
     if (typeof parsed !== 'object' || parsed === null) return null
     const envelope = parsed as Envelope
-    if (typeof envelope.m !== 'string') return null
+    // The KEY must be there, whatever it holds — that is what distinguishes an
+    // envelope from an arbitrary JSON document, and a signed `null` or `0` is a
+    // legitimate payload.
+    if (!('m' in envelope)) return null
     if (envelope.e !== undefined && envelope.e < Date.now()) return null
     if ((envelope.p ?? undefined) !== purpose) return null
     return envelope.m
@@ -107,27 +114,64 @@ export class CookieSigner {
    * `expiresIn` is in milliseconds; `purpose` scopes the signature so it cannot
    * be replayed somewhere else.
    */
-  sign(value: string, expiresIn?: number, purpose?: string): string {
+  sign(value: unknown, expiresIn?: number, purpose?: string): string {
     const sealed = Buffer.from(this.#seal(value, expiresIn, purpose)).toString('base64url')
     const sig = hmacSign(sealed, this.#secret)
     return `${sealed}.${sig}`
   }
 
   /** Verify and unwrap, returning null when tampered, expired, or mis-purposed. */
-  unsign(signed: string, purpose?: string): string | null {
+  unsign<T = string>(signed: string, purpose?: string): T | null {
     const lastDot = signed.lastIndexOf('.')
     if (lastDot === -1) return null
     const sealed = signed.slice(0, lastDot)
     const sig = signed.slice(lastDot + 1)
     if (!hmacVerify(sealed, sig, this.#secret)) return null
     try {
-      return this.#open(Buffer.from(sealed, 'base64url').toString('utf8'), purpose)
+      return this.#open(Buffer.from(sealed, 'base64url').toString('utf8'), purpose) as T | null
     } catch {
       return null
     }
   }
 
-  encrypt(value: string, expiresIn?: number, purpose?: string): string {
+  /**
+   * The cipher in use (AdonisJS `Encryption.algorithm`).
+   *
+   * `aes-256-gcm`, not upstream's `aes-256-cbc` — see the deviation at the top
+   * of this file.
+   */
+  get algorithm(): 'aes-256-gcm' {
+    return 'aes-256-gcm'
+  }
+
+  /**
+   * Sign and verify WITHOUT encrypting (AdonisJS `Encryption.verifier`).
+   *
+   * The same `sign` / `unsign` this class already exposes, under the name and
+   * shape upstream puts them: an app calling `encryption.verifier.sign(...)`
+   * found nothing here.
+   */
+  get verifier(): {
+    sign(payload: unknown, expiresIn?: number, purpose?: string): string
+    unsign<T = string>(payload: string, purpose?: string): T | null
+  } {
+    return {
+      sign: (payload, expiresIn, purpose) => this.sign(payload, expiresIn, purpose),
+      unsign: <T>(payload: string, purpose?: string) => this.unsign<T>(payload, purpose),
+    }
+  }
+
+  /**
+   * Another signer on a different secret (AdonisJS `Encryption.child`).
+   *
+   * What key rotation is built on: keep the old secret's signer around to read
+   * values already in the wild while the new one writes.
+   */
+  child(secret?: string): CookieSigner {
+    return new CookieSigner(secret ?? this.#secret)
+  }
+
+  encrypt(value: unknown, expiresIn?: number, purpose?: string): string {
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', this.#keyBuffer, iv)
     const sealed = this.#seal(value, expiresIn, purpose)
@@ -136,7 +180,7 @@ export class CookieSigner {
     return `${iv.toString('base64url')}.${encrypted.toString('base64url')}.${tag.toString('base64url')}`
   }
 
-  decrypt(encrypted: string, purpose?: string): string | null {
+  decrypt<T = string>(encrypted: string, purpose?: string): T | null {
     const parts = encrypted.split('.')
     if (parts.length !== 3) return null
     try {
@@ -146,7 +190,7 @@ export class CookieSigner {
       const decipher = createDecipheriv('aes-256-gcm', this.#keyBuffer, iv)
       decipher.setAuthTag(tag)
       const raw = Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')
-      return this.#open(raw, purpose)
+      return this.#open(raw, purpose) as T | null
     } catch {
       return null
     }

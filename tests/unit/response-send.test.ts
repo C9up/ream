@@ -338,3 +338,33 @@ describe('Response.jsonp default callback name', () => {
     expect(res.getBody()).not.toContain('<script>')
   })
 })
+
+describe('Response state getters (AdonisJS names)', () => {
+  it('reports a pending response before anything is written', () => {
+    const res = new Response()
+    expect(res.isPending).toBe(true)
+    expect(res.finished).toBe(false)
+    expect(res.headersSent).toBe(false)
+    expect(res.hasContent).toBe(false)
+    expect(res.hasLazyBody).toBe(false)
+  })
+
+  it('reports content and completion once a body is sent', () => {
+    const res = new Response()
+    res.json({ a: 1 })
+
+    // Only `isFinished()` existed, so a migrated `if (response.finished)` read
+    // undefined and took the wrong branch without a word.
+    expect(res.finished).toBe(true)
+    expect(res.isFinished()).toBe(true)
+    expect(res.hasContent).toBe(true)
+    expect(res.hasLazyBody).toBe(true)
+    expect(res.isPending).toBe(false)
+  })
+
+  it('an empty body is not content', () => {
+    const res = new Response()
+    res.status(204).send('')
+    expect(res.hasContent).toBe(false)
+  })
+})

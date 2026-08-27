@@ -1019,6 +1019,48 @@ export class Response extends Macroable {
     return this.#finished
   }
 
+  // ─── State (AdonisJS getters) ──────────────────────────────
+  //
+  // Same questions AdonisJS answers on its response, under the same names. Ours
+  // only had `isFinished()`, so a migrated `if (response.finished)` read
+  // `undefined` and took the wrong branch without a word.
+
+  /** Whether the response has been written out. */
+  get finished(): boolean {
+    return this.#finished
+  }
+
+  /** Whether a body has been set. */
+  get hasContent(): boolean {
+    return this.#body.length > 0
+  }
+
+  /** Whether the body is a stream still being drained. */
+  get hasStream(): boolean {
+    return this.#pendingStream !== undefined
+  }
+
+  /** Whether a body of any kind is waiting to go out. */
+  get hasLazyBody(): boolean {
+    return this.hasContent || this.hasStream
+  }
+
+  /**
+   * Whether the headers have gone out.
+   *
+   * Ream serialises the whole response across the NAPI boundary in one step,
+   * so headers and body leave together: this is true exactly when the response
+   * is finished, rather than tracking a separate Node `headersSent`.
+   */
+  get headersSent(): boolean {
+    return this.#finished
+  }
+
+  /** Whether nothing has been sent yet — the window a middleware can still write in. */
+  get isPending(): boolean {
+    return !this.headersSent && !this.finished
+  }
+
   /** @internal Set body directly (used by redirect, exception handler). */
   setBody(body: string): void {
     this.#body = body

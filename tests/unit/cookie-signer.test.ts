@@ -147,3 +147,66 @@ describe('CookieSigner refuses what it did not seal', () => {
     expect(signer.decrypt(sealed, 'other')).toBe(null)
   })
 })
+
+describe('CookieSigner — the AdonisJS Encryption shape', () => {
+  const secret = 'a-sufficiently-long-app-key-for-tests'
+
+  it('exposes sign/unsign through `verifier`, as upstream does', () => {
+    const signer = new CookieSigner(secret)
+
+    // An app calling `encryption.verifier.sign(...)` found nothing here.
+    const signed = signer.verifier.sign('value', undefined, 'reset')
+    expect(signer.verifier.unsign(signed, 'reset')).toBe('value')
+    expect(signer.verifier.unsign(signed)).toBe(null)
+  })
+
+  it('signs any JSON payload, not only a string', () => {
+    const signer = new CookieSigner(secret)
+    const signed = signer.sign({ id: 1, roles: ['admin'] })
+
+    expect(signer.unsign<{ id: number; roles: string[] }>(signed)).toEqual({
+      id: 1,
+      roles: ['admin'],
+    })
+  })
+
+  it('round-trips falsy payloads that are real values', () => {
+    const signer = new CookieSigner(secret)
+
+    for (const value of [0, false, '', null]) {
+      const signed = signer.sign(value)
+      expect(signer.unsign<unknown>(signed)).toBe(value)
+    }
+  })
+
+  it('still refuses a signed JSON document that is not an envelope', () => {
+    const signer = new CookieSigner(secret)
+    const payload = Buffer.from(JSON.stringify({ id: 1 })).toString('base64url')
+    const forged = `${payload}.${hmacSign(payload, secret)}`
+
+    // Widening the payload must not widen what counts as an envelope.
+    expect(signer.unsign(forged)).toBe(null)
+  })
+
+  it('encrypts any JSON payload too', () => {
+    const signer = new CookieSigner(secret)
+    const sealed = signer.encrypt({ a: 1 }, undefined, 'session')
+
+    expect(signer.decrypt<{ a: number }>(sealed, 'session')).toEqual({ a: 1 })
+  })
+
+  it('child() reads what its own secret signed, and nothing else', () => {
+    const parent = new CookieSigner(secret)
+    const other = parent.child('a-completely-different-secret-key')
+
+    // What key rotation is built on: the old signer still reads what is in the
+    // wild while the new one writes.
+    const signedByParent = parent.sign('v')
+    expect(other.unsign(signedByParent)).toBe(null)
+    expect(parent.unsign(signedByParent)).toBe('v')
+  })
+
+  it('reports its algorithm', () => {
+    expect(new CookieSigner(secret).algorithm).toBe('aes-256-gcm')
+  })
+})
