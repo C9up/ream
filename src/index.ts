@@ -49,6 +49,7 @@ export {
   type ExceptionClass,
   type ExceptionConstructor,
   ExceptionHandler,
+  type HttpError,
   InvalidArgumentsException,
   RuntimeException,
   type StatusPageRenderer,

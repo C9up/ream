@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createError, Exception, ExceptionHandler } from '../../src/http/Exception.js'
+import type { HttpError } from '../../src/http/Exception.js'
+ import { createError, E_VALIDATION_ERROR, Exception, ExceptionHandler } from '../../src/http/Exception.js'
 import { HttpContext } from '../../src/http/HttpContext.js'
 import type { RawRequest } from '../../src/http/Request.js'
 
@@ -93,12 +94,14 @@ describe('ExceptionHandler > status pages', () => {
 })
 
 describe('ExceptionHandler > shouldReport + getErrorLogLevel', () => {
+  // Both hooks take the normalised `HttpError`, as they do in AdonisJS — the
+  // handler normalises once and every override downstream reads one shape.
   class Probe extends ExceptionHandler {
     reportable(error: unknown): boolean {
-      return this.shouldReport(error)
+      return this.shouldReport(this.toHttpError(error))
     }
     level(status: number): string {
-      return this.getErrorLogLevel(status)
+      return this.getErrorLogLevel(this.toHttpError(new Exception('probe', { status })))
     }
   }
 
@@ -128,5 +131,153 @@ describe('ExceptionHandler > shouldReport + getErrorLogLevel', () => {
     expect(probe.level(503)).toBe('error')
     expect(probe.level(404)).toBe('warn')
     expect(probe.level(200)).toBe('info')
+  })
+})
+
+describe('ExceptionHandler > render hooks (AdonisJS override points)', () => {
+  /** Read what the handler wrote onto the response, JSON bodies parsed back. */
+  function written(ctx: HttpContext): { status: number; body: unknown } {
+    const raw = ctx.response.getBody()
+    let body: unknown = raw
+    if (typeof raw === 'string' && (raw.startsWith('{') || raw.startsWith('['))) {
+      try {
+        body = JSON.parse(raw)
+      } catch {
+        body = raw
+      }
+    }
+    return { status: ctx.response.getStatus(), body }
+  }
+
+  it('routes a validation failure to the validation renderers', async () => {
+    // rune and VineJS both raise `E_VALIDATION_ERROR` carrying `messages`.
+    // Before this, they fell through to the generic renderer and the per-field
+    // detail never reached the client.
+    const ctx = ctxWith('application/json')
+    await new ExceptionHandler().handle(
+      new E_VALIDATION_ERROR([{ field: 'email', message: 'is required', rule: 'required' }]),
+      ctx,
+    )
+    expect(written(ctx)).toEqual({
+      status: 422,
+      body: { errors: [{ field: 'email', message: 'is required', rule: 'required' }] },
+    })
+  })
+
+  it('lets an app override renderErrorAsJSON', async () => {
+    // The whole point: an override has to be reached. It was not, because the
+    // renderers were private and `handle` called them directly.
+    class Handler extends ExceptionHandler {
+      override async renderErrorAsJSON(error: HttpError, ctx: HttpContext): Promise<void> {
+        ctx.response.status(error.status).json({ mine: error.code })
+      }
+    }
+    const ctx = ctxWith('application/json')
+    await new Handler().handle(new Exception('boom', { status: 500, code: 'E_BOOM' }), ctx)
+    expect(written(ctx)).toEqual({ status: 500, body: { mine: 'E_BOOM' } })
+  })
+
+  it('lets an app override renderValidationErrorAsJSON', async () => {
+    class Handler extends ExceptionHandler {
+      override async renderValidationErrorAsJSON(
+        error: HttpError,
+        ctx: HttpContext,
+      ): Promise<void> {
+        ctx.response.status(error.status).json({ fields: error.messages })
+      }
+    }
+    const ctx = ctxWith('application/json')
+    await new Handler().handle(new E_VALIDATION_ERROR([{ field: 'name' }]), ctx)
+    expect(written(ctx)).toEqual({ status: 422, body: { fields: [{ field: 'name' }] } })
+  })
+
+  it('lets an app override renderError to bypass negotiation entirely', async () => {
+    class Handler extends ExceptionHandler {
+      override async renderError(error: HttpError, ctx: HttpContext): Promise<void> {
+        ctx.response.status(error.status).send('always text')
+      }
+    }
+    const ctx = ctxWith('text/html')
+    await new Handler().handle(new Exception('boom', { status: 500 }), ctx)
+    expect(written(ctx).body).toBe('always text')
+  })
+
+  it('renders validation failures as JSON:API when asked', async () => {
+    const ctx = ctxWith('application/vnd.api+json')
+    await new ExceptionHandler().handle(
+      new E_VALIDATION_ERROR([
+        { field: 'email', message: 'is required', rule: 'required', meta: { min: 3 } },
+      ]),
+      ctx,
+    )
+    expect(written(ctx)).toEqual({
+      status: 422,
+      body: {
+        errors: [
+          {
+            title: 'is required',
+            code: 'required',
+            source: { pointer: 'email' },
+            meta: { min: 3 },
+          },
+        ],
+      },
+    })
+  })
+
+  it('renders validation failures as HTML when asked', async () => {
+    const ctx = ctxWith('text/html')
+    await new ExceptionHandler().handle(
+      new E_VALIDATION_ERROR([
+        { field: 'email', message: 'is required' },
+        { field: 'name', message: 'is too short' },
+      ]),
+      ctx,
+    )
+    expect(written(ctx).body).toBe('email - is required<br />name - is too short')
+  })
+
+  it('escapes validation text in the HTML renderer', async () => {
+    const ctx = ctxWith('text/html')
+    await new ExceptionHandler().handle(
+      new E_VALIDATION_ERROR([{ field: 'bio', message: '<script>alert(1)</script>' }]),
+      ctx,
+    )
+    expect(written(ctx).body).not.toContain('<script>')
+  })
+
+  it('survives a validation message that is not the expected shape', async () => {
+    // The messages come from whichever validator the app wired; a renderer must
+    // not throw while rendering someone else's error.
+    const ctx = ctxWith('text/html')
+    await expect(
+      new ExceptionHandler().handle(new E_VALIDATION_ERROR([null, 'plain', 42]), ctx),
+    ).resolves.toBeUndefined()
+  })
+
+  it('toHttpError keeps the thrown object itself, so instanceof still matches', async () => {
+    // `ignoreExceptions` matches with instanceof, and a self-handling error has
+    // to stay bound to its own instance. A copy would break both silently.
+    class Probe extends ExceptionHandler {
+      normalise(error: unknown): HttpError {
+        return this.toHttpError(error)
+      }
+    }
+    const thrown = new Exception('boom', { status: 503, code: 'E_BOOM' })
+    const normalised = new Probe().normalise(thrown)
+    expect(normalised).toBe(thrown)
+    expect(normalised.status).toBe(503)
+    expect(normalised.code).toBe('E_BOOM')
+  })
+
+  it('toHttpError gives a non-Error throw a status and a message', async () => {
+    class Probe extends ExceptionHandler {
+      normalise(error: unknown): HttpError {
+        return this.toHttpError(error)
+      }
+    }
+    const normalised = new Probe().normalise('just a string')
+    expect(normalised.status).toBe(500)
+    expect(normalised.message).toBe('just a string')
   })
 })

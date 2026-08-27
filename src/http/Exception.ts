@@ -154,15 +154,16 @@ export class E_VALIDATION_ERROR extends Exception {
   static override status = 422
   static override code = 'E_VALIDATION_ERROR'
 
-  errors: unknown[]
+  /**
+   * Per-field failures. Named `messages` because that is what VineJS, rune and
+   * AdonisJS's own validation renderers read — a handler copied from an Adonis
+   * app reaches for `error.messages`.
+   */
+  messages: unknown[]
 
-  constructor(errors: unknown[]) {
-    super('Validation failed', { status: 422, code: 'E_VALIDATION_ERROR' })
-    this.errors = errors
-  }
-
-  override handle(_error: this, ctx: HttpContext): void {
-    ctx.response.status(422).json({ errors: this.errors })
+  constructor(messages: unknown[]) {
+    super('Validation failure', { status: 422, code: 'E_VALIDATION_ERROR' })
+    this.messages = messages
   }
 }
 
@@ -233,8 +234,34 @@ export class E_HTTP_REQUEST_ABORTED extends Exception {
  * 2. Else → this.handle() → content negotiation (JSON or HTML)
  * 3. Then → this.report() → logging/monitoring
  */
+/**
+ * A thrown value, normalised into the shape every renderer reads.
+ *
+ * AdonisJS hands this to `renderError*` / `renderValidationError*` and to the
+ * status-page renderers, so an app that overrides one of them receives the same
+ * object it would there — a plain record, never an `Error` subclass, because
+ * what is thrown is not always one.
+ */
+export type HttpError = {
+  message: string
+  status: number
+  code: string
+  stack?: string
+  cause?: unknown
+  /** Per-field failures, on a validation error (VineJS / rune shape). */
+  messages?: unknown
+  /** Extra detail an exception chose to carry. */
+  errors?: unknown
+  /** Set when the thrown value handles its own response. */
+  handle?: (error: unknown, ctx: HttpContext) => Promise<void> | void
+  /** Set when the thrown value reports itself. */
+  report?: (error: unknown, ctx: HttpContext) => Promise<void> | void
+  /** A hint appended to the message, when the exception carries one. */
+  help?: string
+}
+
 /** Renders an HTML error page for a status (AdonisJS `StatusPageRenderer`). */
-export type StatusPageRenderer = (error: unknown, ctx: HttpContext) => Promise<string> | string
+export type StatusPageRenderer = (error: HttpError, ctx: HttpContext) => Promise<string> | string
 
 /** A constructor usable in `instanceof` for {@link ExceptionHandler.ignoreExceptions}. */
 export type ExceptionClass = new (...args: never[]) => Error
@@ -268,18 +295,17 @@ export class ExceptionHandler extends Macroable {
   }
 
   /** Log level for an error by status: 5xx→error, 4xx→warn, else info (AdonisJS). */
-  protected getErrorLogLevel(status: number): LogLevel {
-    if (status >= 500) return 'error'
-    if (status >= 400) return 'warn'
+  protected getErrorLogLevel(error: HttpError): LogLevel {
+    if (error.status >= 500) return 'error'
+    if (error.status >= 400) return 'warn'
     return 'info'
   }
 
   /** Whether an error should be reported — honours every ignore list (AdonisJS `shouldReport`). */
-  protected shouldReport(error: unknown): boolean {
+  protected shouldReport(error: HttpError): boolean {
     if (!this.reportErrors) return false
-    const { status, code } = extractErrorMeta(error)
-    if (this.ignoreStatuses.includes(status)) return false
-    if (this.ignoreCodes.includes(code)) return false
+    if (this.ignoreStatuses.includes(error.status)) return false
+    if (this.ignoreCodes.includes(error.code)) return false
     if (this.ignoreExceptions.some((exception) => error instanceof exception)) return false
     return true
   }
@@ -297,95 +323,185 @@ export class ExceptionHandler extends Macroable {
   }
 
   /** Convert an exception to an HTTP response. */
-  async handle(error: unknown, ctx: HttpContext): Promise<void> {
-    // Self-handled errors take over entirely (duck-typed, per AdonisJS — any
-    // thrown value exposing a `handle()` method, not just `Exception` instances).
-    if (isSelfHandling(error)) {
-      await error.handle(error, ctx)
-      return
-    }
-
-    // Negotiation. DEVIATION (named): ream lists `json` FIRST, so a request
-    // with no/`*/*` Accept defaults to JSON (API-first). AdonisJS lists `html`
-    // first (full-stack default). Explicit `text/html` / `vnd.api+json` are
-    // honoured identically.
-    switch (ctx.request.accepts(['json', 'html', 'application/vnd.api+json'])) {
-      case 'application/vnd.api+json':
-        this.#sendJsonApiError(error, ctx)
-        return
-      case 'html':
-        await this.#sendHtmlError(error, ctx)
-        return
-      default:
-        this.#sendJsonError(error, ctx)
-    }
+  /**
+   * Normalise any thrown value into an {@link HttpError}.
+   *
+   * Everything downstream — the renderers, the status pages, the report path —
+   * reads this shape, so a handler override never has to re-sniff whether it
+   * was handed an `Exception`, a plain object, or a string.
+   */
+  protected toHttpError(error: unknown): HttpError {
+    // AdonisJS returns the thrown object ITSELF, filled in — not a copy. That
+    // identity is load-bearing: `ignoreExceptions` matches with `instanceof`,
+    // and `handle`/`report` have to stay bound to their own instance. A copy
+    // would quietly break both.
+    const source: object =
+      typeof error === 'object' && error !== null ? error : new Error(String(error))
+    const { status, code } = extractErrorMeta(error)
+    const message =
+      'message' in source && typeof source.message === 'string' && source.message.length > 0
+        ? source.message
+        : 'Internal server error'
+    return Object.assign(source, { status, code, message })
   }
 
-  /** Pick the user-facing message — full detail only in debug mode. */
-  #errorMessage(error: unknown, ctx: HttpContext): string {
-    if (this.isDebuggingEnabled(ctx) && error instanceof Error) return error.message
-    if (error instanceof Exception) return error.message
+  /**
+   * The message a client is allowed to see.
+   *
+   * DEVIATION (named): outside debug mode ream only echoes the message of a
+   * deliberate `Exception`; anything else collapses to a generic line. AdonisJS
+   * echoes `error.message` whatever was thrown, which leaks the text of driver
+   * and library errors to the client.
+   */
+  protected publicMessage(error: HttpError, ctx: HttpContext): string {
+    if (this.isDebuggingEnabled(ctx)) return error.message
+    if (error.code !== 'E_UNKNOWN') return error.message
     return 'An internal error occurred'
   }
 
-  #sendJsonError(error: unknown, ctx: HttpContext): void {
-    const { status, code } = extractErrorMeta(error)
-    const payload: Record<string, unknown> = { code, message: this.#errorMessage(error, ctx) }
-    if (error instanceof Exception && error.help) payload.help = error.help
-    if (this.isDebuggingEnabled(ctx) && error instanceof Error && error.stack) {
-      payload.stack = error.stack
+  /** Render an error as JSON. */
+  async renderErrorAsJSON(error: HttpError, ctx: HttpContext): Promise<void> {
+    const payload: Record<string, unknown> = {
+      code: error.code,
+      message: this.publicMessage(error, ctx),
     }
-    ctx.response.status(status).json({ error: payload })
+    if (error.help) payload.help = error.help
+    if (this.isDebuggingEnabled(ctx) && error.stack) payload.stack = error.stack
+    ctx.response.status(error.status).json({ error: payload })
   }
 
-  #sendJsonApiError(error: unknown, ctx: HttpContext): void {
-    const { status, code } = extractErrorMeta(error)
+  /** Render an error as a JSON:API document. */
+  async renderErrorAsJSONAPI(error: HttpError, ctx: HttpContext): Promise<void> {
     ctx.response
-      .status(status)
+      .status(error.status)
       .type('application/vnd.api+json')
-      .json({ errors: [{ title: this.#errorMessage(error, ctx), code, status: String(status) }] })
+      .json({
+        errors: [
+          {
+            title: this.publicMessage(error, ctx),
+            code: error.code,
+            status: String(error.status),
+          },
+        ],
+      })
   }
 
-  async #sendHtmlError(error: unknown, ctx: HttpContext): Promise<void> {
-    const { status } = extractErrorMeta(error)
-    // A registered status page wins (production browser error pages).
+  /** Render an error as HTML, preferring a registered status page. */
+  async renderErrorAsHTML(error: HttpError, ctx: HttpContext): Promise<void> {
     if (this.renderStatusPages) {
-      const renderer = this.#expandStatusPages()[status]
+      const renderer = this.#expandStatusPages()[error.status]
       if (renderer) {
         const html = await renderer(error, ctx)
-        ctx.response.status(status).type('text/html; charset=utf-8').send(html)
+        ctx.response.status(error.status).type('text/html; charset=utf-8').send(html)
         return
       }
     }
-    const message = this.#errorMessage(error, ctx)
+    const message = this.publicMessage(error, ctx)
     ctx.response
-      .status(status)
+      .status(error.status)
       .type('text/html; charset=utf-8')
       .send(
-        `<!DOCTYPE html><html><head><title>Error ${status}</title></head>` +
-          `<body><h1>${status}</h1><p>${escapeHtml(message)}</p></body></html>`,
+        `<!DOCTYPE html><html><head><title>Error ${error.status}</title></head>` +
+          `<body><h1>${error.status}</h1><p>${escapeHtml(message)}</p></body></html>`,
       )
+  }
+
+  /** Render per-field validation failures as JSON. */
+  async renderValidationErrorAsJSON(error: HttpError, ctx: HttpContext): Promise<void> {
+    ctx.response.status(error.status).json({ errors: error.messages })
+  }
+
+  /** Render per-field validation failures as a JSON:API document. */
+  async renderValidationErrorAsJSONAPI(error: HttpError, ctx: HttpContext): Promise<void> {
+    const messages = Array.isArray(error.messages) ? error.messages : []
+    ctx.response
+      .status(error.status)
+      .type('application/vnd.api+json')
+      .json({ errors: messages.map(toJsonApiValidationError) })
+  }
+
+  /** Render per-field validation failures as HTML. */
+  async renderValidationErrorAsHTML(error: HttpError, ctx: HttpContext): Promise<void> {
+    const messages = Array.isArray(error.messages) ? error.messages : []
+    ctx.response
+      .status(error.status)
+      .type('text/html; charset=utf-8')
+      .send(
+        messages
+          .map((message) => {
+            const { field, text } = readValidationMessage(message)
+            return `${escapeHtml(field)} - ${escapeHtml(text)}`
+          })
+          .join('<br />'),
+      )
+  }
+
+  /**
+   * Pick a renderer by content negotiation.
+   *
+   * DEVIATION (named): ream lists `json` FIRST, so a request with no or `*` /`*`
+   * Accept defaults to JSON (API-first). AdonisJS lists `html` first
+   * (full-stack default). Explicit `text/html` / `vnd.api+json` are honoured
+   * identically.
+   */
+  async renderError(error: HttpError, ctx: HttpContext): Promise<void> {
+    switch (ctx.request.accepts(['json', 'html', 'application/vnd.api+json'])) {
+      case 'application/vnd.api+json':
+        return this.renderErrorAsJSONAPI(error, ctx)
+      case 'html':
+        return this.renderErrorAsHTML(error, ctx)
+      default:
+        return this.renderErrorAsJSON(error, ctx)
+    }
+  }
+
+  /** Pick a validation renderer by content negotiation. */
+  async renderValidationError(error: HttpError, ctx: HttpContext): Promise<void> {
+    switch (ctx.request.accepts(['json', 'html', 'application/vnd.api+json'])) {
+      case 'application/vnd.api+json':
+        return this.renderValidationErrorAsJSONAPI(error, ctx)
+      case 'html':
+        return this.renderValidationErrorAsHTML(error, ctx)
+      default:
+        return this.renderValidationErrorAsJSON(error, ctx)
+    }
+  }
+
+  /** Convert an exception to an HTTP response. */
+  async handle(error: unknown, ctx: HttpContext): Promise<void> {
+    const httpError = this.toHttpError(error)
+
+    // Self-handled errors take over entirely (duck-typed, per AdonisJS — any
+    // thrown value exposing a `handle()` method, not just `Exception` instances).
+    if (typeof httpError.handle === 'function') {
+      await httpError.handle(httpError, ctx)
+      return
+    }
+
+    // Validation failures have per-field detail and their own renderers. Keyed
+    // on the code plus the presence of `messages`, exactly as AdonisJS does, so
+    // rune's and VineJS's errors both land here.
+    if (httpError.code === 'E_VALIDATION_ERROR' && httpError.messages !== undefined) {
+      await this.renderValidationError(httpError, ctx)
+      return
+    }
+
+    await this.renderError(httpError, ctx)
   }
 
   /** Log/report an exception. Override for custom monitoring. */
   async report(error: unknown, ctx: HttpContext): Promise<void> {
-    if (!this.shouldReport(error)) return
+    const httpError = this.toHttpError(error)
+    if (!this.shouldReport(httpError)) return
 
     // Self-reported exceptions handle their own reporting.
-    if (isSelfReporting(error)) {
-      await error.report(error, ctx)
+    if (typeof httpError.report === 'function') {
+      await httpError.report(httpError, ctx)
       return
     }
 
-    // Default: log at the status-appropriate level.
-    const { status } = extractErrorMeta(error)
-    const level = this.getErrorLogLevel(status)
-    const context = this.context(ctx)
-    if (error instanceof Error) {
-      console[level](`[${new Date().toISOString()}] ${error.message}`, context, error.stack)
-    } else {
-      console[level](`[${new Date().toISOString()}] Unknown error:`, error, context)
-    }
+    const level = this.getErrorLogLevel(httpError)
+    ctx.logger[level](httpError.message, this.context(ctx))
   }
 
   /** Provide additional context for error reports. Override for custom data. */
@@ -397,6 +513,40 @@ export class ExceptionHandler extends Macroable {
       userId: ctx.auth.user?.id,
     }
   }
+}
+
+/**
+ * The fields a validation message carries (VineJS / rune `RuneErrorNode`).
+ *
+ * Read defensively: the messages come from whichever validator the app wired,
+ * and a renderer must not throw while rendering someone else's error.
+ */
+function readValidationMessage(message: unknown): {
+  field: string
+  text: string
+  rule: string
+  meta: unknown
+} {
+  if (message === null || typeof message !== 'object') {
+    return { field: '', text: String(message), rule: '', meta: undefined }
+  }
+  const field = 'field' in message && typeof message.field === 'string' ? message.field : ''
+  const text = 'message' in message && typeof message.message === 'string' ? message.message : ''
+  const rule = 'rule' in message && typeof message.rule === 'string' ? message.rule : ''
+  const meta = 'meta' in message ? message.meta : undefined
+  return { field, text, rule, meta }
+}
+
+/** One validation message, as a JSON:API error object (AdonisJS shape). */
+function toJsonApiValidationError(message: unknown): Record<string, unknown> {
+  const { field, text, rule, meta } = readValidationMessage(message)
+  const error: Record<string, unknown> = {
+    title: text,
+    code: rule,
+    source: { pointer: field },
+  }
+  if (meta !== undefined) error.meta = meta
+  return error
 }
 
 /** Extract status + code from an Exception, ReamError, or duck-typed error. */
@@ -411,30 +561,6 @@ function extractErrorMeta(error: unknown): { status: number; code: string } {
     if ('code' in error && typeof error.code === 'string') code = error.code
   }
   return { status, code }
-}
-
-/** True when a thrown value self-handles via a `handle()` method (AdonisJS duck-type). */
-function isSelfHandling(
-  error: unknown,
-): error is { handle: (error: unknown, ctx: HttpContext) => Promise<void> | void } {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    'handle' in error &&
-    typeof error.handle === 'function'
-  )
-}
-
-/** True when a thrown value self-reports via a `report()` method. */
-function isSelfReporting(
-  error: unknown,
-): error is { report: (error: unknown, ctx: HttpContext) => Promise<void> | void } {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    'report' in error &&
-    typeof error.report === 'function'
-  )
 }
 
 /** Expand a status-page key into a per-code map: `'500..599'` → {500,…,599}, `'404'` → {404}. */
