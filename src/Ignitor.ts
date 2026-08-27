@@ -17,6 +17,7 @@ import { Application } from './Application.js'
 import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
+import type { DirectoriesNode } from './directories.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
 import { loadEnvFiles } from './env/loadEnvFiles.js'
@@ -64,6 +65,11 @@ export interface ReamrcConfig {
         environment?: string[]
       }
   >
+  /**
+   * Override the conventional directory layout. Merged over the defaults, so
+   * only the directories that moved need naming.
+   */
+  directories?: Partial<DirectoriesNode>
   commands?: Array<() => Promise<unknown>>
   /**
    * Command shorthands — Console's `commandsAliases`. The value is the command the
@@ -325,6 +331,9 @@ export class Ignitor {
    */
   useRcFile(reamrc: ReamrcConfig): this {
     this.reamrc = reamrc
+    // Hand the app its directory overrides now rather than at boot: a path
+    // helper called from a provider's register() must already see them.
+    this.app.rcContents(reamrc)
     return this
   }
 

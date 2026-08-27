@@ -13,10 +13,11 @@
  * @implements FR17, FR20
  */
 
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
+import { type DirectoriesNode, directories as defaultDirectories } from './directories.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
@@ -32,6 +33,7 @@ export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
   #appRoot?: URL
+  #directories: DirectoriesNode = { ...defaultDirectories }
   private providers: ProviderContract[] = []
   private _booted = false
   #mode: ApplicationMode = 'run'
@@ -92,32 +94,193 @@ export class Application implements AppContext {
 
   /** Absolute path to a file/dir inside the project root. */
   makePath(...paths: string[]): string {
+    return join(fileURLToPath(this.#requireAppRoot()), ...paths)
+  }
+
+  /**
+   * A URL to a file/dir inside the project root, where {@link makePath} gives
+   * a path. What an importer wants.
+   */
+  makeURL(...paths: string[]): URL {
+    // Joined with '/', not `path.join`: a URL keeps forward slashes on every
+    // platform, and `join` would hand Windows a backslash-separated href.
+    return new URL(paths.join('/'), this.#requireAppRoot())
+  }
+
+  /** Turn an absolute path back into one relative to the project root. */
+  relativePath(absolutePath: string): string {
+    return relative(fileURLToPath(this.#requireAppRoot()), absolutePath)
+  }
+
+  #requireAppRoot(): URL {
     if (!this.#appRoot) {
       throw new Error(
         'Application.makePath: app root is not set — construct the Ignitor with `new Ignitor(new URL("../", import.meta.url))`.',
       )
     }
-    return join(fileURLToPath(this.#appRoot), ...paths)
+    return this.#appRoot
+  }
+
+  /**
+   * The conventional directory layout, `reamrc.ts` overrides merged over the
+   * defaults. Every helper below reads it, so moving a directory is declared
+   * once.
+   */
+  get directories(): DirectoriesNode {
+    return this.#directories
+  }
+
+  /**
+   * Feed the loaded rc file to the application (AdonisJS `rcContents`).
+   *
+   * Today it reads one key, `directories`, merged over the defaults; the rest
+   * of the rc file is consumed by the Ignitor and the CLI, which own providers,
+   * preloads, commands and test suites.
+   */
+  rcContents(value: { directories?: Partial<DirectoriesNode> }): this {
+    if (value.directories) {
+      // Skip the undefined entries a `Partial` may carry: spreading them would
+      // blank a default rather than leave it alone.
+      for (const [key, path] of Object.entries(value.directories)) {
+        if (path !== undefined) this.#directories[key] = path
+      }
+    }
+    return this
+  }
+
+  /** Resolve inside one of the conventional directories. */
+  #inDirectory(key: keyof DirectoriesNode, paths: string[]): string {
+    return this.makePath(this.#directories[key], ...paths)
   }
 
   /** Absolute path inside the `config/` directory. */
   configPath(...paths: string[]): string {
-    return this.makePath('config', ...paths)
+    return this.#inDirectory('config', paths)
   }
 
   /** Absolute path inside the `database/migrations/` directory. */
   migrationsPath(...paths: string[]): string {
-    return this.makePath('database', 'migrations', ...paths)
+    return this.#inDirectory('migrations', paths)
   }
 
   /** Absolute path inside the `tmp/` directory. */
   tmpPath(...paths: string[]): string {
-    return this.makePath('tmp', ...paths)
+    return this.#inDirectory('tmp', paths)
   }
 
   /** Absolute path inside the `public/` directory. */
   publicPath(...paths: string[]): string {
-    return this.makePath('public', ...paths)
+    return this.#inDirectory('public', paths)
+  }
+
+  /** Absolute path inside the `providers/` directory. */
+  providersPath(...paths: string[]): string {
+    return this.#inDirectory('providers', paths)
+  }
+
+  /** Absolute path inside the `database/factories/` directory. */
+  factoriesPath(...paths: string[]): string {
+    return this.#inDirectory('factories', paths)
+  }
+
+  /** Absolute path inside the `database/seeders/` directory. */
+  seedersPath(...paths: string[]): string {
+    return this.#inDirectory('seeders', paths)
+  }
+
+  /** Absolute path inside the `resources/lang/` directory. */
+  languageFilesPath(...paths: string[]): string {
+    return this.#inDirectory('languageFiles', paths)
+  }
+
+  /** Absolute path inside the `resources/views/` directory. */
+  viewsPath(...paths: string[]): string {
+    return this.#inDirectory('views', paths)
+  }
+
+  /** Absolute path inside the `start/` directory. */
+  startPath(...paths: string[]): string {
+    return this.#inDirectory('start', paths)
+  }
+
+  /** Absolute path inside the `contracts/` directory. */
+  contractsPath(...paths: string[]): string {
+    return this.#inDirectory('contracts', paths)
+  }
+
+  /** Absolute path inside the `app/controllers/` directory. */
+  httpControllersPath(...paths: string[]): string {
+    return this.#inDirectory('httpControllers', paths)
+  }
+
+  /** Absolute path inside the `app/models/` directory. */
+  modelsPath(...paths: string[]): string {
+    return this.#inDirectory('models', paths)
+  }
+
+  /** Absolute path inside the `app/services/` directory. */
+  servicesPath(...paths: string[]): string {
+    return this.#inDirectory('services', paths)
+  }
+
+  /** Absolute path inside the `app/exceptions/` directory. */
+  exceptionsPath(...paths: string[]): string {
+    return this.#inDirectory('exceptions', paths)
+  }
+
+  /** Absolute path inside the `app/mailers/` directory. */
+  mailersPath(...paths: string[]): string {
+    return this.#inDirectory('mailers', paths)
+  }
+
+  /** Absolute path inside the `app/mails/` directory. */
+  mailsPath(...paths: string[]): string {
+    return this.#inDirectory('mails', paths)
+  }
+
+  /** Absolute path inside the `app/middleware/` directory. */
+  middlewarePath(...paths: string[]): string {
+    return this.#inDirectory('middleware', paths)
+  }
+
+  /** Absolute path inside the `app/policies/` directory. */
+  policiesPath(...paths: string[]): string {
+    return this.#inDirectory('policies', paths)
+  }
+
+  /** Absolute path inside the `app/validators/` directory. */
+  validatorsPath(...paths: string[]): string {
+    return this.#inDirectory('validators', paths)
+  }
+
+  /** Absolute path inside the `commands/` directory. */
+  commandsPath(...paths: string[]): string {
+    return this.#inDirectory('commands', paths)
+  }
+
+  /** Absolute path inside the `app/events/` directory. */
+  eventsPath(...paths: string[]): string {
+    return this.#inDirectory('events', paths)
+  }
+
+  /** Absolute path inside the `app/listeners/` directory. */
+  listenersPath(...paths: string[]): string {
+    return this.#inDirectory('listeners', paths)
+  }
+
+  /** Absolute path inside the `app/transformers/` directory. */
+  transformersPath(...paths: string[]): string {
+    return this.#inDirectory('transformers', paths)
+  }
+
+  /** Absolute path inside the generated-client directory (`.ream/client`). */
+  generatedClientPath(...paths: string[]): string {
+    return this.#inDirectory('generatedClient', paths)
+  }
+
+  /** Absolute path inside the generated-server directory (`.ream/server`). */
+  generatedServerPath(...paths: string[]): string {
+    return this.#inDirectory('generatedServer', paths)
   }
 
   // ─── Environment ──────────────────────────────────────────

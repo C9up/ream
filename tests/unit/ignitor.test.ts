@@ -373,3 +373,21 @@ describe('ignitor > bind address', () => {
     expect(new Ignitor({ serverFactory: factory }).host()).toBeUndefined()
   })
 })
+
+describe('ignitor > rc file directories', () => {
+  it('hands the app its directory overrides as soon as the rc file is loaded', () => {
+    // Before boot, not at boot: a provider's register() may call a path helper,
+    // and it has to already see the override.
+    const ignitor = new Ignitor(new URL('file:///project/')).useRcFile({
+      directories: { models: 'src/entities' },
+    })
+
+    expect(ignitor.getApp().modelsPath('user.ts')).toBe('/project/src/entities/user.ts')
+    expect(ignitor.getApp().configPath()).toBe('/project/config')
+  })
+
+  it('leaves the defaults alone when the rc file names no directories', () => {
+    const ignitor = new Ignitor(new URL('file:///project/')).useRcFile({})
+    expect(ignitor.getApp().modelsPath()).toBe('/project/app/models')
+  })
+})

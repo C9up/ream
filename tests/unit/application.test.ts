@@ -19,6 +19,70 @@ describe('application > path helpers', () => {
     const app = new Application()
     expect(() => app.makePath('x')).toThrow(/app root is not set/)
   })
+
+  it('resolves every conventional directory, AdonisJS layout for layout', () => {
+    const app = new Application()
+    app.setAppRoot(new URL('file:///project/'))
+
+    // The whole family in one place: a helper silently pointing at the wrong
+    // directory is the kind of thing nothing else would catch.
+    expect(app.providersPath()).toBe('/project/providers')
+    expect(app.factoriesPath()).toBe('/project/database/factories')
+    expect(app.seedersPath()).toBe('/project/database/seeders')
+    expect(app.languageFilesPath()).toBe('/project/resources/lang')
+    expect(app.viewsPath()).toBe('/project/resources/views')
+    expect(app.startPath('kernel.ts')).toBe('/project/start/kernel.ts')
+    expect(app.contractsPath()).toBe('/project/contracts')
+    expect(app.httpControllersPath()).toBe('/project/app/controllers')
+    expect(app.modelsPath('user.ts')).toBe('/project/app/models/user.ts')
+    expect(app.servicesPath()).toBe('/project/app/services')
+    expect(app.exceptionsPath()).toBe('/project/app/exceptions')
+    expect(app.mailersPath()).toBe('/project/app/mailers')
+    expect(app.mailsPath()).toBe('/project/app/mails')
+    expect(app.middlewarePath()).toBe('/project/app/middleware')
+    expect(app.policiesPath()).toBe('/project/app/policies')
+    expect(app.validatorsPath()).toBe('/project/app/validators')
+    expect(app.commandsPath()).toBe('/project/commands')
+    expect(app.eventsPath()).toBe('/project/app/events')
+    expect(app.listenersPath()).toBe('/project/app/listeners')
+    expect(app.transformersPath()).toBe('/project/app/transformers')
+  })
+
+  it('writes generated code under .ream, not .adonisjs', () => {
+    const app = new Application()
+    app.setAppRoot(new URL('file:///project/'))
+
+    expect(app.generatedClientPath()).toBe('/project/.ream/client')
+    expect(app.generatedServerPath('routes.ts')).toBe('/project/.ream/server/routes.ts')
+  })
+
+  it('rcContents moves a directory, and every helper follows', () => {
+    const app = new Application()
+    app.setAppRoot(new URL('file:///project/'))
+    app.rcContents({ directories: { httpControllers: 'app/http/controllers' } })
+
+    expect(app.httpControllersPath('users.ts')).toBe('/project/app/http/controllers/users.ts')
+    // Everything not named keeps its default.
+    expect(app.modelsPath()).toBe('/project/app/models')
+    expect(app.directories.httpControllers).toBe('app/http/controllers')
+  })
+
+  it('an undefined override leaves the default alone rather than blanking it', () => {
+    const app = new Application()
+    app.setAppRoot(new URL('file:///project/'))
+    app.rcContents({ directories: { models: undefined, views: 'app/views' } })
+
+    expect(app.modelsPath()).toBe('/project/app/models')
+    expect(app.viewsPath()).toBe('/project/app/views')
+  })
+
+  it('makeURL keeps forward slashes, and relativePath is its inverse', () => {
+    const app = new Application()
+    app.setAppRoot(new URL('file:///project/'))
+
+    expect(app.makeURL('app', 'models', 'user.ts').href).toBe('file:///project/app/models/user.ts')
+    expect(app.relativePath('/project/app/models/user.ts')).toBe('app/models/user.ts')
+  })
 })
 
 describe('application > provider lifecycle', () => {
