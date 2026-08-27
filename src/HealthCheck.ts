@@ -27,24 +27,24 @@ const DEFAULT_CHECK_TIMEOUT = 5000
  * Manages health check registrations and produces aggregated status.
  */
 export class HealthCheck {
-  private checkers: Map<string, HealthChecker> = new Map()
-  private startTime = Date.now()
-  private checkTimeout: number
+  readonly #checkers: Map<string, HealthChecker> = new Map()
+  readonly #startTime = Date.now()
+  readonly #checkTimeout: number
 
   constructor(options?: { checkTimeout?: number }) {
-    this.checkTimeout = options?.checkTimeout ?? DEFAULT_CHECK_TIMEOUT
+    this.#checkTimeout = options?.checkTimeout ?? DEFAULT_CHECK_TIMEOUT
   }
 
   /** Register a health checker. */
   register(name: string, checker: HealthChecker): void {
-    this.checkers.set(name, checker)
+    this.#checkers.set(name, checker)
   }
 
   /** Run all health checks and return aggregated status. */
   async check(): Promise<HealthStatus> {
     const checks: HealthCheckResult[] = []
 
-    for (const [name, checker] of this.checkers) {
+    for (const [name, checker] of this.#checkers) {
       const start = Date.now()
       try {
         const result = await Promise.race([
@@ -52,8 +52,8 @@ export class HealthCheck {
           new Promise<never>((_, reject) =>
             setTimeout(
               () =>
-                reject(new Error(`Health check '${name}' timed out after ${this.checkTimeout}ms`)),
-              this.checkTimeout,
+                reject(new Error(`Health check '${name}' timed out after ${this.#checkTimeout}ms`)),
+              this.#checkTimeout,
             ),
           ),
         ])
@@ -76,21 +76,34 @@ export class HealthCheck {
 
     return {
       status: hasError ? 'error' : hasWarn ? 'degraded' : 'ok',
-      uptime: Math.floor((Date.now() - this.startTime) / 1000),
+      uptime: Math.floor((Date.now() - this.#startTime) / 1000),
       timestamp: new Date().toISOString(),
       checks,
     }
   }
 
-  /** Create the /health route handler. Returns 200 for ok, 503 for degraded/error. */
+  /**
+   * Create the /health route handler. Returns 200 for ok, 503 otherwise.
+   *
+   * The parameter is the narrowest shape a real `HttpContext` satisfies, so
+   * this can be mounted straight on a route. It used to assign
+   * `ctx.response.status` and `ctx.response.body` as PROPERTIES, which no Ream
+   * response has ever had — mounted for real it would have answered an empty
+   * 200 to every probe, marking a dead app healthy. Its only test built a fake
+   * context in that invented shape, so nothing caught it.
+   */
   handler(): (ctx: {
-    response: { status: number; headers: Record<string, string>; body: string }
+    response: {
+      status(code: number): unknown
+      header(key: string, value: string): unknown
+      json(body: unknown): unknown
+    }
   }) => Promise<void> {
     return async (ctx) => {
       const health = await this.check()
-      ctx.response.status = health.status === 'ok' ? 200 : 503
-      ctx.response.headers['content-type'] = 'application/json'
-      ctx.response.body = JSON.stringify(health)
+      ctx.response.status(health.status === 'ok' ? 200 : 503)
+      ctx.response.header('content-type', 'application/json')
+      ctx.response.json(health)
     }
   }
 }

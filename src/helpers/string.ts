@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import bytes from './bytes.js'
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -441,6 +442,7 @@ export function interpolate(template: string, data: Record<string, unknown>): st
 // ---------------------------------------------------------------------------
 
 const string = {
+  bytes,
   camelCase,
   snakeCase,
   pascalCase,

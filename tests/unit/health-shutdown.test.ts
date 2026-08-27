@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { HealthCheck } from '../../src/HealthCheck.js'
+import { Response } from '../../src/http/Response.js'
+
+/**
+ * Drive the handler through a REAL Response.
+ *
+ * These three assertions used to run against `{ response: { status: 0,
+ * headers: {}, body: '' } }` — a shape no Ream response has ever had. They
+ * passed while the handler could not have worked on a mounted route, which is
+ * the whole reason the bug survived. Using the real class is what makes them
+ * mean something.
+ */
+function probe(health: HealthCheck) {
+  const response = new Response()
+  return { response, run: () => health.handler()({ response }) }
+}
 
 describe('health > HealthCheck', () => {
   it('returns ok when no checkers registered', async () => {
@@ -80,35 +95,33 @@ describe('health > HealthCheck', () => {
     const health = new HealthCheck()
     health.register('db', () => ({ name: 'db', status: 'ok' }))
 
-    const ctx = { response: { status: 0, headers: {} as Record<string, string>, body: '' } }
-    await health.handler()(ctx)
+    const { response, run } = probe(health)
+    await run()
 
-    expect(ctx.response.status).toBe(200)
-    expect(ctx.response.headers['content-type']).toBe('application/json')
-    const body = JSON.parse(ctx.response.body)
-    expect(body.status).toBe('ok')
+    expect(response.getStatus()).toBe(200)
+    expect(response.getHeader('content-type')).toBe('application/json')
+    expect(JSON.parse(response.getBody()).status).toBe('ok')
   })
 
   it('handler returns 503 on error', async () => {
     const health = new HealthCheck()
     health.register('db', () => ({ name: 'db', status: 'error', message: 'Down' }))
 
-    const ctx = { response: { status: 0, headers: {} as Record<string, string>, body: '' } }
-    await health.handler()(ctx)
+    const { response, run } = probe(health)
+    await run()
 
-    expect(ctx.response.status).toBe(503)
+    expect(response.getStatus()).toBe(503)
   })
 
   it('handler returns 503 on degraded (K8s readiness)', async () => {
     const health = new HealthCheck()
     health.register('cache', () => ({ name: 'cache', status: 'warn', message: 'Slow' }))
 
-    const ctx = { response: { status: 0, headers: {} as Record<string, string>, body: '' } }
-    await health.handler()(ctx)
+    const { response, run } = probe(health)
+    await run()
 
-    expect(ctx.response.status).toBe(503)
-    const body = JSON.parse(ctx.response.body)
-    expect(body.status).toBe('degraded')
+    expect(response.getStatus()).toBe(503)
+    expect(JSON.parse(response.getBody()).status).toBe('degraded')
   })
 
   it('enforces registration name over checker name', async () => {
