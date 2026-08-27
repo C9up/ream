@@ -725,7 +725,18 @@ export class Ignitor {
     for (const file of files) {
       const key = basename(file).replace(/\.(ts|js)$/, '')
       const mod = await import(pathToFileURL(join(configDir, file)).href)
-      this.app.config.set(key, mod.default ?? mod)
+      // A config file that declares `export default` owns the value it exports,
+      // even when that value is `undefined` — that is how a module says "I am
+      // not configured", and a provider's `if (!config) return` guard has to be
+      // able to see it. Testing the binding rather than the value is what keeps
+      // that readable; `mod.default ?? mod` turns the absent value back into the
+      // truthy namespace and makes the guard unreachable.
+      //
+      // Without a `default` binding, the named exports become the config, which
+      // is what AdonisJS does (`fsImportAll`). Spread rather than stored as-is:
+      // an ESM namespace is sealed and null-prototype, so a later merge into
+      // this entry would fail on it.
+      this.app.config.set(key, 'default' in mod ? mod.default : { ...mod })
     }
   }
 

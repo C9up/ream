@@ -10,6 +10,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { VERSION } from '../../src/index.js'
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
   exports: Record<string, string | { types: string; import: string }>
@@ -38,6 +39,14 @@ describe('export maps', () => {
         import: expected,
       })
     }
+  })
+
+  it('the exported VERSION matches the package version', () => {
+    // `VERSION` drifted from 0.1.7 to a package on 0.2.1 — nothing read it, so
+    // nothing caught it. Anything that reports the running framework version
+    // (a health endpoint, a bug report) would have reported a version that
+    // shipped eight releases earlier.
+    expect(VERSION).toBe(pkg.version)
   })
 
   it('every source file a subpath names actually exists', () => {
