@@ -12,6 +12,13 @@ import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
 import { durationToSeconds } from '../helpers/duration.js'
+
+/**
+ * Default ceiling on a buffered response body — the same 100MB the Rust layer
+ * caps an incoming body at (`MAX_BODY_BYTES` in crates/ream-http/src/server.rs).
+ */
+const DEFAULT_MAX_RESPONSE_BYTES = 100 * 1024 * 1024
+
 import type { CookieSigner } from '../security/CookieSigner.js'
 import { Macroable } from '../utils/Macroable.js'
 import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
@@ -150,6 +157,11 @@ export class Response extends Macroable {
 
   /** Default JSONP callback name (AdonisJS `http.jsonpCallbackName`). */
   #jsonpCallbackName = 'callback'
+  /**
+   * Ceiling on a buffered response body. Mirrors the 100MB the Rust layer caps
+   * an incoming body at, so the two directions are explained the same way.
+   */
+  #maxBodyBytes = DEFAULT_MAX_RESPONSE_BYTES
   #redirectBuilderFactory?: () => RedirectBuilder
   #streamBackend?: StreamBackend
   #streamId?: string
@@ -342,12 +354,41 @@ export class Response extends Macroable {
    * unambiguous.
    */
   sendBuffer(buffer: Buffer): void {
+    this.#assertBodyFits(buffer.length)
     if (!this.#headers['content-type']) {
       this.#headers['content-type'] = 'application/octet-stream'
     }
     this.#headers['x-ream-body-encoding'] = 'base64'
     this.#body = buffer.toString('base64')
     this.#finished = true
+  }
+
+  /**
+   * Refuse a body too large to hold in memory.
+   *
+   * A response body is serialised whole across the NAPI boundary — there is no
+   * chunked write yet — and a binary one is base64'd on the way, so it costs
+   * roughly 2.3x its size in transient memory: the Buffer, the encoded string,
+   * and the Rust-side decode. Without a ceiling a large file did not fail, it
+   * grew until the process died, with no message naming the cause.
+   *
+   * Raise it with `maxResponseBytes` in the kernel config when you know the
+   * memory is there. For anything genuinely large, hand out a signed URL from
+   * `@c9up/archive` instead and let the client fetch it from storage — the
+   * bytes then never pass through the server at all.
+   */
+  #assertBodyFits(bytes: number): void {
+    if (bytes <= this.#maxBodyBytes) return
+    throw new Error(
+      `[E_RESPONSE_TOO_LARGE] Response body is ${Math.round(bytes / 1_048_576)}MB, over the ${Math.round(this.#maxBodyBytes / 1_048_576)}MB ceiling. ` +
+        'The body is held whole in memory (and base64-encoded, ~2.3x) because responses are not streamed yet. ' +
+        'Raise `maxResponseBytes` in the kernel config, or serve large files with a signed URL from @c9up/archive.',
+    )
+  }
+
+  /** @internal Set the ceiling — injected by HttpKernel from its config. */
+  setMaxBodyBytes(bytes: number): void {
+    this.#maxBodyBytes = bytes
   }
 
   /** Send 204 No Content. */

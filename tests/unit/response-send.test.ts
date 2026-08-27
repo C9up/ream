@@ -418,3 +418,41 @@ describe('Response.setRequestId (AdonisJS parity)', () => {
     expect(res.getHeader('x-request-id')).toBeUndefined()
   })
 })
+
+describe('Response body ceiling', () => {
+  it('accepts a body under the ceiling', () => {
+    const res = new Response()
+    res.setMaxBodyBytes(1024)
+    expect(() => res.sendBuffer(Buffer.alloc(1024))).not.toThrow()
+  })
+
+  it('refuses one over it, naming the limit and the way out', () => {
+    const res = new Response()
+    res.setMaxBodyBytes(1024)
+
+    // Without a ceiling a large file did not fail — it grew until the process
+    // died, with nothing naming the cause.
+    expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(/E_RESPONSE_TOO_LARGE/)
+    expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(/@c9up\/archive/)
+  })
+
+  it('covers download too, since it goes through the same door', async () => {
+    const file = join(tmpdir(), 'ream-ceiling-test.bin')
+    writeFileSync(file, Buffer.alloc(4096))
+    try {
+      const res = new Response()
+      res.setMaxBodyBytes(1024)
+      res.download(file)
+
+      await expect(res.settle()).rejects.toThrow(/E_RESPONSE_TOO_LARGE/)
+    } finally {
+      rmSync(file)
+    }
+  })
+
+  it('defaults to 100MB, matching the request side', () => {
+    const res = new Response()
+    // A modest body is never the thing that trips it.
+    expect(() => res.sendBuffer(Buffer.alloc(1_048_576))).not.toThrow()
+  })
+})

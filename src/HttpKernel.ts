@@ -54,6 +54,13 @@ export interface HttpKernelConfig {
    * `http.jsonpCallbackName`). Falls back to `callback`.
    */
   jsonpCallbackName?: string
+  /**
+   * Ceiling on a buffered response body, in bytes. Default 100MB — the same the
+   * Rust layer caps an incoming body at. Responses are not streamed yet, so the
+   * body is held whole in memory; this is what stops a large one growing until
+   * the process dies with no message.
+   */
+  maxResponseBytes?: number
 }
 
 export interface HttpKernelResponse {
@@ -177,6 +184,9 @@ export function createHttpKernel(
     resolver?.bindValue(HttpContext, ctx)
     if (config.jsonpCallbackName !== undefined) {
       ctx.response.setJsonpCallbackName(config.jsonpCallbackName)
+    }
+    if (config.maxResponseBytes !== undefined) {
+      ctx.response.setMaxBodyBytes(config.maxResponseBytes)
     }
     if (config.allowMethodSpoofing === true) {
       // Was never wired: the setter existed but nothing called it, so a
