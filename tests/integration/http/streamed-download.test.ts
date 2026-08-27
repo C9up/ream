@@ -127,9 +127,9 @@ describeIfNetwork('streamed binary download over HTTP', () => {
 describeIfNetwork('Response.stream over a real server', () => {
   it('serves a file through Response + serializeResponse, not just the raw registry', async () => {
     // The test that matters most: it drives the SAME path the kernel does —
-    // `stream()` registers, `settle()` resolves, the response goes back with
+    // `stream()` registers, `finish()` resolves, the response goes back with
     // its stream id, and only then does the body get attached. An earlier
-    // version awaited the pump inside settle(), which closed the stream before
+    // version awaited the pump inside the terminal step, closing the stream before
     // Rust ever looked the id up: every download answered E_STREAM_UNKNOWN
     // while every unit test stayed green.
     const payload = randomBytes(256 * 1024)
@@ -142,7 +142,7 @@ describeIfNetwork('Response.stream over a real server', () => {
       res.setStreamBackend(server as unknown as never)
       res.header('content-type', 'application/octet-stream')
       await res.stream(Readable.from([payload]))
-      await res.settle()
+      await res.finish()
       pumped = res.streamed()
       return {
         status: res.getStatus(),
@@ -172,7 +172,7 @@ describeIfNetwork('Response.stream over a real server', () => {
     server.onRequest(async () => {
       const res = new Response()
       await res.stream(Readable.from([payload]))
-      await res.settle()
+      await res.finish()
       return { status: res.getStatus(), headers: res.getHeaders(), body: res.getBody() }
     })
     await server.listen()

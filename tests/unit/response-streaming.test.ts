@@ -163,7 +163,7 @@ describe('response.download — streams from disk', () => {
     const res = new Response()
     res.setStreamBackend(backend)
     res.download(file)
-    await res.settle()
+    await res.finish()
     await res.streamed()
 
     expect(backend.chunks.length).toBeGreaterThan(1)
@@ -177,7 +177,7 @@ describe('response.download — streams from disk', () => {
     const res = new Response()
     res.setStreamBackend(backend)
     res.download(join(dir, 'nope.bin'))
-    await res.settle()
+    await res.finish()
 
     // Once a stream starts there is no status left to change, so the stat has
     // to come first.
@@ -193,7 +193,7 @@ describe('response.download — streams from disk', () => {
     const res = new Response()
     res.setStreamBackend(backend)
     res.download(file, true)
-    await res.settle()
+    await res.finish()
 
     expect(res.getHeader('etag')).toBeDefined()
     expect(backend.chunks).toHaveLength(0)
@@ -211,7 +211,7 @@ describe('response.download — streams from disk', () => {
     res.download(file)
 
     // The ceiling guards the BUFFERED path; a streamed body never assembles.
-    await expect(res.settle()).resolves.toBeUndefined()
+    await expect(res.finish()).resolves.toBeUndefined()
     await res.streamed()
     expect(backend.body()).toHaveLength(300_000)
   })
@@ -228,5 +228,63 @@ describe('response.download — streams from disk', () => {
     await res.streamed()
 
     expect(backend.body().equals(payload)).toBe(true)
+  })
+})
+
+/**
+ * `finish()` is the terminal step, the same role AdonisJS gives it: after it
+ * runs, the response is sealed and the server hands it over. Ours awaits
+ * instead of writing — the payload crosses the NAPI boundary rather than a
+ * socket — but the guarantees a caller relies on are upstream's, so they are
+ * pinned here rather than left to the kernel being the only caller.
+ */
+describe('response.finish — the terminal step', () => {
+  it('echoes the caller x-request-id, so the app never has to', async () => {
+    const res = new Response()
+    res.setRequest({ method: () => 'GET', header: () => 'req-42' })
+    res.send('ok')
+
+    await res.finish()
+
+    expect(res.getHeader('x-request-id')).toBe('req-42')
+  })
+
+  it('invents no id when the caller sent none', async () => {
+    const res = new Response()
+    res.setRequest({ method: () => 'GET', header: () => undefined })
+    res.send('ok')
+
+    await res.finish()
+
+    expect(res.getHeader('x-request-id')).toBeUndefined()
+  })
+
+  it('is idempotent — a second call is a no-op, as upstream guarantees', async () => {
+    const file = join(dir, 'twice.txt')
+    writeFileSync(file, 'body')
+
+    const backend = new RecordingBackend()
+    const res = new Response()
+    res.setStreamBackend(backend)
+    res.download(file)
+
+    await res.finish()
+    await res.streamed()
+    const after = backend.body().length
+
+    // A double-finish must not re-read the file or push the body twice.
+    await expect(res.finish()).resolves.toBeUndefined()
+    expect(backend.body()).toHaveLength(after)
+    expect(backend.registered).toHaveLength(1)
+  })
+
+  it('seals a plain buffered body without touching it', async () => {
+    const res = new Response()
+    res.json({ ok: true })
+
+    await res.finish()
+
+    expect(res.getBody()).toBe(JSON.stringify({ ok: true }))
+    expect(res.getStatus()).toBe(200)
   })
 })

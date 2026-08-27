@@ -215,7 +215,7 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
       // The read is async now, parked on the same pending-body slot the kernel
       // awaits before serialising — it used to stall the event loop for every
       // other request while one client downloaded.
-      await r.settle()
+      await r.finish()
       expect(r.getHeader('content-type')).toBe('text/plain; charset=utf-8')
       expect(r.getHeader('x-ream-body-encoding')).toBe('base64')
       expect(Buffer.from(r.getBody(), 'base64').toString()).toBe('hello file')
@@ -230,7 +230,7 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
     try {
       const r = new Response()
       r.attachment(file, 'invoice.txt')
-      await r.settle()
+      await r.finish()
       expect(r.getHeader('content-disposition')).toBe('attachment; filename="invoice.txt"')
     } finally {
       rmSync(file)
@@ -240,7 +240,7 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
   it('download of a missing file falls back to 404', async () => {
     const r = new Response()
     r.download('/no/such/file-xyz.txt')
-    await r.settle()
+    await r.finish()
     expect(r.getStatus()).toBe(404)
   })
 
@@ -258,7 +258,7 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
       })
       expect(tickRan).toBe(true)
 
-      await r.settle()
+      await r.finish()
       expect(Buffer.from(r.getBody(), 'base64')).toHaveLength(1024)
     } finally {
       rmSync(file)
@@ -444,7 +444,7 @@ describe('Response body ceiling', () => {
       res.setMaxBodyBytes(1024)
       res.download(file)
 
-      await expect(res.settle()).rejects.toThrow(/E_RESPONSE_TOO_LARGE/)
+      await expect(res.finish()).rejects.toThrow(/E_RESPONSE_TOO_LARGE/)
     } finally {
       rmSync(file)
     }

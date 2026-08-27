@@ -142,10 +142,12 @@ export interface CookieOptions {
 
 export class Response extends Macroable {
   #status = 200
-  /** A body still being drained by {@link stream}; awaited by {@link settle}. */
+  /** A body still being drained by {@link stream}; awaited by {@link finish}. */
   #pendingStream: Promise<void> | undefined
   /** The detached chunk pump, when one is running. See {@link streamed}. */
   #pumping: Promise<void> | undefined
+  /** Whether {@link finish} has run — its idempotence guard. */
+  #finalised = false
   #headers: Record<string, string> = {}
   #cookies: string[] = []
   #body = ''
@@ -754,7 +756,7 @@ export class Response extends Macroable {
   /**
    * Resolves when a streamed body has finished feeding the socket.
    *
-   * Deliberately NOT part of {@link settle}: the response has to reach Rust
+   * Deliberately NOT part of {@link finish}: the response has to reach Rust
    * with its stream id before the body can be attached, so waiting for the
    * pump there would deadlock — and closing the stream first is what made the
    * client see `E_STREAM_UNKNOWN` instead of the file. This is for a test that
@@ -766,18 +768,25 @@ export class Response extends Macroable {
   }
 
   /**
-   * @internal Wait for a body still being produced, before serialising.
+   * Finalise the response — the terminal step (AdonisJS `response.finish()`).
    *
-   * NOT AdonisJS' `response.finish()`, which flushes the buffered body to the
-   * socket. Ream never owns the socket: the kernel hands the whole response
-   * back across the NAPI boundary and Rust writes it, so there is nothing here
-   * for an app to flush. This is the step before that — `download()` and a
-   * buffered `stream()` fill the body asynchronously, and the kernel has to
-   * let them finish before reading it.
+   * Same role and same guarantees as upstream: idempotent, it stamps the
+   * request id, and afterwards nothing more is added to the response. The
+   * kernel calls it before reading the response out; an app rarely needs to.
    *
-   * A STREAMED body is deliberately not awaited here; see {@link streamed}.
+   * NAMED DEVIATION — it returns a promise where upstream returns void, and it
+   * writes nothing. Ream never owns the socket: the whole response crosses the
+   * NAPI boundary and Rust writes it, so "finish" here means *sealed and ready
+   * to hand over* rather than *flushed*. The await is for a body still being
+   * produced — `download()` and a buffered `stream()` fill it asynchronously.
+   *
+   * A STREAMED body is deliberately not awaited: it feeds the socket after the
+   * response has been handed over. See {@link streamed}.
    */
-  async settle(): Promise<void> {
+  async finish(): Promise<void> {
+    if (this.#finalised) return
+    this.#finalised = true
+    this.setRequestId()
     const pending = this.#pendingStream
     if (pending === undefined) return
     this.#pendingStream = undefined
@@ -795,7 +804,7 @@ export class Response extends Macroable {
     errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
   ): void {
     // Read asynchronously, parked on the same pending-body slot `stream()`
-    // uses and `settle()` already awaits before serialisation. It used to be
+    // uses and `finish()` already awaits before serialisation. It used to be
     // `readFileSync`, which stalled the event loop for EVERY concurrent
     // request while one client downloaded — the file's size became every
     // other request's latency.

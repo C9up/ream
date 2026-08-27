@@ -124,7 +124,7 @@ describe('Response > stream drains without being awaited', () => {
     const res = new Response()
     res.stream(Readable.from([Buffer.from('hello '), Buffer.from('world')]))
 
-    await res.settle()
+    await res.finish()
 
     expect(Buffer.from(res.getBody(), 'base64').toString()).toBe('hello world')
   })
@@ -138,7 +138,7 @@ describe('Response > stream drains without being awaited', () => {
     })
 
     res.stream(failing, (error) => (error.code === 'ENOENT' ? ['Not found', 404] : ['Boom', 500]))
-    await res.settle()
+    await res.finish()
 
     expect(res.getStatus()).toBe(404)
     expect(res.getBody()).toBe('Not found')
