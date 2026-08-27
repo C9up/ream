@@ -269,6 +269,24 @@ export class Kernel {
   }
 
   /**
+   * A named `true`, for a flag listener that wants to stop the run (Console
+   * `kernel.shortcircuit`).
+   *
+   * A listener returning a bare `true` reads like a bug at the call site;
+   * `return kernel.shortcircuit()` says what the boolean means:
+   *
+   * ```ts
+   * kernel.on('version', (_c, kernel) => {
+   *   console.log(version)
+   *   return kernel.shortcircuit()
+   * })
+   * ```
+   */
+  shortcircuit(): boolean {
+    return true
+  }
+
+  /**
    * Declare a flag every command accepts (Console `kernel.defineFlag`).
    *
    * Global flags steer the CLI, not the command: they are merged into the

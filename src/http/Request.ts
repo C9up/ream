@@ -130,6 +130,17 @@ export class Request extends Macroable {
    */
   ctx?: object
 
+  /**
+   * Seat the parsed body (AdonisJS `setInitialBody`).
+   *
+   * What a body parser calls once it has decoded the payload. An alias of
+   * {@link setParsedBody}, which is the name ream used first — both are here so
+   * a middleware written against either resolves.
+   */
+  setInitialBody(body: Dict<unknown>): void {
+    this.setParsedBody(body)
+  }
+
   /** @internal Give the request access to its response — wired by HttpContext (for `fresh()`). */
   setResponse(response: { fresh(): boolean }): void {
     this.#response = response

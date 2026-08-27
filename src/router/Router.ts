@@ -1322,6 +1322,96 @@ export class Router extends Macroable {
   }
 
   /**
+   * A fluent URL builder (AdonisJS `router.builder()` / `urlBuilder`).
+   *
+   * `urlFor` takes everything at once; this is the form upstream gives you
+   * when the pieces arrive separately — params here, query string there, a
+   * prefix from config:
+   *
+   * ```ts
+   * router.builder().params({ id: '1' }).qs({ tab: 'posts' }).make('users.show')
+   * router.builder().prefixUrl('https://acme.test').makeSigned('invite', { expiresIn: '1h' })
+   * ```
+   */
+  builder(): UrlBuilder {
+    return new UrlBuilder(this)
+  }
+
+  /** AdonisJS' property name for {@link builder}. */
+  get urlBuilder(): UrlBuilder {
+    return this.builder()
+  }
+
+  /**
+   * A builder that prefixes every URL with `domain` (AdonisJS
+   * `builderForDomain`).
+   *
+   * The domain is a prefix here, not a lookup key: routes are matched by host
+   * at request time, and a named route is unique across the table.
+   */
+  builderForDomain(domain: string): UrlBuilder {
+    return this.builder().prefixUrl(domain)
+  }
+
+  /**
+   * The parameter names a route pattern declares, in order (AdonisJS
+   * `parsePattern`).
+   *
+   * `:id` and `:slug?` both count; the optional marker is reported rather than
+   * being part of the name.
+   */
+  parsePattern(pattern: string): Array<{ name: string; optional: boolean }> {
+    const tokens: Array<{ name: string; optional: boolean }> = []
+    for (const match of pattern.matchAll(/:([A-Za-z_][\w]*)(\?)?/g)) {
+      tokens.push({ name: match[1] ?? '', optional: match[2] === '?' })
+    }
+    return tokens
+  }
+
+  /**
+   * Every route, grouped by the domain it answers on (AdonisJS `toJSON`).
+   *
+   * Routes registered without a domain land under `root`, as upstream keys
+   * them. This is what a route list — `ream inspect`, an OpenAPI generator, a
+   * debug screen — reads.
+   */
+  toJSON(): Record<string, RouteDefinition[]> {
+    const byDomain: Record<string, RouteDefinition[]> = {}
+    for (const route of this.getRoutes()) {
+      const key = route.domain ?? 'root'
+      const bucket = byDomain[key] ?? []
+      bucket.push(route)
+      byDomain[key] = bucket
+    }
+    return byDomain
+  }
+
+  /**
+   * Whether any route is scoped to a domain (AdonisJS `usingDomains`).
+   *
+   * Lets the matcher skip host resolution entirely when nothing asked for it.
+   */
+  get usingDomains(): boolean {
+    return this.getRoutes().some((route) => route.domain !== undefined)
+  }
+
+  /**
+   * Freeze the route table and build the lookup index (AdonisJS `commit`).
+   *
+   * The index is built lazily on the first `match()`, so this is only needed
+   * to pay that cost up front — at the end of boot rather than inside the
+   * first request.
+   */
+  commit(): void {
+    this.#buildIndex()
+  }
+
+  /** Whether the lookup index has been built (AdonisJS `commited`). */
+  get commited(): boolean {
+    return !this.#indexDirty
+  }
+
+  /**
    * Clear all registered routes AND registries (used by hot-reload). Router
    * middleware, named middleware, and global matchers are reset too — the
    * preloads that registered them re-run on reload, so keeping them would
@@ -1438,4 +1528,71 @@ function matchDomain(pattern: string, host: string): boolean {
     return actualHost.endsWith(suffix) && actualHost.length > suffix.length
   }
   return false
+}
+
+/**
+ * Builds a URL for a named route, one piece at a time (AdonisJS `UrlBuilder`).
+ *
+ * Every method returns the builder, and `make` / `makeSigned` are the two ways
+ * out. It defers to {@link Router.urlFor} and {@link Router.makeSignedUrl}, so
+ * a missing param fails the same way whichever spelling you used.
+ */
+export class UrlBuilder {
+  readonly #router: Router
+  #params: Record<string, string> = {}
+  #qs: Record<string, string> = {}
+  #prefix = ''
+  #lookup = true
+
+  constructor(router: Router) {
+    this.#router = router
+  }
+
+  /** Route params, by name. */
+  params(params: Record<string, string>): this {
+    this.#params = { ...this.#params, ...params }
+    return this
+  }
+
+  /** Query-string params appended to the built URL. */
+  qs(qs: Record<string, string>): this {
+    this.#qs = { ...this.#qs, ...qs }
+    return this
+  }
+
+  /** A prefix — a domain, a base path — put in front of the result. */
+  prefixUrl(prefix: string): this {
+    this.#prefix = prefix.replace(/\/$/, '')
+    return this
+  }
+
+  /**
+   * Treat what `make()` receives as a literal path instead of a route name
+   * (AdonisJS `disableRouteLookup`).
+   */
+  disableRouteLookup(): this {
+    this.#lookup = false
+    return this
+  }
+
+  /** The URL. */
+  make(identifier: string): string {
+    const path = this.#lookup ? this.#router.urlFor(identifier, this.#params) : identifier
+    const query = new URLSearchParams(this.#qs).toString()
+    return `${this.#prefix}${path}${query ? `?${query}` : ''}`
+  }
+
+  /**
+   * The URL with an HMAC signature (AdonisJS `makeSigned`).
+   *
+   * The query string is folded into the signature, so a link cannot be
+   * re-pointed by editing it.
+   */
+  makeSigned(identifier: string, options?: SignedUrlOptions): string {
+    const signed = this.#router.makeSignedUrl(identifier, this.#params, {
+      ...options,
+      qs: { ...this.#qs, ...options?.qs },
+    })
+    return `${this.#prefix}${signed}`
+  }
 }

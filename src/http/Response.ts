@@ -140,6 +140,14 @@ export class Response extends Macroable {
   #body = ''
   readonly #finishCallbacks: Array<(err: Error | null) => void> = []
   #finished = false
+  /**
+   * The context this response belongs to (AdonisJS `response.ctx`).
+   *
+   * Wired by HttpContext. Optional because a Response built by hand — a test,
+   * a fixture — has no context around it.
+   */
+  ctx?: object
+
   /** Default JSONP callback name (AdonisJS `http.jsonpCallbackName`). */
   #jsonpCallbackName = 'callback'
   #redirectBuilderFactory?: () => RedirectBuilder

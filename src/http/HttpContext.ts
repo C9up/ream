@@ -263,6 +263,17 @@ export class HttpContext extends Macroable {
     return httpContextStorage.exit(fn)
   }
 
+  /**
+   * A one-line summary of the request (AdonisJS `inspect`).
+   *
+   * What a log line or a debugger label wants: the verb, the path, and which
+   * route answered.
+   */
+  inspect(): string {
+    const route = this.route.name ?? this.route.pattern
+    return `${this.request.method()} ${this.request.url()} (${route})`
+  }
+
   /** Unique request/correlation ID. */
   readonly id: string
 
@@ -399,8 +410,9 @@ export class HttpContext extends Macroable {
     // And the reverse, so `request.fresh()`/`stale()` delegate to it, plus the
     // matched-route info for `request.matchesRoute()`.
     this.request.setResponse(this.response)
-    // The back-reference AdonisJS exposes as `request.ctx`.
+    // The back-references AdonisJS exposes as `request.ctx` / `response.ctx`.
     this.request.ctx = this
+    this.response.ctx = this
     this.request.setRouteInfo({
       name: route.name,
       pattern: route.pattern,

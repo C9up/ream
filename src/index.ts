@@ -164,8 +164,16 @@ export type {
   RouteDefinition,
   RouteHandler,
   RouteHandlerFunction,
+  SignedUrlOptions,
 } from './router/Router.js'
-export { GroupBuilder, matchers, OnRouteBuilder, RouteBuilder, Router } from './router/Router.js'
+export {
+  GroupBuilder,
+  matchers,
+  OnRouteBuilder,
+  RouteBuilder,
+  Router,
+  UrlBuilder,
+} from './router/Router.js'
 
 // ─── Middleware ──────────────────────────────────────────────
 

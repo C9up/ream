@@ -182,6 +182,20 @@ export class Emitter {
     this.classListeners.clear()
   }
 
+  /**
+   * Every event with the listeners registered for it (AdonisJS
+   * `eventsListeners`).
+   *
+   * Read-only copies: a caller inspecting the map — a debug screen, a test
+   * asserting nothing leaked — must not be able to unsubscribe by mutating it.
+   */
+  get eventsListeners(): Map<EventConstructor | string, Listener[]> {
+    const all = new Map<EventConstructor | string, Listener[]>()
+    for (const [event, listeners] of this.classListeners) all.set(event, [...listeners])
+    for (const [event, listeners] of this.stringListeners) all.set(event, [...listeners])
+    return all
+  }
+
   /** How many listeners an event has, or all of them (AdonisJS `listenerCount`). */
   listenerCount(event?: string): number {
     if (event !== undefined) return this.stringListeners.get(event)?.length ?? 0

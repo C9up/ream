@@ -145,6 +145,28 @@ export class CookieSigner {
   }
 
   /**
+   * base64url helpers (AdonisJS `Encryption.base64`).
+   *
+   * url-safe and unpadded, which is what every value this class produces uses
+   * — a signed or encrypted payload travels in a cookie or a URL, where `+`,
+   * `/` and `=` do not survive. `decode` answers `null` on anything that does
+   * not round-trip rather than handing back mangled bytes.
+   */
+  get base64(): {
+    encode(value: string): string
+    decode(value: string): string | null
+    urlEncode(value: string): string
+    urlDecode(value: string): string | null
+  } {
+    const encode = (value: string) => Buffer.from(value, 'utf8').toString('base64url')
+    const decode = (value: string): string | null => {
+      const out = Buffer.from(value, 'base64url').toString('utf8')
+      return Buffer.from(out, 'utf8').toString('base64url') === value ? out : null
+    }
+    return { encode, decode, urlEncode: encode, urlDecode: decode }
+  }
+
+  /**
    * Sign and verify WITHOUT encrypting (AdonisJS `Encryption.verifier`).
    *
    * The same `sign` / `unsign` this class already exposes, under the name and

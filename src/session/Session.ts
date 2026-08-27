@@ -60,6 +60,14 @@ export function supportsTagging(driver: SessionDriver): driver is SessionDriverW
   )
 }
 
+/**
+ * The session key the flash bag travels in.
+ *
+ * One constant rather than three literals: the read, the delete and the write
+ * below all have to agree, and they had to agree by hand.
+ */
+const FLASH_KEY = '__flash'
+
 /** Where `flashAll` / `flashOnly` / `flashExcept` put the request input. */
 const FLASH_INPUT_KEY = 'input'
 
@@ -184,9 +192,9 @@ export class Session {
    */
   #hydrate(data: Record<string, unknown>): void {
     this.#data = { ...data }
-    const flash = data.__flash
+    const flash = data[FLASH_KEY]
     this.#previousFlash = isPlainRecord(flash) ? { ...flash } : {}
-    delete this.#data.__flash
+    delete this.#data[FLASH_KEY]
   }
 
   /** Current session id. Mutated by `regenerate()`. */
@@ -446,7 +454,7 @@ export class Session {
   toJSON(): Record<string, unknown> {
     const result = { ...this.#data }
     if (Object.keys(this.#flashData).length > 0) {
-      result.__flash = this.#flashData
+      result[FLASH_KEY] = this.#flashData
     }
     return result
   }
@@ -481,6 +489,40 @@ export class Session {
    * has no read-only session mode, and reporting `true` would tell a caller
    * its writes were dropped when they were not.
    */
+  /**
+   * The options this session was seated with (AdonisJS `config`).
+   *
+   * What `setStore` was told: whether the session is fresh, and how long it
+   * lives. Read-only — changing it after the fact would not move the entry
+   * already written.
+   */
+  get config(): { fresh: boolean; ttl: number } {
+    return { fresh: this.#fresh, ttl: this.#ttl }
+  }
+
+  /**
+   * The key the flash bag is stored under inside the session (AdonisJS
+   * `flashKey`).
+   *
+   * Exposed so a store that has to reason about the payload — a migration, a
+   * debug screen — does not have to hardcode the string.
+   */
+  get flashKey(): string {
+    return FLASH_KEY
+  }
+
+  /**
+   * What has been flashed for the NEXT request (AdonisJS
+   * `responseFlashMessages`).
+   *
+   * A copy: flashing goes through `flash()`, which is where the value checks
+   * live. `flashMessages` is the other half — what the PREVIOUS request left
+   * for this one.
+   */
+  get responseFlashMessages(): Record<string, unknown> {
+    return { ...this.#flashData }
+  }
+
   /**
    * Whether `regenerate()` ran this request (AdonisJS `hasRegeneratedSession`).
    *
