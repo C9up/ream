@@ -9,6 +9,7 @@
  * Populated by `EventsProvider.boot()`.
  */
 
+import { createServiceProxy } from '../../services/createServiceProxy.js'
 import type { Emitter } from '../Emitter.js'
 
 let instance: Emitter | undefined
@@ -23,17 +24,10 @@ export function getEmitter(): Emitter | undefined {
   return instance
 }
 
-const emitter: Emitter = new Proxy({} as Emitter, {
-  get(_target, prop) {
-    if (!instance) {
-      throw new Error(
-        '[ream:events] Emitter singleton accessed before EventsProvider.boot() ran. ' +
-          'Check that `@c9up/ream/events/provider` is listed in your reamrc.ts providers.',
-      )
-    }
-    const value = Reflect.get(instance, prop, instance)
-    return typeof value === 'function' ? value.bind(instance) : value
-  },
-})
+const emitter: Emitter = createServiceProxy<Emitter>(
+  () => instance,
+  '[ream:events] Emitter singleton accessed before EventsProvider.boot() ran. ' +
+    'Check that `@c9up/ream/events/provider` is listed in your reamrc.ts providers.',
+)
 
 export default emitter

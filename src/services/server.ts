@@ -8,6 +8,7 @@
  */
 
 import type { Server } from '../server/Server.js'
+import { createServiceProxy } from './createServiceProxy.js'
 
 let instance: Server | undefined
 
@@ -29,29 +30,10 @@ export function getServer(): Server | undefined {
   return instance
 }
 
-const server: Server = new Proxy({} as Server, {
-  get(_target, prop) {
-    // A module loader inspects what it imports before anyone uses it: it reads
-    // `then` to decide whether the namespace is thenable, and various symbols
-    // for interop and formatting. Throwing on those turns a plain
-    // `import { setX } from '.../services/x'` into a crash at import time, far
-    // from any real use. They are not members of what this stands in for, so
-    // answer undefined and let a genuine access be the one that reports.
-    if (typeof prop === 'symbol' || prop === 'then') {
-      return undefined
-    }
-    if (!instance) {
-      throw new Error(
-        'Server accessed before initialization. ' +
-          'Ensure your kernel files are loaded as preloads in reamrc.ts.',
-      )
-    }
-    // Bind methods to the real instance so private-field access inside
-    // them resolves against the underlying class brand — passing the
-    // Proxy as `this` breaks `#field` writes (Proxy isn't branded).
-    const value = Reflect.get(instance, prop, instance)
-    return typeof value === 'function' ? value.bind(instance) : value
-  },
-})
+const server: Server = createServiceProxy<Server>(
+  () => instance,
+  'Server accessed before initialization. ' +
+    'Ensure your kernel files are loaded as preloads in reamrc.ts.',
+)
 
 export default server

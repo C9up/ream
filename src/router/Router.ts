@@ -1236,7 +1236,7 @@ export class Router extends Macroable {
   makeSignedUrl(name: string, params?: Record<string, string>, options?: SignedUrlOptions): string {
     if (!this.#signedUrl) {
       throw new Error(
-        '[E_NO_APP_KEY] makeSignedUrl() requires an APP_KEY-backed signer. Set APP_KEY (>= 16 chars) so the encryption service is registered.',
+        '[E_MISSING_APP_KEY] makeSignedUrl() requires an APP_KEY-backed signer. Set APP_KEY (>= 16 chars) so the encryption service is registered.',
       )
     }
     const path = this.urlFor(name, params)

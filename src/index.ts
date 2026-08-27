@@ -40,6 +40,7 @@ export {
   createError,
   E_FORBIDDEN,
   E_HTTP_EXCEPTION,
+  E_HTTP_REQUEST_ABORTED,
   E_ROUTE_NOT_FOUND,
   E_ROW_NOT_FOUND,
   E_UNAUTHORIZED,
@@ -58,6 +59,8 @@ export { RedirectBuilder } from './http/RedirectBuilder.js'
 export type { RawRequest } from './http/Request.js'
 export { Request } from './http/Request.js'
 export { Response } from './http/Response.js'
+export type { SseStreamOptions } from './http/SseStream.js'
+export { SseStream } from './http/SseStream.js'
 export { type GetterFn, Macroable, type MacroFn } from './utils/Macroable.js'
 
 // ─── Session ────────────────────────────────────────────────
@@ -77,6 +80,8 @@ export type {
   SessionRedisClientSource,
 } from './session/drivers/RedisDriver.js'
 export { RedisDriver as SessionRedisDriver } from './session/drivers/RedisDriver.js'
+export type { ValuePath } from './session/ReadOnlyValuesStore.js'
+export { ReadOnlyValuesStore } from './session/ReadOnlyValuesStore.js'
 export type {
   SessionConfig,
   SessionDriver,
@@ -139,7 +144,11 @@ export { StaticProvider } from './storage/StaticProvider.js'
 
 // Request-filter security (CSRF, XSS, rate-limit, CORS, headers, path/param)
 // lives in @c9up/blackhole. ream core keeps only the crypto primitives.
-export { CookieSigner } from './security/CookieSigner.js'
+export {
+  CookieSigner,
+  E_INSECURE_APP_KEY,
+  E_MISSING_APP_KEY,
+} from './security/CookieSigner.js'
 export {
   constantTimeEq,
   hasNativeCrypto,
@@ -179,6 +188,7 @@ export {
   matchers,
   OnRouteBuilder,
   RouteBuilder,
+  RouteResource,
   Router,
   UrlBuilder,
 } from './router/Router.js'
@@ -238,8 +248,10 @@ export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignito
 
 // ─── Providers ──────────────────────────────────────────────
 
+export { errors } from './errors/aggregate.js'
 export type { AppContext, ProviderContract } from './Provider.js'
 export { Provider } from './Provider.js'
+export type { ContainerBinding, ContainerBindings } from './types/container.js'
 
 // ─── Codemods ───────────────────────────────────────────────
 

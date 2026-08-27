@@ -261,6 +261,9 @@ export class Ignitor {
     // registry" and say something useful in each case.
     this.app.container.singleton('migrations', () => this.migrations)
     this.app.container.singleton('app', () => this.app)
+    // AdonisJS binds the config store too, so code that only needs settings can
+    // resolve `config` instead of taking the whole application.
+    this.app.container.singleton('config', () => this.app.config)
     // The HttpContext CLASS, so an integration provider can extend it the way
     // AdonisJS does — `HttpContext.getter('view', …)` is how the view layer
     // attaches `ctx.view`. Exported from the barrel too, but a provider that

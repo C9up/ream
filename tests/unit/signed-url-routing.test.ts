@@ -67,6 +67,6 @@ describe('router.makeSignedUrl + request.hasValidSignature (wiring)', () => {
   it('throws when no APP_KEY-backed signer is wired', () => {
     const r = new Router()
     r.get('/x', async () => {}).as('x')
-    expect(() => r.makeSignedUrl('x')).toThrow(/E_NO_APP_KEY/)
+    expect(() => r.makeSignedUrl('x')).toThrow(/E_MISSING_APP_KEY/)
   })
 })
