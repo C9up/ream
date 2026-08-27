@@ -11,6 +11,8 @@
  */
 
 import type { SessionRedisClientSource } from './drivers/RedisDriver.js'
+import { E_SESSION_NOT_READY, E_SESSION_TAGGING_NOT_SUPPORTED } from './errors.js'
+import { ReadOnlyValuesStore } from './ReadOnlyValuesStore.js'
 
 export interface SessionDriver {
   /**
@@ -435,9 +437,16 @@ export class Session {
     this.forget(INTENDED_URL_KEY)
   }
 
-  /** Get a flashed value from the previous request. */
-  flashMessages(): Record<string, unknown> {
-    return { ...this.#previousFlash }
+  /**
+   * What the PREVIOUS request flashed for this one (AdonisJS `flashMessages`).
+   *
+   * A property holding a store, not a method returning a record: that is the
+   * AdonisJS shape, and it is what lets a controller or template read a nested
+   * failure with `session.flashMessages.get('errors.email')`. `all()` gives
+   * back the plain object.
+   */
+  get flashMessages(): ReadOnlyValuesStore {
+    return new ReadOnlyValuesStore(this.#previousFlash)
   }
 
   /** Get a specific flash message from the previous request. */
@@ -519,8 +528,8 @@ export class Session {
    * live. `flashMessages` is the other half — what the PREVIOUS request left
    * for this one.
    */
-  get responseFlashMessages(): Record<string, unknown> {
-    return { ...this.#flashData }
+  get responseFlashMessages(): ReadOnlyValuesStore {
+    return new ReadOnlyValuesStore(this.#flashData)
   }
 
   /**
@@ -625,14 +634,10 @@ export class Session {
    */
   #taggingDriver(method: string): SessionDriverWithTagging {
     if (this.#driver === undefined) {
-      throw new Error(
-        `session.${method}() needs a session store — this session was built without one.`,
-      )
+      throw new E_SESSION_NOT_READY(method)
     }
     if (!supportsTagging(this.#driver)) {
-      throw new Error(
-        `session.${method}() is not supported by the configured session store. Use the memory, redis, or database store.`,
-      )
+      throw new E_SESSION_TAGGING_NOT_SUPPORTED(method)
     }
     return this.#driver
   }

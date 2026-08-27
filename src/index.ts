@@ -81,6 +81,10 @@ export type {
   SessionRedisClientSource,
 } from './session/drivers/RedisDriver.js'
 export { RedisDriver as SessionRedisDriver } from './session/drivers/RedisDriver.js'
+export {
+  E_SESSION_NOT_READY,
+  E_SESSION_TAGGING_NOT_SUPPORTED,
+} from './session/errors.js'
 export type { ValuePath } from './session/ReadOnlyValuesStore.js'
 export { ReadOnlyValuesStore } from './session/ReadOnlyValuesStore.js'
 export type {

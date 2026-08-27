@@ -49,4 +49,24 @@ export class ReadOnlyValuesStore {
   has(path: ValuePath): boolean {
     return this.get(path) !== undefined
   }
+
+  /**
+   * Every value, as a plain object (AdonisJS `toObject`).
+   *
+   * Same content as {@link all}; the two names exist because AdonisJS ships
+   * both and a migrated template may reach for either.
+   */
+  toObject(): Record<string, unknown> {
+    return this.all()
+  }
+
+  /** Every value — what `JSON.stringify(flashMessages)` emits. */
+  toJSON(): Record<string, unknown> {
+    return this.all()
+  }
+
+  /** JSON text, so `{{ flashMessages }}` in a template renders the contents. */
+  toString(): string {
+    return JSON.stringify(this.#values)
+  }
 }

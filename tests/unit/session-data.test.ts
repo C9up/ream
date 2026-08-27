@@ -51,7 +51,9 @@ describe('Session > value API', () => {
 describe('Session > flash lifecycle', () => {
   it('extracts __flash from incoming data into the previous-request messages', () => {
     const s = new Session('sid', { user: 1, __flash: { success: 'Saved!' } })
-    expect(s.flashMessages()).toEqual({ success: 'Saved!' })
+    // A store now, as in AdonisJS — reachable by path, not just as a record.
+    expect(s.flashMessages.all()).toEqual({ success: 'Saved!' })
+    expect(s.flashMessages.get('success')).toBe('Saved!')
     expect(s.old('success')).toBe('Saved!')
     expect(s.old('nope', 'fallback')).toBe('fallback')
     // __flash must not leak into the live data.

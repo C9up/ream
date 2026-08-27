@@ -232,7 +232,8 @@ function shareSessionWithView(ctx: HttpContext, session: Session): void {
   const view = Reflect.get(Object(ctx), 'view')
   const share = Reflect.get(Object(view), 'share')
   if (typeof share !== 'function') return
-  const flashMessages = new ReadOnlyValuesStore(session.flashMessages())
+  // The session hands back a store already — no need to rebuild one here.
+  const flashMessages = session.flashMessages
   share.call(view, {
     session: new ReadOnlyValuesStore(session.all()),
     flashMessages,

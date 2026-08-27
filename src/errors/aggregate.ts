@@ -18,6 +18,7 @@ import {
   E_VALIDATION_ERROR,
 } from '../http/Exception.js'
 import { E_INSECURE_APP_KEY, E_MISSING_APP_KEY } from '../security/CookieSigner.js'
+import { E_SESSION_NOT_READY, E_SESSION_TAGGING_NOT_SUPPORTED } from '../session/errors.js'
 
 export const errors = {
   E_FORBIDDEN,
@@ -28,6 +29,8 @@ export const errors = {
   E_MISSING_APP_KEY,
   E_ROUTE_NOT_FOUND,
   E_ROW_NOT_FOUND,
+  E_SESSION_NOT_READY,
+  E_SESSION_TAGGING_NOT_SUPPORTED,
   E_UNAUTHORIZED,
   E_VALIDATION_ERROR,
 } as const

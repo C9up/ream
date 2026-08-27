@@ -12,6 +12,8 @@ import {
   Response,
   Router,
   Secret,
+  Session,
+  SessionCookieDriver,
 } from '../../src/index.js'
 
 describe('Secret > members AdonisJS exposes', () => {
@@ -259,5 +261,58 @@ describe('RedirectBuilder > members AdonisJS exposes', () => {
 
   it('allowedHosts is empty by default, so back() stays same-origin', () => {
     expect(redirectFor('https://evil.test/x', 'https://app.test/y').allowedHosts).toEqual([])
+  })
+})
+
+describe('Session.flashMessages > the AdonisJS shape', () => {
+  /** A session hydrated as if the previous request had flashed `previous`. */
+  function sessionWith(previous: Record<string, unknown>): Session {
+    return new Session('sid-1', { __flash: previous })
+  }
+
+  it('is a store, so a nested failure is reachable by path', () => {
+    // AdonisJS types it as a ValuesStore property, which is what lets a
+    // controller or template write flashMessages.get('errors.email'). It was a
+    // method returning a plain record, so `.get` did not exist.
+    const session = sessionWith({ errors: { email: 'is required' } })
+    expect(session.flashMessages.get('errors.email')).toBe('is required')
+  })
+
+  it('still hands back the plain object through all()', () => {
+    expect(sessionWith({ success: 'Saved!' }).flashMessages.all()).toEqual({ success: 'Saved!' })
+  })
+
+  it('reports emptiness without the caller counting keys', () => {
+    expect(sessionWith({}).flashMessages.isEmpty).toBe(true)
+    expect(sessionWith({ a: 1 }).flashMessages.isEmpty).toBe(false)
+  })
+
+  it('renders its contents when interpolated into a template', () => {
+    expect(`${sessionWith({ a: 1 }).flashMessages}`).toBe('{"a":1}')
+  })
+
+  it('does not let a caller mutate the session through the store', () => {
+    const session = sessionWith({ a: 1 })
+    session.flashMessages.all().a = 2
+    expect(session.flashMessages.get('a')).toBe(1)
+  })
+})
+
+describe('Session > errors carry the AdonisJS codes', () => {
+  it('tagging on a store that cannot tag raises E_SESSION_TAGGING_NOT_SUPPORTED', async () => {
+    const session = new Session('sid-1')
+    session.setStore(new SessionCookieDriver('a'.repeat(32)), {
+      fresh: true,
+      ttl: 60,
+    })
+    await expect(session.tag('user-1')).rejects.toMatchObject({
+      code: 'E_SESSION_TAGGING_NOT_SUPPORTED',
+    })
+  })
+
+  it('tagging with no store at all raises E_SESSION_NOT_READY', async () => {
+    await expect(new Session('sid-1').tag('user-1')).rejects.toMatchObject({
+      code: 'E_SESSION_NOT_READY',
+    })
   })
 })
