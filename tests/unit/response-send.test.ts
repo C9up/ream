@@ -368,3 +368,26 @@ describe('Response state getters (AdonisJS names)', () => {
     expect(res.hasContent).toBe(false)
   })
 })
+
+describe('Response.setRequestId (AdonisJS parity)', () => {
+  it('echoes the caller‘s x-request-id back', () => {
+    const res = new Response()
+    res.setRequest({
+      method: () => 'GET',
+      header: (k: string) => (k === 'x-request-id' ? 'abc-123' : undefined),
+    })
+
+    // Ream already READ this header into ctx.id but never sent it back, so a
+    // caller could not tie a response to the id it issued.
+    res.setRequestId()
+    expect(res.getHeader('x-request-id')).toBe('abc-123')
+  })
+
+  it('invents nothing when the caller sent none', () => {
+    const res = new Response()
+    res.setRequest({ method: () => 'GET', header: () => undefined })
+
+    res.setRequestId()
+    expect(res.getHeader('x-request-id')).toBeUndefined()
+  })
+})

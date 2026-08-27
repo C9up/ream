@@ -172,3 +172,17 @@ describe('session > the store decides whether a session is fresh', () => {
     expect(session.fresh).toBe(false)
   })
 })
+
+describe('session > hasRegeneratedSession (AdonisJS parity)', () => {
+  it('reports whether the id changed this request', async () => {
+    const driver = new MemoryDriver()
+    const session = seated(driver, 'sess-regen', false)
+
+    expect(session.hasRegeneratedSession).toBe(false)
+
+    // The id changed, so anything holding the old one is stale. It was tracked
+    // internally and never exposed, so only the session itself could act on it.
+    session.regenerate()
+    expect(session.hasRegeneratedSession).toBe(true)
+  })
+})

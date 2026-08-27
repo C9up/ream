@@ -399,6 +399,8 @@ export class HttpContext extends Macroable {
     // And the reverse, so `request.fresh()`/`stale()` delegate to it, plus the
     // matched-route info for `request.matchesRoute()`.
     this.request.setResponse(this.response)
+    // The back-reference AdonisJS exposes as `request.ctx`.
+    this.request.ctx = this
     this.request.setRouteInfo({
       name: route.name,
       pattern: route.pattern,

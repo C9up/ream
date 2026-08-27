@@ -122,6 +122,14 @@ export class Request extends Macroable {
     return this.#raw.method
   }
 
+  /**
+   * The context this request belongs to (AdonisJS `request.ctx`).
+   *
+   * Wired by HttpContext. Optional because a Request built by hand — a test,
+   * a fixture — has no context around it.
+   */
+  ctx?: object
+
   /** @internal Give the request access to its response — wired by HttpContext (for `fresh()`). */
   setResponse(response: { fresh(): boolean }): void {
     this.#response = response

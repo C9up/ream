@@ -481,6 +481,17 @@ export class Session {
    * has no read-only session mode, and reporting `true` would tell a caller
    * its writes were dropped when they were not.
    */
+  /**
+   * Whether `regenerate()` ran this request (AdonisJS `hasRegeneratedSession`).
+   *
+   * The id changed, so anything holding the old one — a cookie already
+   * written, an external store keyed by session id — is stale. It was tracked
+   * internally and never exposed, so only this class could act on it.
+   */
+  get hasRegeneratedSession(): boolean {
+    return this.#regenerated
+  }
+
   get readonly(): boolean {
     return false
   }

@@ -1061,6 +1061,22 @@ export class Response extends Macroable {
     return !this.headersSent && !this.finished
   }
 
+  /**
+   * Echo the caller's `x-request-id` back on the response (AdonisJS
+   * `setRequestId`).
+   *
+   * Ream already READS that header into `ctx.id` — validating its shape and
+   * generating one when it is missing — but never sent it back, so a caller
+   * could not tie a response to the request id it issued. Nothing is echoed
+   * when the client sent none: inventing one here would hand back an id the
+   * caller never used.
+   */
+  setRequestId(): this {
+    const incoming = this.#request?.header('x-request-id')
+    if (incoming) this.header('x-request-id', incoming)
+    return this
+  }
+
   /** @internal Set body directly (used by redirect, exception handler). */
   setBody(body: string): void {
     this.#body = body
