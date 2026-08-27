@@ -1004,19 +1004,6 @@ function isIpLiteral(host: string): boolean {
   return /^(\d{1,3}\.){3}\d{1,3}$/.test(host)
 }
 
-/**
- * Decode a percent-encoded segment without throwing on malformed input.
- * Browsers happily send `q=%E0%A4%A` (truncated UTF-8 sequences) — refusing
- * the whole request would let any client knock the route handler offline.
- */
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
 interface AcceptEntry {
   value: string
   q: number

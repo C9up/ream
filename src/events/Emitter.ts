@@ -593,7 +593,10 @@ export class BaseEvent {
   /**
    * Subclasses declare their own payload parameters; this signature only has
    * to be wide enough for `dispatch` to forward them (AdonisJS does the same).
+   * It widens `ConstructorParameters<typeof BaseEvent>` from `[]` to a rest
+   * parameter, which is what lets `dispatch` call `new this(...args)`.
    */
+  // biome-ignore lint/complexity/noUselessConstructor: it widens ConstructorParameters for dispatch — removing it fails to compile
   constructor(..._args: unknown[]) {}
 
   static eventName?: string
