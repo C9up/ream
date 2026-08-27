@@ -256,7 +256,12 @@ export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignito
 export { errors } from './errors/aggregate.js'
 export type { AppContext, ProviderContract } from './Provider.js'
 export { Provider } from './Provider.js'
-export type { ContainerBinding, ContainerBindings } from './types/container.js'
+export type {
+  AuthenticatorName,
+  Authenticators,
+  ContainerBinding,
+  ContainerBindings,
+} from './types/index.js'
 
 // ─── Codemods ───────────────────────────────────────────────
 

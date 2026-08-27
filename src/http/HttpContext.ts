@@ -14,6 +14,7 @@ import type { MatchedParams } from '../router/Router.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Session } from '../session/Session.js'
+import type { Authenticators } from '../types/authenticators.js'
 import { Macroable } from '../utils/Macroable.js'
 import type { RouteUrlResolver } from './RedirectBuilder.js'
 import { RedirectBuilder } from './RedirectBuilder.js'
@@ -47,7 +48,19 @@ export interface AuthState {
   check?(): Promise<boolean>
   authenticateUsing?(guards?: string[], options?: { loginRoute?: string }): Promise<void>
   getUserOrFail?(): AuthState['user']
-  use?(name: string): unknown
+  /**
+   * The guard behind `name` (AdonisJS `auth.use('web')`).
+   *
+   * Typed through the augmentable `Authenticators` interface in
+   * `@c9up/ream/types`: an app whose auth package augments it gets the guard's
+   * real type back, while a host that augments nothing still resolves to
+   * `unknown` rather than failing to compile. Without this, reaching a guard
+   * needed a cast that lies about a contract ream does not own.
+   */
+  use?: {
+    <Name extends keyof Authenticators>(name: Name): Authenticators[Name]
+    (name: string): unknown
+  }
   readonly authenticationAttempted?: boolean
   readonly authenticatedViaGuard?: string
 }

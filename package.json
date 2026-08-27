@@ -12,8 +12,8 @@
       "import": "./src/index.ts"
     },
     "./types": {
-      "types": "./src/types/container.ts",
-      "import": "./src/types/container.ts"
+      "types": "./src/types/index.ts",
+      "import": "./src/types/index.ts"
     },
     "./exceptions": {
       "types": "./src/http/Exception.ts",
@@ -226,8 +226,8 @@
         "import": "./dist/index.js"
       },
       "./types": {
-        "types": "./dist/types/container.d.ts",
-        "import": "./dist/types/container.js"
+        "types": "./dist/types/index.d.ts",
+        "import": "./dist/types/index.js"
       },
       "./exceptions": {
         "types": "./dist/http/Exception.d.ts",
