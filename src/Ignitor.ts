@@ -33,6 +33,7 @@ import { ExceptionHandler } from './http/Exception.js'
 import { HttpContext } from './http/HttpContext.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
+import { MigrationRegistry } from './migrations/MigrationRegistry.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 import { Router } from './router/Router.js'
@@ -213,6 +214,8 @@ export class Ignitor {
   private router: Router
   private server: Server
   private middleware: MiddlewareRegistry
+  /** Where each data package registers its migration runner. See `MigrationRegistry`. */
+  private migrations: MigrationRegistry
   private errorBoundary: ErrorBoundary
   private _httpServer?: HyperServerLike
   private config: IgnitorConfig
@@ -254,12 +257,17 @@ export class Ignitor {
     this.router = new Router()
     this.server = new Server(this.router)
     this.middleware = new MiddlewareRegistry()
+    this.migrations = new MigrationRegistry()
     this.errorBoundary = new ErrorBoundary((event) => this.handleError(event), this.isDevMode())
 
     // Register framework services in container
     this.app.container.singleton('router', () => this.router)
     this.app.container.singleton('server', () => this.server)
     this.app.container.singleton('middleware', () => this.middleware)
+    // Always bound, even with no data package: an EMPTY registry is what lets
+    // the CLI tell "this app has no migrations" from "this app predates the
+    // registry" and say something useful in each case.
+    this.app.container.singleton('migrations', () => this.migrations)
     this.app.container.singleton('app', () => this.app)
     // The HttpContext CLASS, so an integration provider can extend it the way
     // AdonisJS does — `HttpContext.getter('view', …)` is how the view layer

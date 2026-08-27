@@ -26,6 +26,13 @@ export {
   type SchemaNode,
   type StringOptions,
 } from './env/schema.js'
+export { MigrationRegistry } from './migrations/MigrationRegistry.js'
+export type {
+  MigrationRunnerContract,
+  MigrationState,
+  MigrationStatusNode,
+  RegisteredMigrationSource,
+} from './migrations/types.js'
 
 // ─── HTTP (new — AdonisJS-compatible) ───────────────────────
 

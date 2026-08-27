@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { Emitter } from '../../src/events/Emitter.js'
 import EventsProvider from '../../src/events/EventsProvider.js'
 import type { AppContext, ErrorEvent, HyperServerLike, ReamrcConfig } from '../../src/index.js'
-import { Ignitor, Provider } from '../../src/index.js'
+import { Ignitor, MigrationRegistry, Provider } from '../../src/index.js'
 
 class MockHyperServer implements HyperServerLike {
   private handler?: (
@@ -389,5 +389,42 @@ describe('ignitor > rc file directories', () => {
   it('leaves the defaults alone when the rc file names no directories', () => {
     const ignitor = new Ignitor(new URL('file:///project/')).useRcFile({})
     expect(ignitor.getApp().modelsPath()).toBe('/project/app/models')
+  })
+})
+
+describe('ignitor > migration registry', () => {
+  it('binds an EMPTY registry even with no data package', async () => {
+    // The distinction the CLI relies on: an app with no store has an empty
+    // registry, an app on an older ream has NO binding. One says "register a
+    // provider", the other says "upgrade ream" — and they must not look alike.
+    const ignitor = new Ignitor(new URL('file:///project/'))
+    const registry = await ignitor.getApp().container.resolve<MigrationRegistry>('migrations')
+
+    expect(registry).toBeInstanceOf(MigrationRegistry)
+    expect(registry.isEmpty).toBe(true)
+  })
+
+  it('hands every resolver the same registry, so two providers register into one', async () => {
+    const ignitor = new Ignitor(new URL('file:///project/'))
+    const container = ignitor.getApp().container
+
+    const first = await container.resolve<MigrationRegistry>('migrations')
+    first.register({
+      name: 'atlas',
+      runner: {
+        async migrate() {
+          return []
+        },
+        async rollback() {
+          return []
+        },
+        async status() {
+          return []
+        },
+      },
+    })
+
+    const second = await container.resolve<MigrationRegistry>('migrations')
+    expect(second.names()).toEqual(['atlas'])
   })
 })
