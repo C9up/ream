@@ -118,11 +118,15 @@ impl EventBus {
 
         let tsfn = Arc::new(tsfn);
         let bus = self.bus.clone();
-        let rt = ream_napi_core::shared_runtime();
         let timeout_ms = self.request_handler_timeout_ms;
 
-        rt.spawn(async move {
-            bus.on_request(&name, Arc::new(move |event| {
+        // Registered inline, NOT spawned onto the runtime. Spawning made this
+        // return before the handler existed, so `onRequest(name, ...)` followed
+        // by `request(name, ...)` raced the scheduler — it passed in isolation
+        // and failed under load with "No request handler for '<name>'".
+        bus.on_request(
+            &name,
+            Arc::new(move |event| {
                 let json = serde_json::to_string(&event).unwrap_or_default();
                 let (tx, rx) = mpsc::sync_channel::<String>(1);
 
@@ -137,8 +141,8 @@ impl EventBus {
                     Ok(response) => response,
                     Err(_) => panic!("request handler timeout after {}ms", timeout_ms),
                 }
-            })).await;
-        });
+            }),
+        );
 
         Ok(())
     }

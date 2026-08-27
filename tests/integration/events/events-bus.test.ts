@@ -143,6 +143,21 @@ describe('events > request/reply', () => {
     expect(response).toBeDefined()
   })
 
+  it('the handler is reachable the instant onRequest returns', async () => {
+    // Registration used to be spawned onto the tokio runtime, so this exact
+    // sequence raced the scheduler: it passed in isolation and failed under
+    // load with "No request handler for '<name>'". Repeated, because a race
+    // that fires once in a while is still a race.
+    for (let i = 0; i < 50; i++) {
+      const bus = new EventBus()
+      const name = `race.check.${i}`
+      bus.onRequest(name, (_event: string, reply: (r: string) => void) => {
+        reply(JSON.stringify({ ok: true }))
+      })
+      await expect(bus.request(name, '{}')).resolves.toBeDefined()
+    }
+  })
+
   it('request throws on no handler', async () => {
     const reqBus = new EventBus()
     await expect(reqBus.request('nonexistent', '{}')).rejects.toThrow(Error)

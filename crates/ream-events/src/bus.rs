@@ -9,7 +9,8 @@ use crate::store::EventStore;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Semaphore};
+use std::sync::Mutex;
+use tokio::sync::Semaphore;
 
 /// Request handler — receives event, returns response data string.
 pub type RequestHandler = Arc<dyn Fn(Event) -> String + Send + Sync>;
@@ -90,8 +91,16 @@ impl Bus {
 
     /// Register a request handler for a specific event name.
     /// Only one handler per event name (last one wins).
-    pub async fn on_request(&self, name: &str, handler: RequestHandler) {
-        let mut handlers = self.request_handlers.lock().await;
+    ///
+    /// Synchronous on purpose: the handler MUST be reachable the moment this
+    /// returns. While registration was async, the NAPI layer could only spawn
+    /// it, so `on_request(...)` followed by `request(...)` raced the runtime
+    /// and lost under load with "No request handler for '<name>'".
+    pub fn on_request(&self, name: &str, handler: RequestHandler) {
+        let mut handlers = self
+            .request_handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         handlers.insert(name.to_string(), handler);
     }
 
@@ -99,10 +108,16 @@ impl Bus {
     ///
     /// Returns the response data string, or an error on timeout/no handler.
     pub async fn request(&self, name: &str, data: &str, timeout_ms: u64) -> Result<String, String> {
-        let handlers = self.request_handlers.lock().await;
-        let handler = handlers.get(name).cloned()
-            .ok_or_else(|| format!("No request handler for '{}'", name))?;
-        drop(handlers); // Release lock before calling handler
+        let handler = {
+            let handlers = self
+                .request_handlers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            handlers
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("No request handler for '{}'", name))?
+        }; // Guard dropped here — never held across an await.
 
         let event = Event::new(name, data);
 
@@ -259,7 +274,7 @@ mod tests {
             } else {
                 r#"{"valid":false,"error":"Amount must be positive"}"#.to_string()
             }
-        })).await;
+        }));
 
         let response = bus.request("order.validate", r#"{"amount":42.50}"#, 5000).await;
         assert!(response.is_ok());
@@ -281,7 +296,7 @@ mod tests {
         bus.on_request("slow", Arc::new(|_| {
             std::thread::sleep(std::time::Duration::from_millis(500));
             "response".to_string()
-        })).await;
+        }));
 
         let result = bus.request("slow", "{}", 50).await; // 50ms timeout
         assert!(result.is_err());
