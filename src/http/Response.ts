@@ -7,7 +7,7 @@
  * @implements FR21
  */
 
-import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
@@ -723,9 +723,22 @@ export class Response extends Macroable {
     generateEtag = false,
     errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
   ): void {
+    // Read asynchronously, parked on the same pending-body slot `stream()`
+    // uses and `settle()` already awaits before serialisation. It used to be
+    // `readFileSync`, which stalled the event loop for EVERY concurrent
+    // request while one client downloaded — the file's size became every
+    // other request's latency.
+    this.#pendingStream = this.#readForDownload(filePath, generateEtag, errorCallback)
+  }
+
+  async #readForDownload(
+    filePath: string,
+    generateEtag: boolean,
+    errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
+  ): Promise<void> {
     let content: Buffer
     try {
-      content = readFileSync(filePath)
+      content = await readFile(filePath)
     } catch (error) {
       if (errorCallback) {
         const [message, status] = errorCallback(error as NodeJS.ErrnoException)

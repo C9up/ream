@@ -206,12 +206,16 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
     expect(() => new Response().abortIf(0, 'x')).not.toThrow()
   })
 
-  it('download sends a file as a binary body with the right content-type', () => {
+  it('download sends a file as a binary body with the right content-type', async () => {
     const file = join(tmpdir(), 'ream-download-test.txt')
     writeFileSync(file, 'hello file')
     try {
       const r = new Response()
       r.download(file)
+      // The read is async now, parked on the same pending-body slot the kernel
+      // awaits before serialising — it used to stall the event loop for every
+      // other request while one client downloaded.
+      await r.settle()
       expect(r.getHeader('content-type')).toBe('text/plain; charset=utf-8')
       expect(r.getHeader('x-ream-body-encoding')).toBe('base64')
       expect(Buffer.from(r.getBody(), 'base64').toString()).toBe('hello file')
@@ -220,22 +224,45 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
     }
   })
 
-  it('attachment adds a Content-Disposition header', () => {
+  it('attachment adds a Content-Disposition header', async () => {
     const file = join(tmpdir(), 'ream-attach-test.txt')
     writeFileSync(file, 'x')
     try {
       const r = new Response()
       r.attachment(file, 'invoice.txt')
+      await r.settle()
       expect(r.getHeader('content-disposition')).toBe('attachment; filename="invoice.txt"')
     } finally {
       rmSync(file)
     }
   })
 
-  it('download of a missing file falls back to 404', () => {
+  it('download of a missing file falls back to 404', async () => {
     const r = new Response()
     r.download('/no/such/file-xyz.txt')
+    await r.settle()
     expect(r.getStatus()).toBe(404)
+  })
+
+  it('download does not block the event loop while it reads', async () => {
+    const file = join(tmpdir(), 'ream-download-async.txt')
+    writeFileSync(file, 'x'.repeat(1024))
+    try {
+      const r = new Response()
+      let tickRan = false
+      r.download(file)
+      // A macrotask scheduled AFTER the call still runs before the body lands:
+      // with readFileSync it could not, because the read owned the thread.
+      await new Promise((resolve) => setImmediate(resolve)).then(() => {
+        tickRan = true
+      })
+      expect(tickRan).toBe(true)
+
+      await r.settle()
+      expect(Buffer.from(r.getBody(), 'base64')).toHaveLength(1024)
+    } finally {
+      rmSync(file)
+    }
   })
 })
 
