@@ -7,7 +7,9 @@
  * @implements FR21
  */
 
-import { readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
@@ -142,6 +144,8 @@ export class Response extends Macroable {
   #status = 200
   /** A body still being drained by {@link stream}; awaited by {@link settle}. */
   #pendingStream: Promise<void> | undefined
+  /** The detached chunk pump, when one is running. See {@link streamed}. */
+  #pumping: Promise<void> | undefined
   #headers: Record<string, string> = {}
   #cookies: string[] = []
   #body = ''
@@ -747,6 +751,20 @@ export class Response extends Macroable {
    * @internal Wait for a body still being produced (see {@link stream}). The
    * kernel calls this before serializing; everything else resolves at once.
    */
+  /**
+   * Resolves when a streamed body has finished feeding the socket.
+   *
+   * Deliberately NOT part of {@link settle}: the response has to reach Rust
+   * with its stream id before the body can be attached, so waiting for the
+   * pump there would deadlock — and closing the stream first is what made the
+   * client see `E_STREAM_UNKNOWN` instead of the file. This is for a test that
+   * wants the finished body, and for a shutdown that would rather let an
+   * in-flight download end than cut it.
+   */
+  streamed(): Promise<void> {
+    return this.#pumping ?? Promise.resolve()
+  }
+
   async settle(): Promise<void> {
     const pending = this.#pendingStream
     if (pending === undefined) return
@@ -777,9 +795,12 @@ export class Response extends Macroable {
     generateEtag: boolean,
     errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
   ): Promise<void> {
-    let content: Buffer
+    // Stat first: a missing or unreadable file must answer 404 BEFORE any
+    // header goes out, and once a stream starts there is no status left to
+    // change.
+    let size: number
     try {
-      content = await readFile(filePath)
+      size = (await stat(filePath)).size
     } catch (error) {
       if (errorCallback) {
         const [message, status] = errorCallback(error as NodeJS.ErrnoException)
@@ -789,8 +810,20 @@ export class Response extends Macroable {
       this.status(404).send('Not Found')
       return
     }
+
     const ct = contentType(basename(filePath))
     if (ct) this.#headers['content-type'] = ct
+
+    // An ETag is a hash of the whole file, so asking for one asks for the file
+    // in memory. Without one, stream it: the body goes out as it is read and
+    // nothing bigger than a chunk is ever held.
+    if (!generateEtag && this.#streamBackend?.writeStreamBytes !== undefined) {
+      this.#headers['content-length'] = String(size)
+      await this.#pipe(createReadStream(filePath), errorCallback)
+      return
+    }
+
+    const content = await readFile(filePath)
     if (generateEtag) this.setEtag(content)
     this.sendBuffer(content)
   }
@@ -861,11 +894,78 @@ export class Response extends Macroable {
     body: NodeJS.ReadableStream,
     errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
   ): Promise<void> {
-    const draining = this.#drain(body, errorCallback)
+    const draining = this.#pipe(body, errorCallback)
     this.#pendingStream = draining
     return draining
   }
 
+  /**
+   * Send a readable as the body.
+   *
+   * Chunks go to the socket as they arrive when the host can carry them —
+   * nothing bigger than one chunk is ever held, so the file's size stops being
+   * the process's memory ceiling. A host with no binary stream backend (a unit
+   * test, a mock server) falls back to draining into memory, which is what
+   * this always used to do.
+   */
+  async #pipe(
+    body: NodeJS.ReadableStream,
+    errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
+  ): Promise<void> {
+    const backend = this.#streamBackend
+    const writeBytes = backend?.writeStreamBytes
+    if (backend === undefined || writeBytes === undefined) {
+      return this.#drain(body, errorCallback)
+    }
+
+    const streamId = randomUUID()
+    if (!(await backend.registerStream(streamId))) {
+      // The id collided — vanishingly unlikely, but answering with a body
+      // nobody feeds would hang the client forever.
+      return this.#drain(body, errorCallback)
+    }
+    if (!this.#headers['content-type']) {
+      this.#headers['content-type'] = 'application/octet-stream'
+    }
+    this.#streamId = streamId
+    this.#finished = true
+
+    // Pump DETACHED, exactly as `sse()` does. What is awaited here is only the
+    // registration: the kernel awaits this before handing the response back to
+    // Rust, and Rust then looks the id up to attach the body. Awaiting the pump
+    // instead would close the stream before that lookup ever happened, and the
+    // client would get `E_STREAM_UNKNOWN` in place of the file.
+    this.#pumping = this.#pump(backend, writeBytes.bind(backend), streamId, body, errorCallback)
+  }
+
+  /** Feed a registered stream until the source ends or the client leaves. */
+  async #pump(
+    backend: StreamBackend,
+    writeBytes: (id: string, chunk: Uint8Array) => Promise<boolean>,
+    streamId: string,
+    body: NodeJS.ReadableStream,
+    errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],
+  ): Promise<void> {
+    try {
+      for await (const chunk of body) {
+        const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+        // `false` means the client is gone. Stop reading the source rather
+        // than pumping a whole file into a closed socket.
+        if (!(await writeBytes(streamId, bytes))) break
+      }
+    } catch (err) {
+      // The headers are already out, so there is no status left to change: end
+      // the body and let the client see a short read. `errorCallback` is still
+      // consulted for whatever logging it does.
+      errorCallback?.(err as NodeJS.ErrnoException)
+    } finally {
+      // Never rethrows: this runs detached, and an unhandled rejection here
+      // would take the process down over one client's download.
+      await backend.closeStream(streamId).catch(() => {})
+    }
+  }
+
+  /** Read the whole body into memory. The fallback when nothing can stream. */
   async #drain(
     body: NodeJS.ReadableStream,
     errorCallback?: (error: NodeJS.ErrnoException) => [string, number?],

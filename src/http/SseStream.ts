@@ -37,6 +37,16 @@
 export interface StreamBackend {
   registerStream(streamId: string): Promise<boolean>
   writeStream(streamId: string, chunk: string): Promise<boolean>
+  /**
+   * Push a BINARY chunk, waiting for room rather than dropping it.
+   *
+   * `writeStream` is shaped for events: text, and a full buffer discards the
+   * frame — right when a missed event is a missed event, wrong when the client
+   * is reassembling a file and a missing frame is a corrupt download. Optional
+   * so a host that only serves SSE need not implement it; `response.stream()`
+   * falls back to buffering when it is absent.
+   */
+  writeStreamBytes?(streamId: string, chunk: Uint8Array): Promise<boolean>
   closeStream(streamId: string): Promise<boolean>
   onStreamDisconnect(streamId: string, callback: () => void): void
 }

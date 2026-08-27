@@ -19,7 +19,11 @@ function loadNativeModule() {
   if (!suffix) {
     throw new Error(`Unsupported platform: ${key}`)
   }
-  return require(join(__dirname, `index.${suffix}.node`))
+  // The binary the package SHIPS, not a hand-copied one next to the test.
+  // A local copy is gitignored and refreshed by nothing, so it drifts from the
+  // Rust source silently — an integration test then passes against a build
+  // that no longer matches the code it is meant to cover.
+  return require(join(__dirname, '..', '..', '..', `index.${suffix}.node`))
 }
 
 const native = loadNativeModule()

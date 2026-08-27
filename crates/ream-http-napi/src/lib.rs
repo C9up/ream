@@ -377,6 +377,34 @@ impl HyperServer {
             .await)
     }
 
+    /// Push a BINARY chunk onto a registered stream, waiting for room.
+    ///
+    /// The counterpart of [`write_stream`](Self::write_stream) for a body the
+    /// client reassembles — a file, an export, an archive. Two differences,
+    /// both required there and both wrong for SSE:
+    ///
+    /// * it takes bytes, not a `String`, so a payload that is not valid UTF-8
+    ///   survives the crossing intact;
+    /// * it AWAITS when the channel is full instead of dropping the frame, so
+    ///   a slow client slows the producer rather than silently receiving a
+    ///   truncated file.
+    ///
+    /// Returns `false` when the receiver is gone (client disconnected or the
+    /// stream was closed), so the caller can stop reading its source.
+    #[napi]
+    pub async fn write_stream_bytes(
+        &self,
+        stream_id: String,
+        chunk: napi::bindgen_prelude::Uint8Array,
+    ) -> napi::Result<bool> {
+        // Copied once out of the JS-owned buffer: the caller may reuse or free
+        // it the moment this returns, and the frame outlives the call.
+        Ok(self
+            .stream_registry
+            .send_chunk_awaiting(&stream_id, chunk.to_vec())
+            .await)
+    }
+
     /// Close a stream from the server side. The matching response body
     /// finishes cleanly (hyper writes the final chunk + `0\r\n\r\n` for
     /// HTTP/1.1 chunked encoding). Idempotent.
