@@ -19,11 +19,43 @@ export class MultipartFile {
   readonly clientName: string
 
   /**
-   * MIME type from the Content-Type header. ATTACKER-CONTROLLED — never trust it
-   * for security decisions or as a response Content-Type. Prefer
-   * {@link detectedType}, which is fingerprinted from the file's magic bytes.
+   * The PRIMARY mime type from the Content-Type header — `image` for
+   * `image/png`. Pair it with {@link subtype}, as AdonisJS does.
+   *
+   * BREAKING as of this version: it used to hold the whole `image/png`. The
+   * change aligns the field with upstream, and TypeScript cannot catch a
+   * comparison against a full mime string — `file.type === 'image/png'` now
+   * simply never matches. Use `file.subtype` or {@link detectedType}.
+   *
+   * ATTACKER-CONTROLLED — never trust it for security decisions or as a
+   * response Content-Type. Prefer {@link detectedType}, which is fingerprinted
+   * from the file's magic bytes.
    */
-  readonly type: string
+  readonly type?: string
+
+  /** The mime SUBTYPE — `png` for `image/png`. Attacker-controlled, like {@link type}. */
+  readonly subtype?: string
+
+  /**
+   * The part's headers.
+   *
+   * NAMED CONSTRAINT — Rust's multipart parser forwards only the part's
+   * content-type across the NAPI boundary today, so this carries that one
+   * header rather than every header the client sent.
+   */
+  readonly headers: Record<string, string>
+
+  /** Always true. Lets a value be told apart from a plain form field. */
+  readonly isMultipartFile = true as const
+
+  /** Where the file is in its life: idle, consumed, or moved to disk. */
+  state: 'idle' | 'streaming' | 'consumed' | 'moved' = 'consumed'
+
+  /** Absolute path the file was moved to, once it has been. */
+  filePath?: string
+
+  /** The name it was written under, once it has been moved. */
+  fileName?: string
 
   /** File size in bytes. */
   readonly size: number
@@ -43,6 +75,9 @@ export class MultipartFile {
   /** Extension derived from the (attacker-controlled) client filename. */
   #clientExtname: string
 
+  /** Rules set through `sizeLimit` / `allowedExtensions`, used by a bare `validate()`. */
+  #validationOptions: FileValidationOptions = {}
+
   /** Magic-byte fingerprint — set by {@link detectType}; absent for content `file-type` can't detect (text: txt/csv/svg/json). */
   #detected?: { ext: string; mime: string }
 
@@ -54,7 +89,10 @@ export class MultipartFile {
   }) {
     this.fieldName = options.fieldName
     this.clientName = options.clientName
-    this.type = options.type
+    this.headers = { 'content-type': options.type }
+    const [type, subtype] = options.type.split(';')[0].trim().split('/')
+    this.type = type || undefined
+    this.subtype = subtype || undefined
     this.content = options.content
     this.size = options.content.length
     const segments = options.clientName.split('.')
@@ -91,8 +129,37 @@ export class MultipartFile {
     return this.#detected?.ext ?? this.#clientExtname
   }
 
-  /** Validate file against size and extension rules. */
-  validate(options: FileValidationOptions): boolean {
+  /** The size ceiling set through {@link sizeLimit}, if any. */
+  get sizeLimit(): number | string | undefined {
+    return this.#validationOptions.size
+  }
+
+  set sizeLimit(limit: number | string | undefined) {
+    this.#validationOptions.size = typeof limit === 'number' ? String(limit) : limit
+  }
+
+  /** The extension allowlist set through {@link allowedExtensions}, if any. */
+  get allowedExtensions(): string[] | undefined {
+    return this.#validationOptions.extnames
+  }
+
+  set allowedExtensions(extensions: string[] | undefined) {
+    this.#validationOptions.extnames = extensions
+  }
+
+  /** Whether validation turned anything up. The inverse of {@link isValid}. */
+  get hasErrors(): boolean {
+    return this.errors.length > 0
+  }
+
+  /**
+   * Validate the file against size and extension rules.
+   *
+   * The argument is optional: called bare it uses whatever was set through
+   * {@link sizeLimit} and {@link allowedExtensions}, which is how AdonisJS
+   * spells it.
+   */
+  validate(options: FileValidationOptions = this.#validationOptions): boolean {
     if (options.size) {
       const maxBytes = parseFileSize(options.size)
       if (this.size > maxBytes) {
@@ -145,8 +212,58 @@ export class MultipartFile {
     }
     const filePath = join(directory, fileName)
     writeFileSync(filePath, this.content)
-    this.#moved = true
+    this.markAsMoved(fileName, filePath)
     return filePath
+  }
+
+  /**
+   * Write the file into `location` (AdonisJS `move`).
+   *
+   * NAMED DEVIATION — upstream renames a temporary file it streamed to disk;
+   * Ream holds the bytes in memory (`multipart.tmpDir` is refused at
+   * construction), so this writes the buffer. There is therefore no
+   * `E_MISSING_FILE_TMP_PATH`: there is no temporary file to be missing.
+   *
+   * `overwrite` defaults to true, as upstream. The generated name carries the
+   * detected extension, and both it and a caller-supplied `name` go through the
+   * same plain-filename guard {@link moveToDisk} uses — the common footgun is
+   * passing `file.clientName` straight through.
+   */
+  async move(location: string, options?: { name?: string; overwrite?: boolean }): Promise<void> {
+    const { mkdir, writeFile, access } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+
+    const name = options?.name ?? `${randomBytes(16).toString('hex')}.${this.extname || 'unknown'}`
+    if (!isSafeFilename(name)) {
+      throw new Error(
+        `MultipartFile.move: 'name' must be a plain filename (no path separators, '.', or '..'). Got: ${JSON.stringify(name)}`,
+      )
+    }
+
+    const filePath = join(location, name)
+    if (options?.overwrite === false) {
+      const exists = await access(filePath).then(
+        () => true,
+        () => false,
+      )
+      if (exists) {
+        throw new Error(
+          `"${name}" already exists at "${location}". Set "overwrite = true" to overwrite it`,
+        )
+      }
+    }
+
+    await mkdir(location, { recursive: true })
+    await writeFile(filePath, this.content)
+    this.markAsMoved(name, filePath)
+  }
+
+  /** Record that the file now lives on disk. */
+  markAsMoved(fileName: string, filePath: string): void {
+    this.fileName = fileName
+    this.filePath = filePath
+    this.state = 'moved'
+    this.#moved = true
   }
 
   get isMoved(): boolean {

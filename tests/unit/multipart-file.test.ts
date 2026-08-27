@@ -191,3 +191,123 @@ describe('MultipartFile metadata + validate()', () => {
     expect(f.isValid).toBe(false)
   })
 })
+
+describe('MultipartFile > AdonisJS surface', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ream-move-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function upload(clientName: string, type = 'text/plain', content = 'BYTES'): MultipartFile {
+    return new MultipartFile({
+      fieldName: 'f',
+      clientName,
+      type,
+      content: Buffer.from(content, 'utf8'),
+    })
+  }
+
+  it('splits the mime into type and subtype, as upstream does', () => {
+    const f = upload('a.png', 'image/png')
+    expect(f.type).toBe('image')
+    expect(f.subtype).toBe('png')
+    // The whole header is still reachable, it just is not `type` any more.
+    expect(f.headers['content-type']).toBe('image/png')
+  })
+
+  it('drops the parameters off a content-type before splitting', () => {
+    const f = upload('a.txt', 'text/plain; charset=utf-8')
+    expect(f.type).toBe('text')
+    expect(f.subtype).toBe('plain')
+  })
+
+  it('survives a content-type with no slash rather than inventing a subtype', () => {
+    const f = upload('a.bin', 'garbage')
+    expect(f.type).toBe('garbage')
+    expect(f.subtype).toBeUndefined()
+  })
+
+  it('move() writes the file and records where it went', async () => {
+    const f = upload('note.txt')
+    expect(f.state).toBe('consumed')
+
+    await f.move(dir, { name: 'saved.txt' })
+
+    expect(readFileSync(join(dir, 'saved.txt'), 'utf8')).toBe('BYTES')
+    expect(f.fileName).toBe('saved.txt')
+    expect(f.filePath).toBe(join(dir, 'saved.txt'))
+    expect(f.state).toBe('moved')
+    expect(f.isMoved).toBe(true)
+  })
+
+  it('move() creates the directory, and names the file when the caller does not', async () => {
+    const f = upload('note.txt')
+    const nested = join(dir, 'deep', 'deeper')
+
+    await f.move(nested)
+
+    expect(f.fileName).toMatch(/^[0-9a-f]{32}\.txt$/)
+    expect(readFileSync(f.filePath as string, 'utf8')).toBe('BYTES')
+  })
+
+  it('overwrites by default, and refuses when told not to', async () => {
+    await upload('a.txt', 'text/plain', 'FIRST').move(dir, { name: 'x.txt' })
+    await upload('a.txt', 'text/plain', 'SECOND').move(dir, { name: 'x.txt' })
+    expect(readFileSync(join(dir, 'x.txt'), 'utf8')).toBe('SECOND')
+
+    await expect(
+      upload('a.txt', 'text/plain', 'THIRD').move(dir, { name: 'x.txt', overwrite: false }),
+    ).rejects.toThrow(/already exists/)
+    // The refusal must not have touched the file.
+    expect(readFileSync(join(dir, 'x.txt'), 'utf8')).toBe('SECOND')
+  })
+
+  it('refuses a name that would escape the directory', async () => {
+    const f = upload('a.txt')
+    // The footgun this guards: `await file.move(dir, { name: file.clientName })`
+    // with a client name of `../../etc/passwd`.
+    await expect(f.move(dir, { name: '../escape.txt' })).rejects.toThrow(/plain filename/)
+    await expect(f.move(dir, { name: 'sub/escape.txt' })).rejects.toThrow(/plain filename/)
+    expect(f.state).toBe('consumed')
+  })
+
+  it('isMultipartFile marks it apart from a plain field', () => {
+    expect(upload('a.txt').isMultipartFile).toBe(true)
+  })
+
+  it('hasErrors is the inverse of isValid', () => {
+    const f = upload('a.txt')
+    expect(f.hasErrors).toBe(false)
+    f.validate({ extnames: ['png'] })
+    expect(f.hasErrors).toBe(true)
+    expect(f.isValid).toBe(false)
+  })
+
+  it('a bare validate() uses the rules set through the accessors', () => {
+    const f = upload('a.txt')
+    f.allowedExtensions = ['png', 'jpg']
+    expect(f.allowedExtensions).toEqual(['png', 'jpg'])
+
+    expect(f.validate()).toBe(false)
+    expect(f.errors[0]).toMatch(/not allowed/)
+  })
+
+  it('sizeLimit drives a bare validate() too', () => {
+    const f = upload('a.txt', 'text/plain', 'x'.repeat(4096))
+    f.sizeLimit = '1kb'
+    expect(f.sizeLimit).toBe('1kb')
+    expect(f.validate()).toBe(false)
+    expect(f.errors[0]).toMatch(/exceeds limit/)
+  })
+
+  it('moveToDisk records the move the same way move() does', async () => {
+    const f = upload('a.txt')
+    const path = await f.moveToDisk(dir, 'legacy.txt')
+    expect(f.state).toBe('moved')
+    expect(f.filePath).toBe(path)
+    expect(f.fileName).toBe('legacy.txt')
+  })
+})
