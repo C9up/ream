@@ -765,6 +765,18 @@ export class Response extends Macroable {
     return this.#pumping ?? Promise.resolve()
   }
 
+  /**
+   * @internal Wait for a body still being produced, before serialising.
+   *
+   * NOT AdonisJS' `response.finish()`, which flushes the buffered body to the
+   * socket. Ream never owns the socket: the kernel hands the whole response
+   * back across the NAPI boundary and Rust writes it, so there is nothing here
+   * for an app to flush. This is the step before that — `download()` and a
+   * buffered `stream()` fill the body asynchronously, and the kernel has to
+   * let them finish before reading it.
+   *
+   * A STREAMED body is deliberately not awaited here; see {@link streamed}.
+   */
   async settle(): Promise<void> {
     const pending = this.#pendingStream
     if (pending === undefined) return

@@ -426,6 +426,11 @@ function readControllerGuardMetadata(
 }
 
 async function serializeResponse(ctx: HttpContext): Promise<HttpKernelResponse> {
+  // AdonisJS calls this from `response.finish()`, so every response echoes the
+  // caller's x-request-id without the app asking. Doing it here rather than
+  // leaving it to each handler is what makes it true of every response,
+  // including the ones an exception handler produced.
+  ctx.response.setRequestId()
   // A body still being drained by `response.stream()` — upstream returns void
   // there, so a migrated controller does not await it.
   await ctx.response.settle()

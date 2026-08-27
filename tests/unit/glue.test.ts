@@ -244,3 +244,59 @@ describe('clearServiceRegistry > test isolation', () => {
     expect(getServiceRegistry().size).toBe(0)
   })
 })
+
+describe('the kernel echoes the caller request id (AdonisJS `finish`)', () => {
+  function kernelFor(handler: () => void) {
+    const router = new Router()
+    router.get('/x', handler)
+    return createHttpKernel({ router, middleware: new MiddlewareRegistry() })
+  }
+
+  it('sends x-request-id back without the handler asking', async () => {
+    const kernel = kernelFor(() => {})
+    const response = await kernel({
+      method: 'GET',
+      path: '/x',
+      query: '',
+      headers: { 'x-request-id': 'abc-123' },
+      body: '',
+    })
+
+    // AdonisJS calls setRequestId() from response.finish(), so the echo is a
+    // property of every response rather than something each handler remembers.
+    expect(response.headers['x-request-id']).toBe('abc-123')
+  })
+
+  it('invents nothing when the caller sent none', async () => {
+    const kernel = kernelFor(() => {})
+    const response = await kernel({
+      method: 'GET',
+      path: '/x',
+      query: '',
+      headers: {},
+      body: '',
+    })
+
+    // ctx.id still gets a generated one; handing it back would name an id the
+    // caller never used.
+    expect(response.headers['x-request-id']).toBeUndefined()
+  })
+
+  it('echoes it on an error response too', async () => {
+    const kernel = kernelFor(() => {
+      throw new Error('boom')
+    })
+    const response = await kernel({
+      method: 'GET',
+      path: '/x',
+      query: '',
+      headers: { 'x-request-id': 'trace-me' },
+      body: '',
+    })
+
+    // The response an exception handler produced is the one an operator most
+    // needs to correlate.
+    expect(response.status).toBe(500)
+    expect(response.headers['x-request-id']).toBe('trace-me')
+  })
+})
