@@ -1,5 +1,6 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import bytes from './bytes.js'
+import { milliseconds, seconds } from './duration.js'
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -77,6 +78,135 @@ export function titleCase(s: string): string {
   return splitWords(s)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ')
+}
+
+/**
+ * Space-separated lowercase words.
+ * @example noCase('userName') // 'user name'
+ */
+export function noCase(s: string): string {
+  return splitWords(s).join(' ')
+}
+
+/**
+ * Dot-separated lowercase words.
+ * @example dotCase('userName') // 'user.name'
+ */
+export function dotCase(s: string): string {
+  return splitWords(s).join('.')
+}
+
+/**
+ * Every word capitalised, space separated.
+ * @example capitalCase('user_name') // 'User Name'
+ */
+export function capitalCase(s: string): string {
+  return titleCase(s)
+}
+
+/**
+ * First word capitalised, the rest lowercase.
+ * @example sentenceCase('userName') // 'User name'
+ */
+export function sentenceCase(s: string): string {
+  const words = splitWords(s)
+  if (words.length === 0) return ''
+  const [first, ...rest] = words
+  return [(first ?? '').charAt(0).toUpperCase() + (first ?? '').slice(1), ...rest].join(' ')
+}
+
+/**
+ * Join values the way a sentence does.
+ * @example sentence(['a', 'b', 'c']) // 'a, b, and c'
+ */
+export function sentence(
+  values: readonly unknown[],
+  options: { separator?: string; pairSeparator?: string; lastSeparator?: string } = {},
+): string {
+  const parts = values.map((value) => String(value))
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0] ?? ''
+  const separator = options.separator ?? ', '
+  const pairSeparator = options.pairSeparator ?? ' and '
+  const lastSeparator = options.lastSeparator ?? ', and '
+  if (parts.length === 2) return parts.join(pairSeparator)
+  return parts.slice(0, -1).join(separator) + lastSeparator + parts[parts.length - 1]
+}
+
+/**
+ * Wrap text at `width`, breaking on spaces.
+ *
+ * A word longer than the width is left whole rather than cut: breaking an
+ * identifier or a URL mid-token is worse than an over-long line.
+ */
+export function wordWrap(
+  value: string,
+  options: { width: number; indent?: string; newLine?: string },
+): string {
+  const width = Math.max(1, Math.floor(options.width))
+  const indent = options.indent ?? ''
+  const newLine = options.newLine ?? '\n'
+  const lines: string[] = []
+  let line = ''
+  for (const word of value.split(/\s+/).filter(Boolean)) {
+    if (line.length === 0) {
+      line = word
+    } else if (line.length + 1 + word.length <= width) {
+      line += ` ${word}`
+    } else {
+      lines.push(line)
+      line = word
+    }
+  }
+  if (line.length > 0) lines.push(line)
+  return lines.map((entry, index) => (index === 0 ? entry : indent + entry)).join(newLine)
+}
+
+/**
+ * Pad every column to the same width.
+ * @example justify(['a', 'bb'], { width: 4 }) // ['a   ', 'bb  ']
+ */
+export function justify(
+  columns: readonly string[],
+  options: { width: number; align?: 'left' | 'right'; indent?: string },
+): string[] {
+  const width = Math.max(0, Math.floor(options.width))
+  const indent = options.indent ?? ''
+  return columns.map((column) => {
+    const padded =
+      options.align === 'right' ? column.padStart(width, ' ') : column.padEnd(width, ' ')
+    return indent + padded
+  })
+}
+
+/** A RFC 4122 v4 UUID. */
+export function uuid(): string {
+  return randomUUID()
+}
+
+/** `ordinal` under the name AdonisJS also ships it as. */
+export function ordinalize(value: number): string {
+  return ordinal(value)
+}
+
+/** `sentence` under the name AdonisJS also ships it as. */
+export function toSentence(
+  values: readonly unknown[],
+  options?: { separator?: string; pairSeparator?: string; lastSeparator?: string },
+): string {
+  return sentence(values, options)
+}
+
+/** `escapeHTML` under the name @poppinss/string ships it as. */
+export function htmlEscape(value: string): string {
+  return escapeHTML(value)
+}
+
+/**
+ * Pluralise `word`, honouring a count: `pluralize('item', 1)` stays singular.
+ */
+export function pluralize(word: string, count?: number): string {
+  return count === 1 ? singular(word) : plural(word)
 }
 
 /**
@@ -466,6 +596,20 @@ const string = {
   prettyHrTime,
   toUnixSlash,
   interpolate,
+  noCase,
+  dotCase,
+  capitalCase,
+  sentenceCase,
+  sentence,
+  toSentence,
+  wordWrap,
+  justify,
+  uuid,
+  ordinalize,
+  htmlEscape,
+  pluralize,
+  seconds,
+  milliseconds,
 }
 
 export default string

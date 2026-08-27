@@ -69,3 +69,78 @@ export function durationToSeconds(value: number | string, label: string): number
   }
   return Math.floor(milliseconds / SECOND)
 }
+
+/**
+ * Format a millisecond duration the way `@poppinss/string` does.
+ *
+ * Short form by default (`'2h'`), long form on request (`'2 hours'`).
+ */
+function formatMs(value: number, long: boolean): string {
+  const table: [number, string][] = long
+    ? [
+        [YEAR, 'year'],
+        [DAY, 'day'],
+        [HOUR, 'hour'],
+        [MINUTE, 'minute'],
+        [SECOND, 'second'],
+        [1, 'millisecond'],
+      ]
+    : [
+        [DAY, 'd'],
+        [HOUR, 'h'],
+        [MINUTE, 'm'],
+        [SECOND, 's'],
+        [1, 'ms'],
+      ]
+  const magnitude = Math.abs(value)
+  for (const [scale, label] of table) {
+    if (magnitude >= scale) {
+      const count = Math.round(value / scale)
+      return long ? `${count} ${label}${Math.abs(count) === 1 ? '' : 's'}` : `${count}${label}`
+    }
+  }
+  return long ? `${value} milliseconds` : `${value}ms`
+}
+
+/** The duration that could not be read, as one message shape for both objects. */
+function parseOrThrow(duration: string | number, unitLabel: string): number {
+  if (typeof duration === 'number') return duration
+  const parsed = parseDurationMs(duration)
+  if (parsed === undefined) {
+    throw new Error(
+      `Cannot read "${duration}" as ${unitLabel}. Use a number, or a duration such as '30m', '2 hours' or '7 days'.`,
+    )
+  }
+  return parsed
+}
+
+/**
+ * `string.milliseconds` — parse and format durations in milliseconds.
+ *
+ * A number passes through untouched, matching `@poppinss/string`.
+ */
+export const milliseconds = {
+  parse(duration: string | number): number {
+    return parseOrThrow(duration, 'milliseconds')
+  },
+  format(value: number, long = false): string {
+    return formatMs(value, long)
+  },
+}
+
+/**
+ * `string.seconds` — the same, in seconds.
+ *
+ * `parse` keeps the AdonisJS quirk its own `durationToSeconds` documents: a
+ * NUMBER is already seconds and passes through, while a unit-less STRING is
+ * milliseconds and gets scaled down.
+ */
+export const seconds = {
+  parse(duration: string | number): number {
+    if (typeof duration === 'number') return duration
+    return parseOrThrow(duration, 'seconds') / SECOND
+  },
+  format(value: number, long = false): string {
+    return formatMs(value * SECOND, long)
+  },
+}

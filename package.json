@@ -71,6 +71,10 @@
       "types": "./src/helpers/types.ts",
       "import": "./src/helpers/types.ts"
     },
+    "./helpers/fs": {
+      "types": "./src/helpers/fs.ts",
+      "import": "./src/helpers/fs.ts"
+    },
     "./testing": {
       "types": "./src/testing/TestClient.ts",
       "import": "./src/testing/TestClient.ts"
@@ -280,6 +284,10 @@
       "./helpers/types": {
         "types": "./dist/helpers/types.d.ts",
         "import": "./dist/helpers/types.js"
+      },
+      "./helpers/fs": {
+        "types": "./dist/helpers/fs.d.ts",
+        "import": "./dist/helpers/fs.js"
       },
       "./testing": {
         "types": "./dist/testing/TestClient.d.ts",
