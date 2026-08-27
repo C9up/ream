@@ -13,16 +13,27 @@ import type { Response } from './Response.js'
 
 export type RouteUrlResolver = (name: string, params?: Record<string, string>) => string
 
-function isSameOriginOrRelative(referer: string, requestUrl?: string): boolean {
+function isSameOriginOrRelative(
+  referer: string,
+  requestUrl?: string,
+  allowedHosts: readonly string[] = [],
+): boolean {
   // A relative path is trusted only when it starts with a single "/" and has no
   // backslash: browsers normalise "\" to "/", so "/\evil.com" would become the
   // protocol-relative "//evil.com" that a lone `!startsWith("//")` check misses.
   if (referer.startsWith('/') && !referer.startsWith('//') && !referer.includes('\\')) return true
+  let ref: URL
+  try {
+    ref = new URL(referer)
+  } catch {
+    return false
+  }
+  // An explicitly allowed host is trusted whatever the request's own origin is
+  // — that is what the list is for (AdonisJS `allowedHosts`).
+  if (allowedHosts.includes(ref.host)) return true
   if (!requestUrl) return false
   try {
-    const ref = new URL(referer)
-    const req = new URL(requestUrl)
-    return ref.origin === req.origin
+    return ref.origin === new URL(requestUrl).origin
   } catch {
     return false
   }
@@ -35,6 +46,14 @@ export interface IntendedUrlStore {
 }
 
 export class RedirectBuilder {
+  /**
+   * Hosts a redirect-back may leave the origin for (AdonisJS `allowedHosts`).
+   *
+   * Empty by default, which keeps `back()` same-origin only — an open-redirect
+   * is exactly what an unvalidated Referer buys.
+   */
+  allowedHosts: string[] = []
+
   #response: Response
   #status = 302
   #qs: Record<string, unknown> = {}
@@ -193,12 +212,23 @@ export class RedirectBuilder {
    * to `fallback` to prevent open redirect attacks.
    */
   back(fallback = '/'): void {
+    this.toPath(this.getPreviousUrl(fallback))
+  }
+
+  /**
+   * Where "back" goes (AdonisJS `getPreviousUrl`).
+   *
+   * Reads the Referer and validates its host, returning `fallback` when there
+   * is nothing trustworthy. Public and overridable on purpose: resolving the
+   * previous URL from the session instead of the header is the documented
+   * reason to replace it.
+   */
+  getPreviousUrl(fallback = '/'): string {
     const referer = this.#requestReferer
-    if (referer && isSameOriginOrRelative(referer, this.#requestUrl)) {
-      this.toPath(referer)
-    } else {
-      this.toPath(fallback)
+    if (referer && isSameOriginOrRelative(referer, this.#requestUrl, this.allowedHosts)) {
+      return referer
     }
+    return fallback
   }
 
   /**

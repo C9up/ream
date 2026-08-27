@@ -83,22 +83,41 @@ export class Env<Values extends Record<string, unknown>> {
   ): Promise<Env<EnvRecord<S>>> {
     loadEnvFiles(appRoot, { skipEnvLocal: process.env.NODE_ENV === 'test' })
 
-    const failures: string[] = []
-    const collected: Record<string, unknown> = {}
-    for (const key of Object.keys(schema)) {
-      try {
-        collected[key] = schema[key].validate(key, process.env[key])
-      } catch (err) {
-        failures.push(err instanceof Error ? err.message : String(err))
-      }
-    }
-    if (failures.length > 0) throw new EnvValidationException(failures)
+    return new Env(Env.rules(schema).validate(process.env))
+  }
 
-    // The ONE isolated type-erasure boundary (the same place zod / @adonisjs/env
-    // cast internally): every entry of `collected` was produced by its schema
-    // node's validator, so the object structurally IS `EnvRecord<S>` — TS just
-    // can't carry that proof through the dynamic `Object.keys` loop. Load-bearing.
-    return new Env(collected as EnvRecord<S>)
+  /**
+   * Turn a schema into a reusable validator (AdonisJS `Env.rules`).
+   *
+   * `create` reads `process.env`; this validates any record — a parsed `.env`
+   * file, a fixture, a subset a test wants to check — and aggregates every
+   * failure into one {@link EnvValidationException} rather than stopping at
+   * the first.
+   */
+  static rules<S extends Record<string, SchemaNode<unknown>>>(
+    schema: S,
+  ): { validate(values: Record<string, string | undefined>): EnvRecord<S> } {
+    return {
+      validate(values: Record<string, string | undefined>): EnvRecord<S> {
+        const failures: string[] = []
+        const collected: Record<string, unknown> = {}
+        for (const key of Object.keys(schema)) {
+          try {
+            collected[key] = schema[key].validate(key, values[key])
+          } catch (err) {
+            failures.push(err instanceof Error ? err.message : String(err))
+          }
+        }
+        if (failures.length > 0) throw new EnvValidationException(failures)
+
+        // The ONE isolated type-erasure boundary (the same place zod /
+        // @adonisjs/env cast internally): every entry of `collected` was
+        // produced by its schema node's validator, so the object structurally
+        // IS `EnvRecord<S>` — TS just can't carry that proof through the
+        // dynamic `Object.keys` loop. Load-bearing.
+        return collected as EnvRecord<S>
+      },
+    }
   }
 
   /**

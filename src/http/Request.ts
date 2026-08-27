@@ -7,6 +7,7 @@
  * @implements FR21
  */
 
+import { parseQueryString } from '../bodyparser/qsParse.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
@@ -701,6 +702,10 @@ export class Request extends Macroable {
   /** Get parsed query string as an object. */
   qs(): Dict<unknown> {
     if (!this.#parsedQs) {
+      // The same parser the body parser uses. A local one lived here and split
+      // on "&" only: `?filter[status]=open` stayed the literal key
+      // "filter[status]", and `?tags[]=a&tags[]=b` silently kept only "b" —
+      // both are ordinary shapes for a filter or an HTML multi-select.
       this.#parsedQs = parseQueryString(this.#raw.query)
     }
     return { ...this.#parsedQs }
@@ -1010,22 +1015,6 @@ function safeDecode(value: string): string {
   } catch {
     return value
   }
-}
-
-function parseQueryString(qs: string): Dict<unknown> {
-  if (!qs) return {}
-  const result: Dict<unknown> = {}
-  for (const pair of qs.split('&')) {
-    const eqIdx = pair.indexOf('=')
-    if (eqIdx === -1) {
-      result[safeDecode(pair)] = ''
-    } else {
-      const key = safeDecode(pair.slice(0, eqIdx))
-      const value = safeDecode(pair.slice(eqIdx + 1))
-      result[key] = value
-    }
-  }
-  return result
 }
 
 interface AcceptEntry {

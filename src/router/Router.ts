@@ -402,6 +402,54 @@ export class RouteBuilder extends Macroable {
   getDefinition(): RouteDefinition {
     return this.#primary()
   }
+
+  /**
+   * The handler this route dispatches to (AdonisJS `route.getHandler`).
+   *
+   * Either the inline function or the controller/method pair — a route always
+   * has exactly one of the two.
+   */
+  getHandler(): RouteHandlerFunction | { target: AnyConstructor; method: string } | null {
+    const route = this.#primary()
+    return route.controller ?? route.handler
+  }
+
+  /**
+   * Every middleware attached to this route (AdonisJS `route.getMiddleware`).
+   *
+   * Named entries and inline functions in one list, in the order they run.
+   */
+  getMiddleware(): Array<string | MiddlewareFunction> {
+    const route = this.#primary()
+    return [...route.middleware, ...route.inlineMiddleware]
+  }
+
+  /**
+   * A serialisable description of this route (AdonisJS `route.toJSON`).
+   *
+   * What a routes-list command or a route-manifest generator reads, and why it
+   * carries names rather than the functions themselves.
+   */
+  toJSON(): {
+    name?: string
+    pattern: string
+    methods: string[]
+    handler: RouteHandlerFunction | { target: AnyConstructor; method: string } | null
+    middleware: string[]
+    domain?: string
+    matchers: Record<string, ParamMatcher>
+  } {
+    const route = this.#primary()
+    return {
+      ...(route.name === undefined ? {} : { name: route.name }),
+      pattern: route.path,
+      methods: this.#routes.map((entry) => entry.method),
+      handler: this.getHandler(),
+      middleware: [...route.middleware],
+      ...(route.domain === undefined ? {} : { domain: route.domain }),
+      matchers: { ...route.matchers },
+    }
+  }
 }
 
 // ─── GroupBuilder ───────────────────────────────────────────
@@ -413,6 +461,16 @@ export class GroupBuilder extends Macroable {
   constructor(routes: RouteDefinition[]) {
     super()
     this.#routes = routes
+  }
+
+  /**
+   * The routes this group wraps (AdonisJS `group.routes`).
+   *
+   * Read-only view: a group applies to its members, it does not hand out the
+   * backing array for someone else to splice.
+   */
+  get routes(): readonly RouteDefinition[] {
+    return [...this.#routes]
   }
 
   /** Set URL prefix for all routes in the group. */
@@ -705,6 +763,8 @@ function isViewEngine(value: unknown): value is ViewEngine {
 export class OnRouteBuilder {
   #router: Router
   #path: string
+  /** The route built by `render`/`redirect`/`redirectToPath`/`setHandler`. */
+  #route: RouteBuilder | undefined
 
   constructor(router: Router, path: string) {
     this.#router = router
@@ -721,7 +781,7 @@ export class OnRouteBuilder {
    * seeds its own engine there.
    */
   render(view: string, data?: Record<string, unknown>): RouteBuilder {
-    return this.#router.get(this.#path, async (ctx) => {
+    this.#route = this.#router.get(this.#path, async (ctx) => {
       const candidate = Reflect.get(Object(ctx), 'view') ?? ctx.store.get('view')
       if (!isViewEngine(candidate)) {
         throw new Error(
@@ -732,6 +792,7 @@ export class OnRouteBuilder {
       const html = await candidate.render(view, data)
       ctx.response.type('text/html; charset=utf-8').send(html)
     })
+    return this.#route
   }
 
   /**
@@ -740,16 +801,38 @@ export class OnRouteBuilder {
    * for a fixed URL.
    */
   redirect(name: string, params?: Record<string, string>, status = 302): RouteBuilder {
-    return this.#router.get(this.#path, async (ctx) => {
+    this.#route = this.#router.get(this.#path, async (ctx) => {
       ctx.response.redirect().status(status).toRoute(name, params)
     })
+    return this.#route
   }
 
   /** Redirect to a fixed path/URL (AdonisJS brisk `redirectToPath`). */
   redirectToPath(target: string, status = 302): RouteBuilder {
-    return this.#router.get(this.#path, async (ctx) => {
+    this.#route = this.#router.get(this.#path, async (ctx) => {
       ctx.response.redirect().status(status).toPath(target)
     })
+    return this.#route
+  }
+
+  /**
+   * Register a handler for this path (AdonisJS brisk `setHandler`).
+   *
+   * The escape hatch from the canned briskness: `render` and `redirect` cover
+   * the two common cases, this covers the third without going back through
+   * `router.get()`.
+   */
+  setHandler(handler: RouteHandlerFunction): RouteBuilder {
+    this.#route = this.#router.get(this.#path, handler)
+    return this.#route
+  }
+
+  /**
+   * The route the last `render`/`redirect`/`setHandler` created, or
+   * `undefined` while none has been called (AdonisJS brisk `route`).
+   */
+  get route(): RouteBuilder | undefined {
+    return this.#route
   }
 }
 

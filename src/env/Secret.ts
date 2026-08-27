@@ -34,8 +34,34 @@ export class Secret<T> {
     return this.#keyword
   }
 
+  /**
+   * Redacted placeholder for implicit coercion.
+   *
+   * `valueOf` is what `+secret` and `secret == 'x'` reach for — without it,
+   * they fall back to the raw value and the secret leaks through arithmetic
+   * and loose comparison.
+   */
+  valueOf(): string {
+    return this.#keyword
+  }
+
+  /** Redacted placeholder for locale-aware string conversion. */
+  toLocaleString(): string {
+    return this.#keyword
+  }
+
   /** Release the underlying value — the one deliberate way to read the secret. */
   release(): T {
     return this.#value
+  }
+
+  /**
+   * Transform the wrapped value, keeping it wrapped.
+   *
+   * The point is that the intermediate never escapes: `secret.map(v => v.trim())`
+   * hands back another Secret rather than a bare string that could be logged.
+   */
+  map<R>(transform: (value: T) => R): Secret<R> {
+    return new Secret(transform(this.#value), this.#keyword)
   }
 }

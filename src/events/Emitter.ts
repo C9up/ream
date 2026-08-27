@@ -590,17 +590,42 @@ export class Emitter {
  *   emitter.on(TaskDeclared, LogTaskEvent)
  */
 export class BaseEvent {
+  /**
+   * Subclasses declare their own payload parameters; this signature only has
+   * to be wide enough for `dispatch` to forward them (AdonisJS does the same).
+   */
+  constructor(..._args: unknown[]) {}
+
   static eventName?: string
-  private static _emitter: Emitter | undefined
+
+  /**
+   * The emitter events dispatch through. Public, as in AdonisJS: a test swaps
+   * it to capture dispatches without booting a provider.
+   */
+  static emitter: Emitter | undefined
 
   /** @internal Wire the emitter (called by EventsProvider). */
   static useEmitter(emitter: Emitter): void {
-    BaseEvent._emitter = emitter
+    BaseEvent.emitter = emitter
   }
 
   /** @internal Ownership-guarded reset — only clears if `emitter` is still the active one. */
   static resetEmitter(emitter: Emitter): void {
-    if (BaseEvent._emitter === emitter) BaseEvent._emitter = undefined
+    if (BaseEvent.emitter === emitter) BaseEvent.emitter = undefined
+  }
+
+  /**
+   * Construct and dispatch in one call — `OrderShipped.dispatch(order)`.
+   *
+   * The AdonisJS idiom, and the reason `emit()` alone is not enough: an event
+   * is almost always built only to be emitted, and naming the class twice to
+   * do it is what the static removes.
+   */
+  static async dispatch<T extends typeof BaseEvent>(
+    this: T,
+    ...args: ConstructorParameters<T>
+  ): Promise<void> {
+    await new this(...args).emit()
   }
 
   /**
@@ -608,9 +633,9 @@ export class BaseEvent {
    * No-op if no emitter is wired (test/standalone mode).
    */
   async emit(): Promise<void> {
-    if (!BaseEvent._emitter) return
+    if (!BaseEvent.emitter) return
     try {
-      await BaseEvent._emitter.dispatchEvent(this)
+      await BaseEvent.emitter.dispatchEvent(this)
     } catch (err) {
       process.stderr.write(`[events] dispatch error for ${this.constructor.name}: ${err}\n`)
     }

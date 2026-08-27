@@ -218,6 +218,23 @@ export class Container {
     }
   }
 
+  /**
+   * Undo swaps in bulk (AdonisJS `restoreAll`).
+   *
+   * With no argument it restores everything — the same thing `restore()` does
+   * bare. Pass a list to undo only those, which is what a test does when it
+   * wants one swap to outlive the others.
+   */
+  restoreAll(tokens?: ServiceToken[]): void {
+    if (!tokens) {
+      this.restore()
+      return
+    }
+    for (const token of tokens) {
+      this.#restoreOne(this.#tokenToKey(token))
+    }
+  }
+
   #restoreOne(key: string): void {
     this.#overrides.delete(key)
     this.#singletons.delete(key)
@@ -427,6 +444,20 @@ export class Container {
       this.#aliases.has(key) ||
       (typeof token === 'function' && getServiceMetadata(token) !== undefined)
     )
+  }
+
+  /**
+   * True when the token was bound EXPLICITLY (AdonisJS `hasBinding`).
+   *
+   * Narrower than {@link has} on purpose, and this is the AdonisJS meaning:
+   * `has` answers "can this be resolved", which is also true for an alias or
+   * for a class carrying `@Service` that nobody registered. `hasBinding`
+   * answers "did someone register this", which is what a provider asks before
+   * deciding whether to register a default.
+   */
+  hasBinding(token: ServiceToken): boolean {
+    const key = this.#tokenToKey(token)
+    return this.#bindings.has(key) || this.#overrides.has(key) || this.#singletons.has(key)
   }
 
   /** True only when EVERY token is registered/resolvable (AdonisJS `hasAllBindings`). */
