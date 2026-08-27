@@ -214,8 +214,40 @@ describe('MultipartFile > AdonisJS surface', () => {
     const f = upload('a.png', 'image/png')
     expect(f.type).toBe('image')
     expect(f.subtype).toBe('png')
+    expect(f.mime).toBe('image/png')
     // The whole header is still reachable, it just is not `type` any more.
     expect(f.headers['content-type']).toBe('image/png')
+  })
+
+  it('reports what the BYTES say, not what the header claims', async () => {
+    // A real incident: an app filtered uploads with
+    // `ALLOWED_MIME.has(file.type)`. If `type` came from the header, a .exe
+    // announced as image/png would pass. Upstream derives it from the magic
+    // bytes and falls back to the header only when they cannot be read.
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(64)])
+    const f = new MultipartFile({
+      fieldName: 'f',
+      clientName: 'photo.png',
+      type: 'image/png',
+      content: pdf,
+    })
+
+    await f.detectType()
+
+    expect(f.mime).toBe('application/pdf')
+    expect(f.type).toBe('application')
+    expect(f.subtype).toBe('pdf')
+    // The lie is still on record, it just is not what validation reads.
+    expect(f.headers['content-type']).toBe('image/png')
+  })
+
+  it('falls back to the header for content with no magic signature', async () => {
+    // Text formats have no signature; upstream keeps the header there too.
+    const f = upload('notes.txt', 'text/plain', 'just words')
+    await f.detectType()
+
+    expect(f.mime).toBe('text/plain')
+    expect(f.type).toBe('text')
   })
 
   it('drops the parameters off a content-type before splitting', () => {

@@ -19,22 +19,49 @@ export class MultipartFile {
   readonly clientName: string
 
   /**
-   * The PRIMARY mime type from the Content-Type header — `image` for
-   * `image/png`. Pair it with {@link subtype}, as AdonisJS does.
+   * The PRIMARY mime type — `image` for `image/png`. Pair it with
+   * {@link subtype}, as AdonisJS does.
    *
-   * BREAKING as of this version: it used to hold the whole `image/png`. The
-   * change aligns the field with upstream, and TypeScript cannot catch a
-   * comparison against a full mime string — `file.type === 'image/png'` now
-   * simply never matches. Use `file.subtype` or {@link detectedType}.
+   * DERIVED FROM THE MAGIC BYTES when they can be read, and only from the
+   * Content-Type header when they cannot — upstream's precedence, and the one
+   * that matters: the header is written by the client, so a `.exe` announced as
+   * `image/png` would otherwise sail through a mime allowlist. A renamed file
+   * reports what it actually is.
    *
-   * ATTACKER-CONTROLLED — never trust it for security decisions or as a
-   * response Content-Type. Prefer {@link detectedType}, which is fingerprinted
-   * from the file's magic bytes.
+   * BREAKING as of 0.2.0: it used to hold the whole `image/png`. TypeScript
+   * cannot catch a comparison against a full mime string — `file.type ===
+   * 'image/png'` still compiles and simply never matches. Use {@link mime}.
    */
-  readonly type?: string
+  get type(): string | undefined {
+    return this.#mimeParts()[0]
+  }
 
-  /** The mime SUBTYPE — `png` for `image/png`. Attacker-controlled, like {@link type}. */
-  readonly subtype?: string
+  /** The mime SUBTYPE — `png` for `image/png`. Same source as {@link type}. */
+  get subtype(): string | undefined {
+    return this.#mimeParts()[1]
+  }
+
+  /**
+   * The full mime to validate against — `image/png`.
+   *
+   * What an allowlist wants, and the reason this exists: splitting the mime for
+   * upstream parity left every caller re-joining it by hand, and a caller that
+   * forgot got a filter that silently matched nothing. Same trustworthy source
+   * as {@link type}.
+   */
+  get mime(): string | undefined {
+    const [type, subtype] = this.#mimeParts()
+    if (!type) return undefined
+    return subtype ? `${type}/${subtype}` : type
+  }
+
+  /** Split the trustworthy mime once, detected bytes first, header second. */
+  #mimeParts(): [string | undefined, string | undefined] {
+    const source = this.#detected?.mime ?? this.#headerMime
+    if (!source) return [undefined, undefined]
+    const [type, subtype] = source.split(';')[0].trim().split('/')
+    return [type || undefined, subtype || undefined]
+  }
 
   /**
    * The part's headers.
@@ -78,6 +105,9 @@ export class MultipartFile {
   /** Rules set through `sizeLimit` / `allowedExtensions`, used by a bare `validate()`. */
   #validationOptions: FileValidationOptions = {}
 
+  /** The Content-Type the client sent — attacker-controlled, the fallback only. */
+  readonly #headerMime: string
+
   /** Magic-byte fingerprint — set by {@link detectType}; absent for content `file-type` can't detect (text: txt/csv/svg/json). */
   #detected?: { ext: string; mime: string }
 
@@ -90,9 +120,7 @@ export class MultipartFile {
     this.fieldName = options.fieldName
     this.clientName = options.clientName
     this.headers = { 'content-type': options.type }
-    const [type, subtype] = options.type.split(';')[0].trim().split('/')
-    this.type = type || undefined
-    this.subtype = subtype || undefined
+    this.#headerMime = options.type
     this.content = options.content
     this.size = options.content.length
     const segments = options.clientName.split('.')

@@ -1,6 +1,6 @@
 {
   "name": "@c9up/ream",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Ream \u2014 Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
@@ -245,9 +245,41 @@
         "types": "./dist/session/SessionMiddleware.d.ts",
         "import": "./dist/session/SessionMiddleware.js"
       },
+      "./helpers": {
+        "types": "./dist/helpers/index.d.ts",
+        "import": "./dist/helpers/index.js"
+      },
+      "./helpers/string": {
+        "types": "./dist/helpers/string.d.ts",
+        "import": "./dist/helpers/string.js"
+      },
+      "./helpers/is": {
+        "types": "./dist/helpers/is.d.ts",
+        "import": "./dist/helpers/is.js"
+      },
+      "./helpers/base64": {
+        "types": "./dist/helpers/base64.d.ts",
+        "import": "./dist/helpers/base64.js"
+      },
+      "./helpers/types": {
+        "types": "./dist/helpers/types.d.ts",
+        "import": "./dist/helpers/types.js"
+      },
+      "./testing": {
+        "types": "./dist/testing/TestClient.d.ts",
+        "import": "./dist/testing/TestClient.js"
+      },
+      "./bootstrap": {
+        "types": "./dist/bootstrap/hyper-server.d.ts",
+        "import": "./dist/bootstrap/hyper-server.js"
+      },
       "./events": {
         "types": "./dist/events/index.d.ts",
         "import": "./dist/events/index.js"
+      },
+      "./health": {
+        "types": "./dist/health/index.d.ts",
+        "import": "./dist/health/index.js"
       },
       "./events/provider": {
         "types": "./dist/events/EventsProvider.d.ts",
@@ -297,36 +329,18 @@
         "types": "./dist/events/configure.d.ts",
         "import": "./dist/events/configure.js"
       },
-      "./helpers": {
-        "types": "./dist/helpers/index.d.ts",
-        "import": "./dist/helpers/index.js"
-      },
-      "./helpers/string": {
-        "types": "./dist/helpers/string.d.ts",
-        "import": "./dist/helpers/string.js"
-      },
-      "./helpers/is": {
-        "types": "./dist/helpers/is.d.ts",
-        "import": "./dist/helpers/is.js"
-      },
-      "./helpers/base64": {
-        "types": "./dist/helpers/base64.d.ts",
-        "import": "./dist/helpers/base64.js"
-      },
-      "./helpers/types": {
-        "types": "./dist/helpers/types.d.ts",
-        "import": "./dist/helpers/types.js"
-      },
-      "./testing": {
-        "types": "./dist/testing/TestClient.d.ts",
-        "import": "./dist/testing/TestClient.js"
-      },
-      "./bootstrap": {
-        "types": "./dist/bootstrap/hyper-server.d.ts",
-        "import": "./dist/bootstrap/hyper-server.js"
-      },
       "./tsconfig.app.json": "./tsconfig.app.json",
-      "./swcrc.app.json": "./swcrc.app.json"
+      "./swcrc.app.json": "./swcrc.app.json",
+      "./tsconfig.package.json": "./tsconfig.package.json",
+      "./tsconfig.client.json": "./tsconfig.client.json",
+      "./session_middleware": {
+        "types": "./dist/session/SessionMiddleware.d.ts",
+        "import": "./dist/session/SessionMiddleware.js"
+      },
+      "./bodyparser_middleware": {
+        "types": "./dist/bodyparser/BodyParserMiddleware.d.ts",
+        "import": "./dist/bodyparser/BodyParserMiddleware.js"
+      }
     },
     "access": "public"
   },
