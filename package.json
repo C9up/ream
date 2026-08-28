@@ -39,6 +39,14 @@
       "types": "./src/services/config.ts",
       "import": "./src/services/config.ts"
     },
+    "./services/dumper": {
+      "types": "./src/services/dumper.ts",
+      "import": "./src/services/dumper.ts"
+    },
+    "./dumper": {
+      "types": "./src/dumper/Dumper.ts",
+      "import": "./src/dumper/Dumper.ts"
+    },
     "./services/encryption": {
       "types": "./src/services/encryption.ts",
       "import": "./src/services/encryption.ts"
@@ -273,6 +281,14 @@
       "./services/config": {
         "types": "./dist/services/config.d.ts",
         "import": "./dist/services/config.js"
+      },
+      "./services/dumper": {
+        "types": "./dist/services/dumper.d.ts",
+        "import": "./dist/services/dumper.js"
+      },
+      "./dumper": {
+        "types": "./dist/dumper/Dumper.d.ts",
+        "import": "./dist/dumper/Dumper.js"
       },
       "./services/encryption": {
         "types": "./dist/services/encryption.d.ts",
