@@ -151,10 +151,38 @@ export interface TestsConfig {
    * `tests/bootstrap.ts`; that stays the default here, and this overrides it.
    */
   bootstrap?: string
+
+  /**
+   * @deprecated Removed in 0.2.1. ream no longer knows about its test runner:
+   * the bridge moved to `@c9up/helix-plugin-ream`, which declares both sides
+   * as peers. Drop this key and configure the runner in `tests/bootstrap.ts`
+   * with `runTestsFromRcFile` from `@c9up/helix-plugin-ream/runner`.
+   */
+  japaPlugins?: RemovedIn_0_2_1_MovedToHelixPluginReam
 }
+
+/**
+ * Names the reason in the type error itself.
+ *
+ * `japaPlugins?: never` would say "Type 'boolean' is not assignable to type
+ * 'never'", which tells nobody where the option went — and the option going
+ * away with no signpost is the whole complaint this answers.
+ */
+type RemovedIn_0_2_1_MovedToHelixPluginReam = never
 
 /** defineConfig helper — like AdonisJS defineConfig(). */
 export function defineConfig(config: ReamrcConfig): ReamrcConfig {
+  // The type above catches an object literal, but not a value that reached
+  // here through a variable, a spread, or plain JavaScript. A removed option
+  // silently doing nothing is how someone spends an afternoon on it.
+  if ('japaPlugins' in (config.tests ?? {})) {
+    throw new Error(
+      '[E_REAMRC_REMOVED_OPTION] `tests.japaPlugins` was removed in ream 0.2.1. ' +
+        'ream no longer knows about its test runner — the bridge moved to ' +
+        '`@c9up/helix-plugin-ream`. Drop the key and call `runTestsFromRcFile` ' +
+        'from `@c9up/helix-plugin-ream/runner` in `tests/bootstrap.ts`.',
+    )
+  }
   return config
 }
 
