@@ -52,7 +52,7 @@ export default defineConfig({
         name: 'functional',
         files: ['tests/functional/**/*.spec.ts'],
         timeout: 30_000,
-        // Japa's per-suite `configure`. Costs an import of this file in every
+        // The per-suite `configure`. Costs an import of this file in every
         // worker — `configureSuite` in tests/bootstrap.ts does the same for free.
         configure: (suite) => suite.setup(() => startHttpServer()),
       },
@@ -73,20 +73,14 @@ a developer's local overrides never decide what CI runs, and the shell keeps
 the last word. The app writes no hook for this — the workers inherit the
 environment of the process that spawned them.
 
-`japaPlugins: true` lets official Japa plugins (`@japa/assert`, …) run: it
-points `@japa/runner/core` at helix's shim in every worker, so a plugin
-instruments the runner that is actually running. Off by default —
-redirecting a package specifier is not something to do behind your back.
-
 `forceExit: true` makes the run call `process.exit()` once it ends instead
-of waiting for the event loop to drain — the same thing Japa does with it,
-and the answer to a pool or a server the app left open. Without it the
+of waiting for the event loop to drain — the answer to a pool or a server the app left open. Without it the
 process exits on its own, so a leaked handle surfaces as a diagnosable
 hang rather than being swallowed.
 
 The stratification is AdonisJS's: ream reads its rc file and hands the
 suites to the runner ([`@c9up/helix`](../helix)), exactly as
-`@adonisjs/core` reads `adonisrc.ts` and hands them to Japa. helix knows
+`@adonisjs/core` reads `adonisrc.ts` and hands them to its own runner. helix knows
 nothing about ream, and ream owns no test execution. `tests/bootstrap.ts`
 — plugins, `runnerHooks`, `configureSuite` — is helix's, unchanged.
 
