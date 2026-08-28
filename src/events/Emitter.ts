@@ -66,10 +66,10 @@ export type UnsubscribeFunction = () => void
 export type AsyncUnsubscribeFunction = () => Promise<void>
 
 export class Emitter {
-  private bus: EventBus
-  private resolver?: EmitterResolver
-  private classListeners: Map<EventConstructor, Listener[]> = new Map()
-  private stringListeners: Map<string, ListenerFn[]> = new Map()
+  #bus: EventBus
+  #resolver?: EmitterResolver
+  #classListeners: Map<EventConstructor, Listener[]> = new Map()
+  #stringListeners: Map<string, ListenerFn[]> = new Map()
   /** Set while faking; every emission lands here instead of running. */
   #buffer?: EventsBuffer
   /** Which events are faked. `undefined` means all of them. */
@@ -78,8 +78,8 @@ export class Emitter {
   readonly #anySubscriptions = new Map<(eventName: string, data: unknown) => void, Set<number>>()
 
   constructor(bus: EventBus, resolver?: EmitterResolver) {
-    this.bus = bus
-    this.resolver = resolver
+    this.#bus = bus
+    this.#resolver = resolver
   }
 
   // ─── Class-based events ───────────────────────────────────
@@ -102,18 +102,18 @@ export class Emitter {
   on<T>(event: string, listener: ListenerFn<T>): UnsubscribeFunction
   on(event: EventConstructor | string, listener: Listener): UnsubscribeFunction {
     if (typeof event === 'string') {
-      const list = this.stringListeners.get(event) ?? []
+      const list = this.#stringListeners.get(event) ?? []
       list.push(listener as ListenerFn)
-      this.stringListeners.set(event, list)
+      this.#stringListeners.set(event, list)
       return () => {
         this.off(event, listener as ListenerFn)
       }
     }
-    const list = this.classListeners.get(event) ?? []
+    const list = this.#classListeners.get(event) ?? []
     list.push(listener)
-    this.classListeners.set(event, list)
+    this.#classListeners.set(event, list)
     return () => {
-      const current = this.classListeners.get(event)
+      const current = this.#classListeners.get(event)
       if (!current) return
       const index = current.indexOf(listener)
       if (index !== -1) current.splice(index, 1)
@@ -159,11 +159,11 @@ export class Emitter {
 
   /** Remove one listener from an event (AdonisJS `off`). */
   off(event: string, listener: ListenerFn): void {
-    const list = this.stringListeners.get(event)
+    const list = this.#stringListeners.get(event)
     if (!list) return
     const index = list.indexOf(listener)
     if (index !== -1) list.splice(index, 1)
-    if (list.length === 0) this.stringListeners.delete(event)
+    if (list.length === 0) this.#stringListeners.delete(event)
   }
 
   /** Alias of {@link off} (AdonisJS `clearListener`). */
@@ -173,13 +173,13 @@ export class Emitter {
 
   /** Drop every listener of one event (AdonisJS `clearListeners`). */
   clearListeners(event: string): void {
-    this.stringListeners.delete(event)
+    this.#stringListeners.delete(event)
   }
 
   /** Drop every listener of every event (AdonisJS `clearAllListeners`). */
   clearAllListeners(): void {
-    this.stringListeners.clear()
-    this.classListeners.clear()
+    this.#stringListeners.clear()
+    this.#classListeners.clear()
   }
 
   /**
@@ -191,17 +191,17 @@ export class Emitter {
    */
   get eventsListeners(): Map<EventConstructor | string, Listener[]> {
     const all = new Map<EventConstructor | string, Listener[]>()
-    for (const [event, listeners] of this.classListeners) all.set(event, [...listeners])
-    for (const [event, listeners] of this.stringListeners) all.set(event, [...listeners])
+    for (const [event, listeners] of this.#classListeners) all.set(event, [...listeners])
+    for (const [event, listeners] of this.#stringListeners) all.set(event, [...listeners])
     return all
   }
 
   /** How many listeners an event has, or all of them (AdonisJS `listenerCount`). */
   listenerCount(event?: string): number {
-    if (event !== undefined) return this.stringListeners.get(event)?.length ?? 0
+    if (event !== undefined) return this.#stringListeners.get(event)?.length ?? 0
     let total = 0
-    for (const list of this.stringListeners.values()) total += list.length
-    for (const list of this.classListeners.values()) total += list.length
+    for (const list of this.#stringListeners.values()) total += list.length
+    for (const list of this.#classListeners.values()) total += list.length
     return total
   }
 
@@ -216,7 +216,7 @@ export class Emitter {
    */
   async #dispatchListeners(event: string, data: unknown, serial: boolean): Promise<void> {
     const listeners = [
-      ...(this.stringListeners.get(event) ?? []),
+      ...(this.#stringListeners.get(event) ?? []),
       ...this.#wildcardListenersFor(event),
     ]
     if (listeners.length === 0) return
@@ -224,7 +224,7 @@ export class Emitter {
       try {
         await fn(data)
       } catch (err) {
-        this.emitError(event, err)
+        this.#emitError(event, err)
       }
     }
     if (serial) {
@@ -281,17 +281,17 @@ export class Emitter {
     try {
       payload = JSON.stringify(this.#wrapForBus(data))
     } catch (err) {
-      this.emitError(event, err)
+      this.#emitError(event, err)
       return
     }
-    void this.bus.emit(event, payload).catch((err: unknown) => {
-      this.emitError(event, err)
+    void this.#bus.emit(event, payload).catch((err: unknown) => {
+      this.#emitError(event, err)
     })
   }
 
   /** Emit an error event for listener failures. */
-  private emitError(event: string, error: unknown): void {
-    const errorListeners = this.stringListeners.get('emitter:error')
+  #emitError(event: string, error: unknown): void {
+    const errorListeners = this.#stringListeners.get('emitter:error')
     if (errorListeners && errorListeners.length > 0) {
       for (const fn of errorListeners) {
         try {
@@ -314,7 +314,7 @@ export class Emitter {
     // Faked by the class, as AdonisJS does — `fake([TaskDeclared])` catches
     // `new TaskDeclared(...).emit()`.
     if (this.#capture(EventClass, event)) return
-    const listeners = this.classListeners.get(EventClass) ?? []
+    const listeners = this.#classListeners.get(EventClass) ?? []
     const name = (EventClass as { eventName?: string }).eventName ?? classToEventName(EventClass)
 
     // Per-listener error isolation — mirrors the string `emit()` contract.
@@ -326,22 +326,22 @@ export class Emitter {
       try {
         if (isListenerClass(listener)) {
           // Listener class — resolve via container for @inject() support
-          const instance = this.resolver
-            ? await this.resolver.make(listener as ListenerConstructor<T>)
+          const instance = this.#resolver
+            ? await this.#resolver.make(listener as ListenerConstructor<T>)
             : new (listener as ListenerConstructor<T>)()
           await instance.handle(event)
         } else {
           await (listener as ListenerFn<T>)(event)
         }
       } catch (err) {
-        this.emitError(name, err)
+        this.#emitError(name, err)
       }
     }
 
     // Also push through EventBus — same correlation-envelope wrapping as
     // the string-event path so distributed tracing covers class events too.
     // Reached unconditionally: a listener failure above no longer skips it.
-    await this.bus.emit(name, JSON.stringify(this.#wrapForBus(event)))
+    await this.#bus.emit(name, JSON.stringify(this.#wrapForBus(event)))
   }
 
   // ─── Faking (AdonisJS `fake` / `restore`) ─────────────────
@@ -436,7 +436,7 @@ export class Emitter {
     pattern: string,
     listener: (eventName: string, data: unknown) => void,
   ): Promise<number> {
-    return this.bus.subscribe(pattern, (eventJson: string) => {
+    return this.#bus.subscribe(pattern, (eventJson: string) => {
       try {
         const event = JSON.parse(eventJson)
         // The bus delivers a Rust `Event` envelope whose `correlationId`
@@ -471,7 +471,7 @@ export class Emitter {
    */
   async offAny(listenerOrId: number | ((eventName: string, data: unknown) => void)): Promise<this> {
     if (typeof listenerOrId === 'number') {
-      await this.bus.unsubscribe(listenerOrId)
+      await this.#bus.unsubscribe(listenerOrId)
       for (const ids of this.#anySubscriptions.values()) ids.delete(listenerOrId)
       return this
     }
@@ -479,13 +479,13 @@ export class Emitter {
     const ids = this.#anySubscriptions.get(listenerOrId)
     if (!ids) return this
     this.#anySubscriptions.delete(listenerOrId)
-    await Promise.all([...ids].map((id) => this.bus.unsubscribe(id)))
+    await Promise.all([...ids].map((id) => this.#bus.unsubscribe(id)))
     return this
   }
 
   /** Check if a pattern matches an event name (wildcard matching via Rust). */
   matchesPattern(pattern: string, eventName: string): boolean {
-    return this.bus.matchesWildcard(pattern, eventName)
+    return this.#bus.matchesWildcard(pattern, eventName)
   }
 
   // ─── Request / Reply ──────────────────────────────────────
@@ -499,7 +499,7 @@ export class Emitter {
     // Same correlation injection as `emit()` so a `setCorrelationId`
     // preceding a request actually reaches the responder via the
     // top-level `correlationId` field on the parsed payload.
-    const result = await this.bus.request(name, JSON.stringify(this.#wrapForBus(data)), timeoutMs)
+    const result = await this.#bus.request(name, JSON.stringify(this.#wrapForBus(data)), timeoutMs)
     try {
       return JSON.parse(result) as T
     } catch {
@@ -519,7 +519,7 @@ export class Emitter {
     name: string,
     handler: (eventJson: string, reply: (response: string) => void) => void,
   ): void {
-    this.bus.onRequest(name, handler)
+    this.#bus.onRequest(name, handler)
   }
 
   // ─── Correlation context ──────────────────────────────────
@@ -565,13 +565,13 @@ export class Emitter {
     // AdonisJS makes the argument optional: no argument asks whether ANY event
     // has a listener at all.
     if (event === undefined) return this.listenerCount() > 0
-    if (typeof event === 'string') return (this.stringListeners.get(event)?.length ?? 0) > 0
-    return (this.classListeners.get(event)?.length ?? 0) > 0
+    if (typeof event === 'string') return (this.#stringListeners.get(event)?.length ?? 0) > 0
+    return (this.#classListeners.get(event)?.length ?? 0) > 0
   }
 
   /** Get the number of Rust-side subscriptions. */
   async subscriptionCount(): Promise<number> {
-    return this.bus.subscriptionCount()
+    return this.#bus.subscriptionCount()
   }
 }
 

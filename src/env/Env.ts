@@ -68,6 +68,12 @@ export class Env<Values extends Record<string, unknown>> {
 
   readonly #values: Values
 
+  /**
+   * Private on purpose: an `Env` is only ever built by {@link create}, which is
+   * what validates. `private` and not `#` because a private CONSTRUCTOR has no
+   * native form — this is the one place the keyword carries a meaning `#`
+   * cannot express.
+   */
   private constructor(values: Values) {
     this.#values = values
   }

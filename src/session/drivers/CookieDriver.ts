@@ -7,7 +7,7 @@ import type { SessionDriver } from '../Session.js'
  * Requires a secret for encryption.
  */
 export class CookieDriver implements SessionDriver {
-  private signer: CookieSigner
+  #signer: CookieSigner
 
   constructor(secret: string) {
     if (!secret) {
@@ -15,12 +15,12 @@ export class CookieDriver implements SessionDriver {
         'CookieDriver requires a secret for session encryption. Set session.secret in your config.',
       )
     }
-    this.signer = new CookieSigner(secret)
+    this.#signer = new CookieSigner(secret)
   }
 
   async read(sessionId: string): Promise<Record<string, unknown> | null> {
     if (!sessionId) return null
-    const decrypted = this.signer.decrypt(sessionId)
+    const decrypted = this.#signer.decrypt(sessionId)
     if (!decrypted) return null
     try {
       return JSON.parse(decrypted)
@@ -43,6 +43,6 @@ export class CookieDriver implements SessionDriver {
 
   /** Encode session data for cookie storage (encrypted). */
   encode(data: Record<string, unknown>): string {
-    return this.signer.encrypt(JSON.stringify(data))
+    return this.#signer.encrypt(JSON.stringify(data))
   }
 }

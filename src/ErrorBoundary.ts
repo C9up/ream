@@ -33,20 +33,20 @@ export type ErrorEmitter = (event: ErrorEvent) => void
  * - In dev mode, also logs to console
  */
 export class ErrorBoundary {
-  private emitter: ErrorEmitter
-  private devMode: boolean
-  private installed = false
-  private rejectionHandler?: (reason: unknown) => void
-  private exceptionHandler?: (error: Error) => void
+  #emitter: ErrorEmitter
+  #devMode: boolean
+  #installed = false
+  #rejectionHandler?: (reason: unknown) => void
+  #exceptionHandler?: (error: Error) => void
 
   constructor(emitter: ErrorEmitter, devMode = false) {
-    this.emitter = emitter
-    this.devMode = devMode
+    this.#emitter = emitter
+    this.#devMode = devMode
   }
 
   /** Install global error handlers. */
   install(): void {
-    if (this.installed) return
+    if (this.#installed) return
 
     // Skip global install under vitest — each test instantiates its own
     // Ignitor and rarely calls `.stop()`, so per-test listeners pile up on
@@ -55,42 +55,42 @@ export class ErrorBoundary {
     // `handleError`/`serviceError` calls; only the Node-level signal
     // bridging is suppressed.
     if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
-      this.installed = true
+      this.#installed = true
       return
     }
 
-    this.rejectionHandler = (reason) => {
-      this.handleError('system.fatal', 'UnhandledRejection', reason)
+    this.#rejectionHandler = (reason) => {
+      this.#handleError('system.fatal', 'UnhandledRejection', reason)
     }
 
-    this.exceptionHandler = (error) => {
-      this.handleError('system.fatal', 'UncaughtException', error)
+    this.#exceptionHandler = (error) => {
+      this.#handleError('system.fatal', 'UncaughtException', error)
       // Node.js is in undefined state after uncaughtException — must exit
       process.exit(1)
     }
 
-    process.on('unhandledRejection', this.rejectionHandler)
-    process.on('uncaughtException', this.exceptionHandler)
+    process.on('unhandledRejection', this.#rejectionHandler)
+    process.on('uncaughtException', this.#exceptionHandler)
 
-    this.installed = true
+    this.#installed = true
   }
 
   /** Uninstall global error handlers (for testing). Only removes OUR handlers. */
   uninstall(): void {
-    if (this.rejectionHandler) {
-      process.removeListener('unhandledRejection', this.rejectionHandler)
+    if (this.#rejectionHandler) {
+      process.removeListener('unhandledRejection', this.#rejectionHandler)
     }
-    if (this.exceptionHandler) {
-      process.removeListener('uncaughtException', this.exceptionHandler)
+    if (this.#exceptionHandler) {
+      process.removeListener('uncaughtException', this.#exceptionHandler)
     }
-    this.rejectionHandler = undefined
-    this.exceptionHandler = undefined
-    this.installed = false
+    this.#rejectionHandler = undefined
+    this.#exceptionHandler = undefined
+    this.#installed = false
   }
 
   /** Emit a service error (handler failure). */
   serviceError(source: string, error: unknown, correlationId?: string): void {
-    this.handleError('service.error', source, error, correlationId)
+    this.#handleError('service.error', source, error, correlationId)
   }
 
   /** Emit a security rejection. */
@@ -103,15 +103,15 @@ export class ErrorBoundary {
       correlationId,
       timestamp: new Date().toISOString(),
     }
-    this.emit(event)
+    this.#emit(event)
   }
 
   /** Emit a system error (infrastructure failure). */
   systemError(source: string, error: unknown, correlationId?: string): void {
-    this.handleError('system.error', source, error, correlationId)
+    this.#handleError('system.error', source, error, correlationId)
   }
 
-  private handleError(
+  #handleError(
     type: ErrorEvent['type'],
     source: string,
     error: unknown,
@@ -131,12 +131,12 @@ export class ErrorBoundary {
       timestamp: new Date().toISOString(),
     }
 
-    this.emit(event)
+    this.#emit(event)
   }
 
-  private emit(event: ErrorEvent): void {
+  #emit(event: ErrorEvent): void {
     try {
-      this.emitter(event)
+      this.#emitter(event)
     } catch {
       // If the emitter itself fails, log to stderr as last resort
       process.stderr.write(`[ErrorBoundary] Failed to emit: ${JSON.stringify(event)}\n`)
@@ -150,7 +150,7 @@ export class ErrorBoundary {
     // boundary would turn each forgotten `await` from a loud crash into
     // nothing at all, which is the opposite of what it is for. A duplicated
     // line when a listener also logs it is a much smaller price.
-    if (this.devMode || event.type === 'system.fatal') {
+    if (this.#devMode || event.type === 'system.fatal') {
       const prefix =
         event.type === 'system.fatal'
           ? '✗ FATAL'

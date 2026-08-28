@@ -210,30 +210,30 @@ export interface IgnitorConfig {
  * Lifecycle: register → boot → start → ready → shutdown
  */
 export class Ignitor {
-  private app: Application
-  private router: Router
-  private server: Server
-  private middleware: MiddlewareRegistry
+  #app: Application
+  #router: Router
+  #server: Server
+  #middleware: MiddlewareRegistry
   /** Where each data package registers its migration runner. See `MigrationRegistry`. */
-  private migrations: MigrationRegistry
-  private errorBoundary: ErrorBoundary
-  private _httpServer?: HyperServerLike
-  private config: IgnitorConfig
-  private appRoot?: URL
-  private reamrc?: ReamrcConfig
-  private providers: ProviderContract[] = []
-  private errorListeners: Array<(event: ErrorEvent) => void> = []
-  private phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
-  private hotReloadCleanup?: () => void
+  #migrations: MigrationRegistry
+  #errorBoundary: ErrorBoundary
+  #_httpServer?: HyperServerLike
+  #config: IgnitorConfig
+  #appRoot?: URL
+  #reamrc?: ReamrcConfig
+  #providers: ProviderContract[] = []
+  #errorListeners: Array<(event: ErrorEvent) => void> = []
+  #phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
+  #hotReloadCleanup?: () => void
   #shutdownHandle?: ShutdownHandle
   #host?: string
   #console?: Console
 
   // Inline configuration (for simple use or testing)
-  private inlineRoutes?: (router: Router) => void
-  private inlineMiddleware: MiddlewareFunction[] = []
-  private inlineNamedMiddleware: Array<[string, MiddlewareFunction]> = []
-  private inlineProviderFactories: Array<(app: Application) => ProviderContract> = []
+  #inlineRoutes?: (router: Router) => void
+  #inlineMiddleware: MiddlewareFunction[] = []
+  #inlineNamedMiddleware: Array<[string, MiddlewareFunction]> = []
+  #inlineProviderFactories: Array<(app: Application) => ProviderContract> = []
 
   /**
    * Create the Ignitor.
@@ -246,47 +246,47 @@ export class Ignitor {
    */
   constructor(appRootOrConfig?: URL | IgnitorConfig, config?: IgnitorConfig) {
     if (appRootOrConfig instanceof URL) {
-      this.appRoot = appRootOrConfig
-      this.config = config ?? {}
+      this.#appRoot = appRootOrConfig
+      this.#config = config ?? {}
     } else {
-      this.config = appRootOrConfig ?? {}
+      this.#config = appRootOrConfig ?? {}
     }
 
-    this.app = new Application()
-    this.router = new Router()
-    this.server = new Server(this.router)
-    this.middleware = new MiddlewareRegistry()
-    this.migrations = new MigrationRegistry()
-    this.errorBoundary = new ErrorBoundary((event) => this.handleError(event), this.isDevMode())
+    this.#app = new Application()
+    this.#router = new Router()
+    this.#server = new Server(this.#router)
+    this.#middleware = new MiddlewareRegistry()
+    this.#migrations = new MigrationRegistry()
+    this.#errorBoundary = new ErrorBoundary((event) => this.#handleError(event), this.isDevMode())
 
     // Register framework services in container
-    this.app.container.singleton('router', () => this.router)
-    this.app.container.singleton('server', () => this.server)
-    this.app.container.singleton('middleware', () => this.middleware)
+    this.#app.container.singleton('router', () => this.#router)
+    this.#app.container.singleton('server', () => this.#server)
+    this.#app.container.singleton('middleware', () => this.#middleware)
     // Always bound, even with no data package: an EMPTY registry is what lets
     // the CLI tell "this app has no migrations" from "this app predates the
     // registry" and say something useful in each case.
-    this.app.container.singleton('migrations', () => this.migrations)
-    this.app.container.singleton('app', () => this.app)
+    this.#app.container.singleton('migrations', () => this.#migrations)
+    this.#app.container.singleton('app', () => this.#app)
     // AdonisJS binds the config store too, so code that only needs settings can
     // resolve `config` instead of taking the whole application.
-    this.app.container.singleton('config', () => this.app.config)
+    this.#app.container.singleton('config', () => this.#app.config)
     // The HttpContext CLASS, so an integration provider can extend it the way
     // AdonisJS does — `HttpContext.getter('view', …)` is how the view layer
     // attaches `ctx.view`. Exported from the barrel too, but a provider that
     // must stay agnostic reaches it through the container instead of importing
     // ream at runtime.
-    this.app.container.singleton('HttpContext', () => HttpContext)
+    this.#app.container.singleton('HttpContext', () => HttpContext)
     // `appRoot` is the URL passed to `new Ignitor(new URL('../', import.meta.url))`.
     // Providers resolve it through the container so they can interpret
     // relative paths in config files (e.g. `pages.root: './resources/pages'`)
     // against the project root — same convention `modules.path` uses.
-    if (this.appRoot) {
-      const root = this.appRoot
-      this.app.container.singleton('appRoot', () => root)
+    if (this.#appRoot) {
+      const root = this.#appRoot
+      this.#app.container.singleton('appRoot', () => root)
       // Also expose it on the Application for the AdonisJS-style path helpers
       // (`app.makePath`, `app.configPath`, `app.migrationsPath`, …).
-      this.app.setAppRoot(root)
+      this.#app.setAppRoot(root)
     }
 
     // Encryption / cookie-signing service (AdonisJS `APP_KEY` idiom). Registered
@@ -301,18 +301,18 @@ export class Ignitor {
         )
       }
       const signer = new CookieSigner(appKey)
-      this.app.container.singleton('encryption', () => signer)
+      this.#app.container.singleton('encryption', () => signer)
       // Signed-URL helper (same APP_KEY): the router signs via makeSignedUrl,
       // HttpContext hands it to the request so hasValidSignature() can verify.
       const signedUrl = new SignedUrl({ secret: appKey })
-      this.app.container.singleton('signedUrl', () => signedUrl)
-      this.router.setSignedUrl(signedUrl)
+      this.#app.container.singleton('signedUrl', () => signedUrl)
+      this.#router.setSignedUrl(signedUrl)
     }
 
     // Set service singletons so route/kernel files can import them
-    setApp(this.app)
-    setRouter(this.router)
-    setServer(this.server)
+    setApp(this.#app)
+    setRouter(this.#router)
+    setServer(this.#server)
   }
 
   // ─── Configuration ────────────────────────────────────────
@@ -322,7 +322,7 @@ export class Ignitor {
    * Like AdonisJS: .tap((app) => { app.booting(...) })
    */
   tap(callback: (app: Application) => void): this {
-    callback(this.app)
+    callback(this.#app)
     return this
   }
 
@@ -334,22 +334,22 @@ export class Ignitor {
    * because that is where the entry point declares it.
    */
   setEnvironment(env: AppEnvironment): this {
-    this.app.setEnvironment(env)
+    this.#app.setEnvironment(env)
     return this
   }
 
   getEnvironment(): AppEnvironment {
-    return this.app.getEnvironment()
+    return this.#app.getEnvironment()
   }
 
   /**
    * Load the reamrc config (equivalent to adonisrc.ts).
    */
   useRcFile(reamrc: ReamrcConfig): this {
-    this.reamrc = reamrc
+    this.#reamrc = reamrc
     // Hand the app its directory overrides now rather than at boot: a path
     // helper called from a provider's register() must already see them.
-    this.app.rcContents(reamrc)
+    this.#app.rcContents(reamrc)
     return this
   }
 
@@ -357,37 +357,37 @@ export class Ignitor {
 
   /** Define routes inline (simple mode). */
   routes(callback: (router: Router) => void): this {
-    this.inlineRoutes = callback
+    this.#inlineRoutes = callback
     return this
   }
 
   /** Add global middleware inline. */
   use(mw: MiddlewareFunction): this {
-    this.inlineMiddleware.push(mw)
+    this.#inlineMiddleware.push(mw)
     return this
   }
 
   /** Register a named middleware inline. */
   named(name: string, mw: MiddlewareFunction): this {
-    this.inlineNamedMiddleware.push([name, mw])
+    this.#inlineNamedMiddleware.push([name, mw])
     return this
   }
 
   /** Register a provider inline (for testing or simple apps). */
   provider(factory: (app: Application) => ProviderContract): this {
-    this.inlineProviderFactories.push(factory)
+    this.#inlineProviderFactories.push(factory)
     return this
   }
 
   /** Listen for error events. */
   onError(listener: (event: ErrorEvent) => void): this {
-    this.errorListeners.push(listener)
+    this.#errorListeners.push(listener)
     return this
   }
 
   /** Set a config value. */
   configure(key: string, value: unknown): this {
-    this.app.config.set(key, value)
+    this.#app.config.set(key, value)
     return this
   }
 
@@ -395,19 +395,19 @@ export class Ignitor {
 
   /** Configure for HTTP server mode. */
   httpServer(): this {
-    this.app.setEnvironment('web')
+    this.#app.setEnvironment('web')
     return this
   }
 
   /** Configure for CLI/console mode. Returns a ConsoleKernel for dispatching commands. */
   console(): ConsoleKernel {
-    this.app.setEnvironment('console')
+    this.#app.setEnvironment('console')
     return new ConsoleKernel(this)
   }
 
   /** Configure for test mode. */
   testMode(): this {
-    this.app.setEnvironment('test')
+    this.#app.setEnvironment('test')
     return this
   }
 
@@ -416,25 +416,25 @@ export class Ignitor {
   async start(): Promise<Ignitor> {
     // Double-start guard: a second start() would re-run phaseRegister and
     // instantiate + register every reamrc provider a second time.
-    if (this.phase !== 'created') {
+    if (this.#phase !== 'created') {
       throw new ReamError(
         'IGNITOR_ALREADY_STARTED',
-        `start() called while in phase '${this.phase}' — an Ignitor boots once`,
+        `start() called while in phase '${this.#phase}' — an Ignitor boots once`,
         { hint: 'Create a new Ignitor instance instead of restarting this one.' },
       )
     }
     this.#loadEnvironmentFiles()
     try {
-      await this.phaseRegister()
-      await this.phaseBoot()
-      await this.phaseStart()
+      await this.#phaseRegister()
+      await this.#phaseBoot()
+      await this.#phaseStart()
       // Console documents its `consoleApp` service as available once the application has
       // booted, so the locator is installed here rather than on first use —
       // `import consoleApp from '@c9up/ream/services/console'` must not throw in a running
       // app. Only the façade is built (three small modules); loading the
       // commands themselves stays lazy, inside `consoleApp.boot()`.
       await this.consoleApp()
-      await this.phaseReady()
+      await this.#phaseReady()
     } catch (err) {
       // A throw mid-boot (e.g. a provider ready() failing AFTER the HTTP port
       // is bound) must release everything the partial boot opened — port,
@@ -460,8 +460,8 @@ export class Ignitor {
    * `process.env` win, so the shell / CI always overrides the files.
    */
   #loadEnvironmentFiles(): void {
-    if (!this.appRoot) return
-    loadEnvFiles(this.appRoot, { skipEnvLocal: this.app.getEnvironment() === 'test' })
+    if (!this.#appRoot) return
+    loadEnvFiles(this.#appRoot, { skipEnvLocal: this.#app.getEnvironment() === 'test' })
   }
 
   /**
@@ -471,10 +471,10 @@ export class Ignitor {
    * The engine is duck-typed out of the container so ream carries no dependency
    * on it, and an app with no template layer simply skips this.
    */
-  private async registerSessionTemplateTags(): Promise<void> {
+  async #registerSessionTemplateTags(): Promise<void> {
     for (const token of ['inker', 'view']) {
-      if (!this.app.container.has(token)) continue
-      const binding: unknown = await this.app.container.resolve(token)
+      if (!this.#app.container.has(token)) continue
+      const binding: unknown = await this.#app.container.resolve(token)
       for (const candidate of [binding, Reflect.get(Object(binding), '_templates')]) {
         const register = Reflect.get(Object(candidate), 'registerTag')
         if (typeof register !== 'function') continue
@@ -488,106 +488,106 @@ export class Ignitor {
     }
   }
 
-  private async phaseRegister(): Promise<void> {
+  async #phaseRegister(): Promise<void> {
     // Auto-load config/*.ts files into app.config
-    await this.autoloadConfig()
+    await this.#autoloadConfig()
 
     // Load providers from reamrc
-    if (this.reamrc?.providers) {
-      for (const providerEntry of this.reamrc.providers) {
+    if (this.#reamrc?.providers) {
+      for (const providerEntry of this.#reamrc.providers) {
         const providerImport =
           typeof providerEntry === 'function' ? providerEntry : providerEntry.file
         const env = typeof providerEntry === 'function' ? undefined : providerEntry.environment
 
         // Skip providers not matching current environment
-        if (env && !env.includes(this.app.getEnvironment())) continue
+        if (env && !env.includes(this.#app.getEnvironment())) continue
 
         const mod = await providerImport()
         const ProviderClass = mod.default
-        const instance = new ProviderClass(this.app)
-        this.providers.push(instance)
-        this.app.register(instance)
+        const instance = new ProviderClass(this.#app)
+        this.#providers.push(instance)
+        this.#app.register(instance)
       }
     }
 
     // Register inline providers
-    for (const factory of this.inlineProviderFactories) {
-      const instance = factory(this.app)
-      this.providers.push(instance)
-      this.app.register(instance)
+    for (const factory of this.#inlineProviderFactories) {
+      const instance = factory(this.#app)
+      this.#providers.push(instance)
+      this.#app.register(instance)
     }
 
-    this.phase = 'registered'
+    this.#phase = 'registered'
   }
 
-  private async phaseBoot(): Promise<void> {
-    await this.app.boot()
-    this.phase = 'booted'
+  async #phaseBoot(): Promise<void> {
+    await this.#app.boot()
+    this.#phase = 'booted'
   }
 
-  private async phaseStart(): Promise<void> {
+  async #phaseStart(): Promise<void> {
     // Import preload files (routes.ts, kernel.ts, etc.)
-    if (this.reamrc?.preloads) {
-      for (const preloadEntry of this.reamrc.preloads) {
+    if (this.#reamrc?.preloads) {
+      for (const preloadEntry of this.#reamrc.preloads) {
         const preloadImport = typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
         const env =
           typeof preloadEntry === 'function'
             ? undefined
             : (preloadEntry as { environment?: string[] }).environment
 
-        if (env && !env.includes(this.app.getEnvironment())) continue
+        if (env && !env.includes(this.#app.getEnvironment())) continue
         await preloadImport()
       }
     }
 
     // Auto-load module files (routes.ts, etc.) from modules directory
-    await this.autoloadModules()
+    await this.#autoloadModules()
 
     // Apply inline configuration
-    for (const mw of this.inlineMiddleware) {
-      this.middleware.use(mw)
+    for (const mw of this.#inlineMiddleware) {
+      this.#middleware.use(mw)
     }
-    for (const [name, mw] of this.inlineNamedMiddleware) {
-      this.middleware.register(name, mw)
+    for (const [name, mw] of this.#inlineNamedMiddleware) {
+      this.#middleware.register(name, mw)
     }
-    if (this.inlineRoutes) {
-      this.inlineRoutes(this.router)
+    if (this.#inlineRoutes) {
+      this.#inlineRoutes(this.#router)
     }
 
     // Call start() on providers
-    for (const provider of this.providers) {
+    for (const provider of this.#providers) {
       await callProviderPhase(provider, 'start')
     }
 
-    this.phase = 'started'
+    this.#phase = 'started'
   }
 
-  private async phaseReady(): Promise<void> {
+  async #phaseReady(): Promise<void> {
     // Boot the Server (resolves lazy error handler etc.)
-    await this.server.boot()
+    await this.#server.boot()
 
     // Start HTTP server if in web mode
-    if (this.app.getEnvironment() === 'web' && this.config.serverFactory) {
+    if (this.#app.getEnvironment() === 'web' && this.#config.serverFactory) {
       // Build the HttpKernel with server middleware + router middleware.
       // The streaming backend is resolved lazily — the HyperServer is
       // created a few lines down, after the kernel — so the kernel
-      // closes over the `this._httpServer` slot and reads it on every
+      // closes over the `this.#_httpServer` slot and reads it on every
       // request through the factory.
       const kernel = createHttpKernel({
-        router: this.router,
-        middleware: this.middleware,
-        container: this.app.container,
+        router: this.#router,
+        middleware: this.#middleware,
+        container: this.#app.container,
         exceptionHandler:
-          this.server.getErrorHandler() ?? new ExceptionHandler(!this.app.inProduction),
-        serverMiddleware: this.server.getServerMiddleware(),
-        routerMiddleware: this.router.getRouterMiddleware(),
+          this.#server.getErrorHandler() ?? new ExceptionHandler(!this.#app.inProduction),
+        serverMiddleware: this.#server.getServerMiddleware(),
+        routerMiddleware: this.#router.getRouterMiddleware(),
         onError: (error, ctx) => {
-          this.errorBoundary.serviceError('HttpKernel', error, ctx.id)
+          this.#errorBoundary.serviceError('HttpKernel', error, ctx.id)
         },
         // AdonisJS `config/app.ts` → `http: { allowMethodSpoofing: true }`.
-        allowMethodSpoofing: this.app.config.get<boolean>('app.http.allowMethodSpoofing') === true,
+        allowMethodSpoofing: this.#app.config.get<boolean>('app.http.allowMethodSpoofing') === true,
         streamBackend: () => {
-          const server = this._httpServer
+          const server = this.#_httpServer
           if (
             server &&
             typeof server.registerStream === 'function' &&
@@ -609,28 +609,28 @@ export class Ignitor {
         },
       })
 
-      const desiredPort = this.config.port ?? 3000
+      const desiredPort = this.#config.port ?? 3000
       // Port-scan fallback (+1..+19) is a DEV convenience only. In production
       // a silent drift to :3001 while the LB targets :3000 is an outage —
       // bind the configured port and let EADDRINUSE fail loudly. The probe
       // also has an inherent TOCTOU; acceptable in dev, not in prod.
-      const availablePort = this.app.inProduction
+      const availablePort = this.#app.inProduction
         ? desiredPort
         : await findAvailablePort(desiredPort)
       this.#host =
-        this.config.host ?? process.env.HOST ?? (this.app.inProduction ? '0.0.0.0' : 'localhost')
-      this._httpServer = this.config.serverFactory(availablePort, this.#host)
-      this._httpServer.onRequest(kernel)
+        this.#config.host ?? process.env.HOST ?? (this.#app.inProduction ? '0.0.0.0' : 'localhost')
+      this.#_httpServer = this.#config.serverFactory(availablePort, this.#host)
+      this.#_httpServer.onRequest(kernel)
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
       // listen. Security filtering itself lives in @c9up/blackhole.
-      const trustedProxies = this.server.getTrustedProxies()
+      const trustedProxies = this.#server.getTrustedProxies()
       if (
         trustedProxies.length > 0 &&
-        typeof this._httpServer.configureTrustedProxies === 'function'
+        typeof this.#_httpServer.configureTrustedProxies === 'function'
       ) {
-        this._httpServer.configureTrustedProxies([...trustedProxies])
+        this.#_httpServer.configureTrustedProxies([...trustedProxies])
       }
-      await this._httpServer.listen()
+      await this.#_httpServer.listen()
 
       // Wire OS-signal graceful shutdown. Without it the process never closes
       // the HTTP server on SIGTERM/SIGINT, so live keep-alive / SSE sockets keep
@@ -638,7 +638,7 @@ export class Ignitor {
       // force-kill, and an orchestrator's rolling deploy drops in-flight work.
       // onShutdown = this.stop(), which closes the port (aborting connections),
       // shuts providers down (DB pools), and releases the locators.
-      if (this.config.gracefulShutdown !== false) {
+      if (this.#config.gracefulShutdown !== false) {
         this.#shutdownHandle = installGracefulShutdown({
           onShutdown: () => this.stop(),
           logger: {
@@ -647,7 +647,7 @@ export class Ignitor {
           },
         })
       }
-    } else if (this.app.getEnvironment() === 'web' && !this.config.serverFactory) {
+    } else if (this.#app.getEnvironment() === 'web' && !this.#config.serverFactory) {
       throw new ReamError(
         'IGNITOR_NO_SERVER_FACTORY',
         'httpServer() requires a serverFactory in config',
@@ -658,23 +658,23 @@ export class Ignitor {
     }
 
     // Install error boundary
-    this.errorBoundary.install()
+    this.#errorBoundary.install()
 
     // Publish the flash-message tags to the template engine, if one is
     // installed. After boot(), so the engine's own provider has bound it;
     // before ready(), so a provider that pre-renders finds the tags in place.
-    await this.registerSessionTemplateTags()
+    await this.#registerSessionTemplateTags()
 
     // Call ready() on providers
-    for (const provider of this.providers) {
+    for (const provider of this.#providers) {
       await callProviderPhase(provider, 'ready')
     }
 
     // Core domain event: the app finished booting (all providers ready).
     // Emitted once through the bus when events are wired — zero hot-path cost.
-    if (this.app.container.has('events')) {
-      const bus = await this.app.container.resolve<Emitter>('events')
-      bus.emit('app:ready', { environment: this.app.getEnvironment() })
+    if (this.#app.container.has('events')) {
+      const bus = await this.#app.container.resolve<Emitter>('events')
+      bus.emit('app:ready', { environment: this.#app.getEnvironment() })
     }
 
     // Dev-mode change watcher. IMPORTANT: this does NOT attempt an in-process
@@ -689,11 +689,11 @@ export class Ignitor {
     // the Ignitor without a supervisor. A future true HMR needs a loader-hook
     // (hot-hook style) that can invalidate the ESM cache — plug it in here.
     if (this.isDevMode()) {
-      const watchDirs = this.config.watchDirs ?? ['app', 'start']
-      this.hotReloadCleanup = startHotReload({
+      const watchDirs = this.#config.watchDirs ?? ['app', 'start']
+      this.#hotReloadCleanup = startHotReload({
         watchDirs,
         onReload: () => {
-          this.handleError({
+          this.#handleError({
             type: 'system.info',
             source: 'HotReload',
             message:
@@ -704,7 +704,7 @@ export class Ignitor {
         },
         logger: {
           info: (msg) =>
-            this.handleError({
+            this.#handleError({
               type: 'system.info',
               source: 'HotReload',
               message: msg,
@@ -715,7 +715,7 @@ export class Ignitor {
       })
     }
 
-    this.phase = 'ready'
+    this.#phase = 'ready'
   }
 
   /**
@@ -723,13 +723,13 @@ export class Ignitor {
    * Each file's default export is stored under its filename (without extension).
    * e.g. config/database.ts → app.config.get('database')
    */
-  private async autoloadConfig(): Promise<void> {
+  async #autoloadConfig(): Promise<void> {
     const { readdirSync, existsSync } = await import('node:fs')
     const { join, basename } = await import('node:path')
     const { fileURLToPath, pathToFileURL } = await import('node:url')
 
-    const configDir = this.appRoot
-      ? join(fileURLToPath(this.appRoot), 'config')
+    const configDir = this.#appRoot
+      ? join(fileURLToPath(this.#appRoot), 'config')
       : join(process.cwd(), 'config')
 
     if (!existsSync(configDir)) return
@@ -752,7 +752,7 @@ export class Ignitor {
       // is what AdonisJS does (`fsImportAll`). Spread rather than stored as-is:
       // an ESM namespace is sealed and null-prototype, so a later merge into
       // this entry would fail on it.
-      this.app.config.set(key, 'default' in mod ? mod.default : { ...mod })
+      this.#app.config.set(key, 'default' in mod ? mod.default : { ...mod })
     }
   }
 
@@ -760,8 +760,8 @@ export class Ignitor {
    * Auto-load module files (routes.ts, etc.) from the modules directory.
    * Scans modules.path for subdirectories and imports matching files.
    */
-  private async autoloadModules(): Promise<void> {
-    const modulesConfig = this.reamrc?.modules
+  async #autoloadModules(): Promise<void> {
+    const modulesConfig = this.#reamrc?.modules
     if (!modulesConfig?.path) return
 
     const { readdirSync, existsSync } = await import('node:fs')
@@ -770,8 +770,8 @@ export class Ignitor {
     const { pathToFileURL } = await import('node:url')
 
     // Resolve modules path relative to app root or cwd
-    const basePath = this.appRoot
-      ? join(fileURLToPath(this.appRoot), modulesConfig.path)
+    const basePath = this.#appRoot
+      ? join(fileURLToPath(this.#appRoot), modulesConfig.path)
       : resolve(modulesConfig.path)
 
     if (!existsSync(basePath)) return
@@ -832,22 +832,22 @@ export class Ignitor {
       this.#shutdownHandle = undefined
     })
     await attempt(() => {
-      if (this.hotReloadCleanup) this.hotReloadCleanup()
+      if (this.#hotReloadCleanup) this.#hotReloadCleanup()
     })
     await attempt(async () => {
-      if (this._httpServer) await this._httpServer.close()
+      if (this.#_httpServer) await this.#_httpServer.close()
     })
-    await attempt(() => this.errorBoundary.uninstall())
-    await attempt(() => this.app.shutdown())
+    await attempt(() => this.#errorBoundary.uninstall())
+    await attempt(() => this.#app.shutdown())
 
     // Release the process-wide service locators (ownership-guarded): a stopped
     // app must not keep its container/router reachable through the module
     // singletons, and must not clobber a newer Ignitor's bindings.
-    clearApp(this.app)
-    clearRouter(this.router)
-    clearServer(this.server)
+    clearApp(this.#app)
+    clearRouter(this.#router)
+    clearServer(this.#server)
 
-    this.phase = 'shutdown'
+    this.#phase = 'shutdown'
     if (errors.length === 1) throw errors[0]
     if (errors.length > 1) {
       throw new AggregateError(errors, 'Ignitor.stop() completed with errors')
@@ -857,7 +857,7 @@ export class Ignitor {
   // ─── Accessors ────────────────────────────────────────────
 
   async port(): Promise<number> {
-    return this._httpServer ? this._httpServer.port() : 0
+    return this.#_httpServer ? this.#_httpServer.port() : 0
   }
 
   /**
@@ -871,7 +871,7 @@ export class Ignitor {
   }
 
   getApp(): Application {
-    return this.app
+    return this.#app
   }
 
   /**
@@ -879,12 +879,12 @@ export class Ignitor {
    * Undefined for inline/test ignitors created without one.
    */
   getAppRoot(): URL | undefined {
-    return this.appRoot
+    return this.#appRoot
   }
 
   /** Has the application already been started? */
   isStarted(): boolean {
-    return this.phase === 'started' || this.phase === 'ready'
+    return this.#phase === 'started' || this.#phase === 'ready'
   }
 
   /**
@@ -905,26 +905,26 @@ export class Ignitor {
 
     this.#console = consoleApp
     setConsole(consoleApp)
-    this.app.container.singleton('console', () => consoleApp)
+    this.#app.container.singleton('console', () => consoleApp)
     return consoleApp
   }
 
   /** The loaded rc file, if `useRcFile()` was called. */
   getRcFile(): ReamrcConfig | undefined {
-    return this.reamrc
+    return this.#reamrc
   }
 
   /** The custom module importer, when the app provided one. */
   getImporter(): ((filePath: string) => Promise<unknown>) | undefined {
-    return this.config.importer
+    return this.#config.importer
   }
 
   getRouter(): Router {
-    return this.router
+    return this.#router
   }
 
   getServer(): Server {
-    return this.server
+    return this.#server
   }
 
   /**
@@ -933,13 +933,13 @@ export class Ignitor {
    */
   getKernel(): (request: HttpKernelRequest) => Promise<HttpKernelResponse> {
     this.#kernel ??= createHttpKernel({
-      router: this.router,
-      middleware: this.middleware,
-      container: this.app.container,
+      router: this.#router,
+      middleware: this.#middleware,
+      container: this.#app.container,
       exceptionHandler:
-        this.server.getErrorHandler() ?? new ExceptionHandler(!this.app.inProduction),
-      serverMiddleware: this.server.getServerMiddleware(),
-      routerMiddleware: this.router.getRouterMiddleware(),
+        this.#server.getErrorHandler() ?? new ExceptionHandler(!this.#app.inProduction),
+      serverMiddleware: this.#server.getServerMiddleware(),
+      routerMiddleware: this.#router.getRouterMiddleware(),
     })
     return this.#kernel
   }
@@ -947,15 +947,15 @@ export class Ignitor {
   #kernel?: (request: HttpKernelRequest) => Promise<HttpKernelResponse>
 
   isDevMode(): boolean {
-    return this.app.inDev
+    return this.#app.inDev
   }
 
   getPhase(): string {
-    return this.phase
+    return this.#phase
   }
 
-  private handleError(event: ErrorEvent): void {
-    for (const listener of this.errorListeners) {
+  #handleError(event: ErrorEvent): void {
+    for (const listener of this.#errorListeners) {
       try {
         listener(event)
       } catch {
@@ -970,7 +970,7 @@ export class Ignitor {
    * shutdown logger so drain progress / timeouts are observable.
    */
   #emitSystemInfo(source: string, message: string, kind: 'info' | 'error'): void {
-    this.handleError({
+    this.#handleError({
       type: kind === 'error' ? 'system.error' : 'system.info',
       source,
       message,
