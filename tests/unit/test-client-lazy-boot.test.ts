@@ -14,12 +14,21 @@ function fakeBoot() {
   let closes = 0
   const fn = async (): Promise<{ port: number; close: () => void }> => {
     boots += 1
-    return { port: 4000 + boots, close: () => { closes += 1 } }
+    return {
+      port: 4000 + boots,
+      close: () => {
+        closes += 1
+      },
+    }
   }
   return {
     fn,
-    get boots() { return boots },
-    get closes() { return closes },
+    get boots() {
+      return boots
+    },
+    get closes() {
+      return closes
+    },
   }
 }
 

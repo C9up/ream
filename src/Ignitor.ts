@@ -1200,13 +1200,30 @@ export class ConsoleKernel {
     if (!declared) return
 
     for (const entry of declared) {
-      const command = commandOf(await entry())
+      const module = await entry()
+
+      // A package with several commands ships ONE loader — `getMetaData()` +
+      // `getCommand()` — so its rc entry is one line and `ream list` reads
+      // metadata without importing a single command class. That is what makes
+      // this channel usable for a package that has six of them, and why
+      // requiring a default export per command pushed packages to wire
+      // themselves into the CLI binary instead.
+      const loader = loaderOf(module)
+      if (loader) {
+        for (const metadata of await loader.getMetaData()) {
+          const loaded = await loader.getCommand(metadata)
+          if (loaded !== null) found.set(loaded.commandName, loaded)
+        }
+        continue
+      }
+
+      const command = commandOf(module)
       if (command === undefined) {
         throw new ReamError(
           'E_CONSOLE_INVALID_COMMAND',
-          'An entry of reamrc.ts `commands` does not default-export a command class.',
+          'An entry of reamrc.ts `commands` is neither a command loader nor a default-exported command class.',
           {
-            hint: 'Expected `export default class X { static commandName = "..."; static description = "..."; run() {} }`.',
+            hint: 'Ship `export function getMetaData()` + `export function getCommand(metadata)` for a package with several commands, or `export default class X { static commandName = "..."; static description = "..."; run() {} }` for one.',
           },
         )
       }
@@ -1246,6 +1263,18 @@ interface ConsoleCommandKernel {
 }
 
 /** The command a module default-exports, or undefined when it exports none. */
+/**
+ * A module that enumerates its own commands — the shape AdonisJS packages ship
+ * and the one `CommandLoader` already describes.
+ */
+function loaderOf(mod: unknown): CommandLoader | undefined {
+  if (typeof mod !== 'object' || mod === null) return undefined
+  const getMetaData = Reflect.get(mod, 'getMetaData')
+  const getCommand = Reflect.get(mod, 'getCommand')
+  if (typeof getMetaData !== 'function' || typeof getCommand !== 'function') return undefined
+  return mod as CommandLoader
+}
+
 function commandOf(mod: unknown): CommandClass | undefined {
   if (typeof mod !== 'object' || mod === null) return undefined
   const value = Reflect.get(mod, 'default')

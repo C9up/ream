@@ -21,11 +21,11 @@ describe('defineConfig > unknown tests options', () => {
     }
     expect(thrown).toBeInstanceOf(ReamError)
     // The code is what a caller matches on; the message names the key…
-    expect((thrown as ReamError).code).toBe("E_REAMRC_UNKNOWN_OPTION")
-    expect((thrown as ReamError).message).toContain("`runnerPlugins`")
+    expect((thrown as ReamError).code).toBe('E_REAMRC_UNKNOWN_OPTION')
+    expect((thrown as ReamError).message).toContain('`runnerPlugins`')
     // …and the hint answers "then what IS accepted", which is also the answer
     // to "where did my option go".
-    expect((thrown as ReamError).hint).toContain("bootstrap, forceExit, suites, timeout")
+    expect((thrown as ReamError).hint).toContain('bootstrap, forceExit, suites, timeout')
   })
 
   it('says so even when the value is falsy — the key is what is wrong', () => {

@@ -36,12 +36,12 @@ describe('Dumper > ANSI', () => {
 
   it('honours the configured depth', () => {
     const deep = { a: { b: { c: { d: { e: 'bottom' } } } } }
-    expect(new Dumper().configureAnsiOutput({ colors: false, depth: 1 }).dumpToAnsi(deep)).toContain(
-      '[Object]',
-    )
-    expect(new Dumper().configureAnsiOutput({ colors: false, depth: 8 }).dumpToAnsi(deep)).toContain(
-      "e: 'bottom'",
-    )
+    expect(
+      new Dumper().configureAnsiOutput({ colors: false, depth: 1 }).dumpToAnsi(deep),
+    ).toContain('[Object]')
+    expect(
+      new Dumper().configureAnsiOutput({ colors: false, depth: 8 }).dumpToAnsi(deep),
+    ).toContain("e: 'bottom'")
   })
 })
 
@@ -69,9 +69,7 @@ describe('Dumper > HTML', () => {
   })
 
   it('lets a caller override the styles without losing the rest', () => {
-    const out = new Dumper()
-      .configureHtmlOutput({ styles: { color: 'red' } })
-      .dumpToHtml({ a: 1 })
+    const out = new Dumper().configureHtmlOutput({ styles: { color: 'red' } }).dumpToHtml({ a: 1 })
     expect(out).toContain('color: red;')
     expect(out).toContain('padding: 1rem;')
   })

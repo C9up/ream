@@ -43,7 +43,9 @@ describe('Repl > helpers', () => {
       return 'done'
     })
 
-    const { handler } = repl.getMethods().probe as { handler: (r: Repl, ...a: unknown[]) => unknown }
+    const { handler } = repl.getMethods().probe as {
+      handler: (r: Repl, ...a: unknown[]) => unknown
+    }
     expect(handler(repl, 1, 2)).toBe('done')
     expect(received).toEqual({ self: repl, args: [1, 2] })
   })

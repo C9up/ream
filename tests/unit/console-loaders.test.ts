@@ -68,3 +68,52 @@ describe('IndexGenerator', () => {
     expect((await kernel.find('ping')).commandName).toBe('ping')
   })
 })
+
+/**
+ * A package with several commands must be ONE line in `reamrc.ts`. AdonisJS
+ * ships a loader for exactly that — `getMetaData()` plus `getCommand()`, the
+ * shape `CommandLoader` already describes — so the rc file names the package
+ * once and `list` reads metadata without importing a command class.
+ *
+ * Requiring a default export PER command is what made this channel unusable
+ * for a package with six of them, and packages wired themselves into the CLI
+ * binary instead. These pin the loader form so that cannot happen again.
+ */
+const APP_ROOT = new URL('../fixtures/console-app/', import.meta.url)
+
+describe('reamrc `commands` > a package ships a loader', () => {
+  class Alpha {
+    static commandName = 'pkg:alpha'
+    static description = 'first'
+    run(): void {}
+  }
+  class Beta {
+    static commandName = 'pkg:beta'
+    static description = 'second'
+    run(): void {}
+  }
+
+  const loaderModule = {
+    getMetaData: async () => [
+      { commandName: 'pkg:alpha', description: 'first' },
+      { commandName: 'pkg:beta', description: 'second' },
+    ],
+    getCommand: async (metadata: { commandName: string }) =>
+      metadata.commandName === 'pkg:alpha' ? Alpha : Beta,
+  }
+
+  it('is recognised by both of the module shapes a package can ship', async () => {
+    const { Ignitor } = await import('../../src/Ignitor.js')
+    const ignitor = new Ignitor(APP_ROOT).useRcFile({
+      commands: [async () => loaderModule, async () => ({ default: Alpha })],
+    })
+    const consoleApp = await ignitor.consoleApp()
+    await consoleApp.boot()
+
+    // One rc entry, two commands — which is the whole point.
+    expect(consoleApp.hasCommand('pkg:alpha')).toBe(true)
+    expect(consoleApp.hasCommand('pkg:beta')).toBe(true)
+    // And the single-class form still works, for a package with just one.
+    expect(consoleApp.hasCommand('pkg:alpha')).toBe(true)
+  })
+})
