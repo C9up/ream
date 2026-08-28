@@ -27,7 +27,7 @@ warden-engine = { git = "https://github.com/C9up/warden", tag = "v0.1.4" }
 sigil-engine = { git = "https://github.com/C9up/sigil", tag = "v0.1.4" }
 ream-napi-core = { path = "../ream-napi-core" }
 napi = { version = "2", default-features = false, features = ["napi8", "serde-json", "async"] }
-napi-derive = "2"
+napi-derive = { version = "2", features = ["type-def"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 serde_json = "1"
 
