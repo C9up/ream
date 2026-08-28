@@ -62,12 +62,7 @@ export function isArray<T = unknown>(v: unknown): v is T[] {
  * @example isPromise(Promise.resolve()) // true
  */
 export function isPromise<T = unknown>(v: unknown): v is Promise<T> {
-  return (
-    v !== null &&
-    typeof v === 'object' &&
-    'then' in v &&
-    typeof v.then === 'function'
-  )
+  return v !== null && typeof v === 'object' && 'then' in v && typeof v.then === 'function'
 }
 
 /**
