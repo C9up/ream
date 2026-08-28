@@ -43,6 +43,10 @@
       "types": "./src/services/encryption.ts",
       "import": "./src/services/encryption.ts"
     },
+    "./services/logger": {
+      "types": "./src/services/logger.ts",
+      "import": "./src/services/logger.ts"
+    },
     "./services/urlBuilder": {
       "types": "./src/services/urlBuilder.ts",
       "import": "./src/services/urlBuilder.ts"
@@ -273,6 +277,10 @@
       "./services/encryption": {
         "types": "./dist/services/encryption.d.ts",
         "import": "./dist/services/encryption.js"
+      },
+      "./services/logger": {
+        "types": "./dist/services/logger.d.ts",
+        "import": "./dist/services/logger.js"
       },
       "./services/urlBuilder": {
         "types": "./dist/services/urlBuilder.d.ts",

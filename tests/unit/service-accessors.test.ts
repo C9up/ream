@@ -18,6 +18,7 @@ const ACCESSORS = [
   { name: 'services/console', load: () => import('../../src/services/console.js') },
   { name: 'services/config', load: () => import('../../src/services/config.js') },
   { name: 'services/encryption', load: () => import('../../src/services/encryption.js') },
+  { name: 'services/logger', load: () => import('../../src/services/logger.js') },
   { name: 'events/services/main', load: () => import('../../src/events/services/main.js') },
 ] as const
 
@@ -132,5 +133,39 @@ describe('services/urlBuilder > delegates to the router', () => {
 
     clearRouter(router)
     expect(() => urlFor('users.show')).toThrow(/used before initialization/i)
+  })
+})
+
+describe('services/logger > supplied by a provider, not by ream', () => {
+  it('names the package to install rather than the boot phase', async () => {
+    const { default: logger } = await import('../../src/services/logger.js')
+    // Absent is a normal state: ream declares the contract and implements no
+    // logger, so the message has to say where one comes from.
+    expect(() => logger.info('x')).toThrowError(/@c9up\/spectrum/)
+    expect(() => logger.info('x')).toThrowError(/ctx\.logger/)
+  })
+
+  it('delegates once a provider has bound one, and releases it on stop', async () => {
+    const [{ default: logger, setLogger, clearLogger }] = await Promise.all([
+      import('../../src/services/logger.js'),
+    ])
+    const lines: string[] = []
+    const bound = {
+      trace: () => {},
+      debug: () => {},
+      info: (m: string, d?: Record<string, unknown>) => {
+        lines.push(`${m}:${JSON.stringify(d ?? null)}`)
+      },
+      warn: () => {},
+      error: () => {},
+      fatal: () => {},
+    }
+
+    setLogger(bound)
+    logger.info('signed in', { userId: 7 })
+    expect(lines).toEqual(['signed in:{"userId":7}'])
+
+    clearLogger(bound)
+    expect(() => logger.info('x')).toThrowError(/@c9up\/spectrum/)
   })
 })

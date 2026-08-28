@@ -30,7 +30,7 @@ import { startHotReload } from './HotReload.js'
 import type { HttpKernelRequest, HttpKernelResponse } from './HttpKernel.js'
 import { createHttpKernel } from './HttpKernel.js'
 import { ExceptionHandler } from './http/Exception.js'
-import { HttpContext } from './http/HttpContext.js'
+import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import { MigrationRegistry } from './migrations/MigrationRegistry.js'
@@ -42,6 +42,7 @@ import { SignedUrl } from './security/SignedUrl.js'
 import { Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearEncryption, setEncryption } from './services/encryption.js'
+import { clearLogger, setLogger } from './services/logger.js'
 import { clearRouter, setRouter } from './services/router.js'
 import { clearServer, setServer } from './services/server.js'
 import { registerSessionTemplateTags } from './session/templateTags.js'
@@ -250,6 +251,11 @@ export class Ignitor {
    * — an unguarded clear would tear down a newer Ignitor's binding.
    */
   #signer?: CookieSigner
+  /**
+   * The bound logger, when a provider supplied one. Held so `stop()` releases
+   * the locator against the exact instance it installed.
+   */
+  #logger?: ChildLoggerSource
   #_httpServer?: HyperServerLike
   #config: IgnitorConfig
   #appRoot?: URL
@@ -557,6 +563,15 @@ export class Ignitor {
 
   async #phaseBoot(): Promise<void> {
     await this.#app.boot()
+    // A provider is what binds `'logger'` — ream declares the contract and
+    // implements none — so the locator can only be filled once they have all
+    // booted. Absent is a normal state: `ctx.logger` falls back to console and
+    // `services/logger` says which package to install.
+    const container = this.#app.container
+    if (container.has('logger')) {
+      this.#logger = await container.resolve<ChildLoggerSource>('logger')
+      setLogger(this.#logger)
+    }
     this.#phase = 'booted'
   }
 
@@ -885,6 +900,7 @@ export class Ignitor {
     // `services/encryption` is the same object, so releasing it here keeps the
     // locator from outliving the app that built it.
     if (this.#signer) clearEncryption(this.#signer)
+    if (this.#logger) clearLogger(this.#logger)
 
     this.#phase = 'shutdown'
     if (errors.length === 1) throw errors[0]
