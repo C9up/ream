@@ -30,6 +30,47 @@ concurrency:
 
 jobs:
 
+  # The cross-platform matrix below exists to produce the prebuilt binaries a
+  # release ships. Running it on every push to main costs five runners to
+  # rebuild what nobody downloads, so it is gated on the package version
+  # actually moving. Typecheck, lint and the test jobs are NOT gated: they run
+  # on every push, on ubuntu, building the host binary themselves.
+  #
+  # `workflow_dispatch` always passes the gate — that is how a release is cut —
+  # and so does anything else that is not a push.
+  version-gate:
+    name: Version bumped?
+    runs-on: ubuntu-latest
+    outputs:
+      bumped: ${{ steps.check.outputs.bumped }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # HEAD^ is what the version is read from for the comparison.
+          fetch-depth: 2
+      - id: check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != 'push' ]; then
+            echo 'bumped=true' >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ github.event_name }} — the matrix runs unconditionally"
+            exit 0
+          fi
+          # A missing HEAD^ (first commit on a fresh clone depth) leaves an
+          # empty previous version, which reads as a bump — the matrix runs.
+          # Erring towards building is the safe direction here.
+          git show 'HEAD^:package.json' > "$RUNNER_TEMP/previous.json" 2>/dev/null \
+            || echo '{}' > "$RUNNER_TEMP/previous.json"
+          previous=$(node -p "require('$RUNNER_TEMP/previous.json').version ?? ''")
+          current=$(node -p "require('$GITHUB_WORKSPACE/package.json').version")
+          if [ "$previous" = "$current" ]; then
+            echo 'bumped=false' >> "$GITHUB_OUTPUT"
+            echo "::notice::version unchanged ($current) — skipping the cross-platform matrix"
+          else
+            echo 'bumped=true' >> "$GITHUB_OUTPUT"
+            echo "::notice::version $previous -> $current — building the cross-platform matrix"
+          fi
+
   # Typecheck + lint quality gate — one ubuntu run (no matrix). Mirrors the
   # aggregate `verify:all` gate at the ream-dev root so a standalone clone of
   # this package enforces the same bar.
@@ -48,6 +89,8 @@ jobs:
       - run: pnpm lint
   build-and-test:
     name: Build & test (${{ matrix.suffix }})
+    needs: version-gate
+    if: needs.version-gate.outputs.bumped == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -85,25 +128,25 @@ jobs:
             events.${{ matrix.suffix }}.node
           if-no-files-found: error
 
-  # Rust test suite — platform-independent, runs once on linux. Gated on the
-  # native build so nothing runs until the Rust build is green.
+  # Rust test suite — platform-independent, runs once on linux. Independent of
+  # `build-and-test`: that job is gated on a version bump, and waiting on it
+  # would take the test signal away from every ordinary push with it.
   rust-tests:
     name: Cargo tests (linux-x64-gnu)
     runs-on: ubuntu-latest
-    needs: build-and-test
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all
 
-  # TypeScript: compile (produces the dist/ that ships) AND run vitest. Gated on
-  # the native build (runs only once the Rust build is green). Builds the host
-  # binary on this runner — reliable, no cross-runner artefact plumbing — and
-  # stages it where the http/napi integration loaders require() it.
+  # TypeScript: compile (produces the dist/ that ships) AND run vitest. Builds
+  # the host binary on this runner — reliable, no cross-runner artefact
+  # plumbing — and stages it where the http/napi integration loaders require()
+  # it. That self-sufficiency is why it needs nothing from `build-and-test`,
+  # which is gated on a version bump.
   ts-tests:
     name: TypeScript (build + vitest)
     runs-on: ubuntu-latest
-    needs: build-and-test
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v6
