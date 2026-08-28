@@ -130,7 +130,41 @@ describe('base64 > urlDecode', () => {
 describe('is > isString', () => {
   it('returns true for strings', () => expect(isString('hi')).toBe(true))
   it('returns false for non-strings', () => expect(isString(42)).toBe(false))
-  it('is accessible on default export', () => expect(is.isString('x')).toBe(true))
+  it('is accessible on default export', () => expect(is.string('x')).toBe(true))
+})
+
+/**
+ * The namespace is keyed the way AdonisJS keys it — it re-exports
+ * `@sindresorhus/is`, where the members read `is.string(v)`. This object used
+ * to mirror the function names, so `is.string(value)` ported from an Adonis
+ * app was `undefined` and threw "is not a function" at runtime.
+ */
+describe('is > namespace shape', () => {
+  it('exposes the AdonisJS member names, not the stuttering ones', () => {
+    expect(typeof is.string).toBe('function')
+    expect(typeof is.plainObject).toBe('function')
+    expect(typeof is.nonEmptyArray).toBe('function')
+    // The stutter is gone, not aliased — keeping both would keep it alive.
+    expect('isString' in is).toBe(false)
+  })
+
+  it('covers the members the AdonisJS docs use in their own examples', () => {
+    expect(is.array([1]) && is.nonEmptyArray([1])).toBe(true)
+    expect(is.nonEmptyArray([])).toBe(false)
+    expect(is.plainObject({ name: 'a' }) && is.hasProperty({ name: 'a' }, 'name')).toBe(true)
+    expect(is.number(3) && is.integer(3) && is.positive(3)).toBe(true)
+    expect(is.integer(3.5)).toBe(false)
+    // Zero is not positive, matching @sindresorhus/is.
+    expect(is.positive(0)).toBe(false)
+    expect(is.nonEmptyString('hi')).toBe(true)
+    expect(is.nonEmptyString('')).toBe(false)
+  })
+
+  it('reports only OWN properties, so an inherited member is not data', () => {
+    expect(is.hasProperty({}, 'toString')).toBe(false)
+    expect(is.hasProperty(Object.create({ inherited: 1 }), 'inherited')).toBe(false)
+    expect(is.hasProperty(null, 'anything')).toBe(false)
+  })
 })
 
 describe('is > isNumber', () => {

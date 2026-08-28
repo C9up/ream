@@ -140,23 +140,94 @@ export function isEmpty(v: unknown): boolean {
   return false
 }
 
+/**
+ * Returns true if value is a string with at least one character.
+ * @example isNonEmptyString('hi') // true; isNonEmptyString('') // false
+ */
+export function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0
+}
+
+/**
+ * Returns true if value is an array with at least one element.
+ * @example isNonEmptyArray([1]) // true; isNonEmptyArray([]) // false
+ */
+export function isNonEmptyArray<T = unknown>(v: unknown): v is [T, ...T[]] {
+  return Array.isArray(v) && v.length > 0
+}
+
+/**
+ * Returns true if value is an integer. `Number.isInteger` already excludes NaN
+ * and the infinities.
+ * @example isInteger(42) // true; isInteger(4.2) // false
+ */
+export function isInteger(v: unknown): v is number {
+  return Number.isInteger(v)
+}
+
+/**
+ * Returns true if value is a number greater than zero. Zero is NOT positive
+ * here, matching `@sindresorhus/is`.
+ * @example isPositive(1) // true; isPositive(0) // false
+ */
+export function isPositive(v: unknown): v is number {
+  return typeof v === 'number' && !Number.isNaN(v) && v > 0
+}
+
+/**
+ * Returns true if `key` is an OWN property of `value`.
+ *
+ * Own, not inherited: an inherited `toString` is not something the caller put
+ * there, and treating it as present is how a prototype member gets mistaken
+ * for data.
+ * @example hasProperty({ a: 1 }, 'a') // true; hasProperty({}, 'toString') // false
+ */
+export function hasProperty<K extends PropertyKey>(
+  value: unknown,
+  key: K,
+): value is Record<K, unknown> {
+  return value !== null && typeof value === 'object' && Object.hasOwn(value, key)
+}
+
+/**
+ * The `is` namespace, keyed the way AdonisJS keys it.
+ *
+ * Adonis re-exports `@sindresorhus/is`, whose members read `is.string(v)`,
+ * `is.plainObject(v)`, `is.nonEmptyArray(v)`. This object used to mirror the
+ * function names instead — `is.isString(v)` — which stutters, and which turns
+ * `is.string(value)` ported from an Adonis app into "is.string is not a
+ * function" at runtime rather than a compile error.
+ *
+ * The standalone `isX` functions above keep their names: they read correctly
+ * on their own, and this object is the namespace form.
+ */
 const is = {
-  isString,
-  isNumber,
-  isBoolean,
-  isFunction,
-  isObject,
-  isPlainObject,
-  isArray,
-  isPromise,
-  isNull,
-  isUndefined,
-  isNullOrUndefined,
-  isBuffer,
-  isDate,
-  isRegExp,
-  isError,
-  isEmpty,
+  string: isString,
+  number: isNumber,
+  boolean: isBoolean,
+  function: isFunction,
+  object: isObject,
+  plainObject: isPlainObject,
+  array: isArray,
+  promise: isPromise,
+  null: isNull,
+  undefined: isUndefined,
+  nullOrUndefined: isNullOrUndefined,
+  buffer: isBuffer,
+  date: isDate,
+  regExp: isRegExp,
+  error: isError,
+  nonEmptyString: isNonEmptyString,
+  nonEmptyArray: isNonEmptyArray,
+  integer: isInteger,
+  positive: isPositive,
+  hasProperty: hasProperty,
+  /**
+   * Named deviation: `@sindresorhus/is` has `emptyString` / `emptyArray` /
+   * `emptyObject` / `emptyMap` / `emptySet` but no umbrella. This is the
+   * umbrella, and the one member here that is not a type guard.
+   */
+  empty: isEmpty,
 }
 
 export default is
