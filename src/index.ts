@@ -371,4 +371,4 @@ export {
   StatsTracker,
 } from './scheduler/index.js'
 
-export const VERSION = '0.2.6'
+export const VERSION = '0.2.7'

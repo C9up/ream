@@ -68,17 +68,51 @@ export class TestClient {
 
   #server: { port: number; close: () => Promise<void> | void } | null = null
 
-  /** Boot the application on a random port. */
+  /**
+   * In flight or settled, so concurrent callers share one boot.
+   *
+   * Also what makes `boot()` optional: the first request awaits this, starting
+   * it if nobody has. A test file that never issues a request never starts a
+   * server — which is the difference between a unit file paying for one and
+   * not, and at ~400ms a file that is most of a campaign's time.
+   */
+  #booting: Promise<void> | null = null
+
+  /**
+   * Boot the application on a random port. Idempotent: a second call awaits the
+   * first rather than starting a second server.
+   *
+   * Optional — a request boots on its own. Call it when you need `port` before
+   * issuing one (an SSE or WebSocket connection opened with `fetch`).
+   */
   async boot(): Promise<void> {
+    this.#booting ??= this.#startServer()
+    return this.#booting
+  }
+
+  async #startServer(): Promise<void> {
     this.#server = await this.#bootFn(0)
     this.#port = this.#server.port
   }
 
-  /** Close the server. */
+  /** Whether a server is currently running for this client. */
+  get booted(): boolean {
+    return this.#server !== null
+  }
+
+  /**
+   * Close the server. A no-op when nothing was ever started, so a teardown can
+   * call it unconditionally against a client whose file issued no request.
+   */
   async close(): Promise<void> {
+    // Awaited first: closing while a boot is in flight would otherwise leave
+    // the server that boot is about to assign running with nobody holding it.
+    if (this.#booting) await this.#booting.catch(() => {})
+    this.#booting = null
     if (this.#server) {
       await this.#server.close()
       this.#server = null
+      this.#port = 0
     }
   }
 
@@ -86,7 +120,11 @@ export class TestClient {
    * Ephemeral port the booted server bound to. Useful for long-lived
    * connections (SSE / WebSocket) that the fluent buffered request
    * surface can't model — open them with `fetch` against
-   * `http://127.0.0.1:${client.port}/...`. Returns 0 before `boot()`.
+   * `http://127.0.0.1:${client.port}/...`.
+   *
+   * Returns 0 while no server is running. Requests boot on their own, so a
+   * client that has only been constructed has not bound a port yet — `await
+   * client.boot()` first when you need this before issuing one.
    */
   get port(): number {
     return this.#port
@@ -148,8 +186,11 @@ export class TestClient {
    * `form()`. The lower-level `request()` (below) stays for raw control.
    */
   fluent(method: HttpMethod, path: string): RequestBuilder {
-    const sender: HttpSender = (m, p, init) =>
-      sendRequest(
+    const sender: HttpSender = async (m, p, init) => {
+      // Boots on the first request and no earlier. `#port` is read here rather
+      // than captured, so it is the port this boot bound to.
+      await this.boot()
+      return sendRequest(
         this.#port,
         m,
         p,
@@ -157,6 +198,7 @@ export class TestClient {
         init.body.toString('utf8'),
         init.timeoutMs,
       )
+    }
     return new RequestBuilder(sender, method, path, this.#auth, this.#sessionSeeder)
   }
 
