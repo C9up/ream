@@ -47,6 +47,14 @@
       "types": "./src/dumper/Dumper.ts",
       "import": "./src/dumper/Dumper.ts"
     },
+    "./services/repl": {
+      "types": "./src/services/repl.ts",
+      "import": "./src/services/repl.ts"
+    },
+    "./repl": {
+      "types": "./src/repl/Repl.ts",
+      "import": "./src/repl/Repl.ts"
+    },
     "./services/encryption": {
       "types": "./src/services/encryption.ts",
       "import": "./src/services/encryption.ts"
@@ -289,6 +297,14 @@
       "./dumper": {
         "types": "./dist/dumper/Dumper.d.ts",
         "import": "./dist/dumper/Dumper.js"
+      },
+      "./services/repl": {
+        "types": "./dist/services/repl.d.ts",
+        "import": "./dist/services/repl.js"
+      },
+      "./repl": {
+        "types": "./dist/repl/Repl.d.ts",
+        "import": "./dist/repl/Repl.js"
       },
       "./services/encryption": {
         "types": "./dist/services/encryption.d.ts",
