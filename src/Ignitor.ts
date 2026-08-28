@@ -46,7 +46,15 @@ import { clearServer, setServer } from './services/server.js'
 import { registerSessionTemplateTags } from './session/templateTags.js'
 
 /** Application environment. */
-export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
+/**
+ * Re-exported from `Application`, which is where it is declared: the
+ * environment belongs to the application (a provider reads
+ * `app.getEnvironment()`), and the Ignitor is only where the entry point
+ * declares it. Two declarations would be two types that happen to look alike.
+ */
+export type { AppEnvironment } from './Application.js'
+
+import type { AppEnvironment } from './Application.js'
 
 /**
  * Reamrc config — like AdonisJS adonisrc.ts with defineConfig().
@@ -212,7 +220,6 @@ export class Ignitor {
   private _httpServer?: HyperServerLike
   private config: IgnitorConfig
   private appRoot?: URL
-  private environment: AppEnvironment = 'unknown'
   private reamrc?: ReamrcConfig
   private providers: ProviderContract[] = []
   private errorListeners: Array<(event: ErrorEvent) => void> = []
@@ -319,14 +326,20 @@ export class Ignitor {
     return this
   }
 
-  /** Set the application environment. */
+  /**
+   * Set the application environment.
+   *
+   * Stored on the Application, which is where a provider reads it
+   * (`app.getEnvironment()`, the AdonisJS shape). The Ignitor keeps the setter
+   * because that is where the entry point declares it.
+   */
   setEnvironment(env: AppEnvironment): this {
-    this.environment = env
+    this.app.setEnvironment(env)
     return this
   }
 
   getEnvironment(): AppEnvironment {
-    return this.environment
+    return this.app.getEnvironment()
   }
 
   /**
@@ -382,19 +395,19 @@ export class Ignitor {
 
   /** Configure for HTTP server mode. */
   httpServer(): this {
-    this.environment = 'web'
+    this.app.setEnvironment('web')
     return this
   }
 
   /** Configure for CLI/console mode. Returns a ConsoleKernel for dispatching commands. */
   console(): ConsoleKernel {
-    this.environment = 'console'
+    this.app.setEnvironment('console')
     return new ConsoleKernel(this)
   }
 
   /** Configure for test mode. */
   testMode(): this {
-    this.environment = 'test'
+    this.app.setEnvironment('test')
     return this
   }
 
@@ -448,7 +461,7 @@ export class Ignitor {
    */
   #loadEnvironmentFiles(): void {
     if (!this.appRoot) return
-    loadEnvFiles(this.appRoot, { skipEnvLocal: this.environment === 'test' })
+    loadEnvFiles(this.appRoot, { skipEnvLocal: this.app.getEnvironment() === 'test' })
   }
 
   /**
@@ -487,7 +500,7 @@ export class Ignitor {
         const env = typeof providerEntry === 'function' ? undefined : providerEntry.environment
 
         // Skip providers not matching current environment
-        if (env && !env.includes(this.environment)) continue
+        if (env && !env.includes(this.app.getEnvironment())) continue
 
         const mod = await providerImport()
         const ProviderClass = mod.default
@@ -522,7 +535,7 @@ export class Ignitor {
             ? undefined
             : (preloadEntry as { environment?: string[] }).environment
 
-        if (env && !env.includes(this.environment)) continue
+        if (env && !env.includes(this.app.getEnvironment())) continue
         await preloadImport()
       }
     }
@@ -554,7 +567,7 @@ export class Ignitor {
     await this.server.boot()
 
     // Start HTTP server if in web mode
-    if (this.environment === 'web' && this.config.serverFactory) {
+    if (this.app.getEnvironment() === 'web' && this.config.serverFactory) {
       // Build the HttpKernel with server middleware + router middleware.
       // The streaming backend is resolved lazily — the HyperServer is
       // created a few lines down, after the kernel — so the kernel
@@ -634,7 +647,7 @@ export class Ignitor {
           },
         })
       }
-    } else if (this.environment === 'web' && !this.config.serverFactory) {
+    } else if (this.app.getEnvironment() === 'web' && !this.config.serverFactory) {
       throw new ReamError(
         'IGNITOR_NO_SERVER_FACTORY',
         'httpServer() requires a serverFactory in config',
@@ -661,7 +674,7 @@ export class Ignitor {
     // Emitted once through the bus when events are wired — zero hot-path cost.
     if (this.app.container.has('events')) {
       const bus = await this.app.container.resolve<Emitter>('events')
-      bus.emit('app:ready', { environment: this.environment })
+      bus.emit('app:ready', { environment: this.app.getEnvironment() })
     }
 
     // Dev-mode change watcher. IMPORTANT: this does NOT attempt an in-process

@@ -13,6 +13,7 @@
  * @implements FR17, FR20
  */
 
+import { readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ConfigStore } from './ConfigLoader.js'
@@ -29,17 +30,45 @@ import { callProviderPhase } from './Provider.js'
  */
 export type ApplicationMode = 'run' | 'warmup'
 
+/**
+ * What the process is running as (AdonisJS `AppEnvironments`).
+ *
+ * Providers and preloads are filtered on it — a console-only provider must not
+ * boot inside an HTTP request. `repl` is absent because ream has no REPL; it
+ * belongs here the day one exists, not before.
+ */
+export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
+
+/**
+ * Where the application is in its lifecycle (AdonisJS `ApplicationStates`).
+ *
+ * Read it rather than inferring from a boolean: "not booted" covers both
+ * "starting up" and "already shut down", and code that guards on the wrong one
+ * runs at exactly the wrong moment.
+ */
+export type ApplicationState =
+  | 'created'
+  | 'initiated'
+  | 'booted'
+  | 'ready'
+  | 'terminating'
+  | 'terminated'
+
 export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
   #appRoot?: URL
   #directories: DirectoriesNode = { ...defaultDirectories }
-  private providers: ProviderContract[] = []
-  private _booted = false
+  #providers: ProviderContract[] = []
+  #booted = false
+  #environment: AppEnvironment = 'unknown'
+  #state: ApplicationState = 'created'
+  #packageJsonRead = false
+  #packageJsonCache: { name?: string; version?: string } | undefined
   #mode: ApplicationMode = 'run'
-  private _bootingHooks: Array<() => Promise<void> | void> = []
-  private _bootedHooks: Array<() => Promise<void> | void> = []
-  private _shutdownHooks: Array<() => Promise<void> | void> = []
+  #bootingHooks: Array<() => Promise<void> | void> = []
+  #bootedHooks: Array<() => Promise<void> | void> = []
+  #shutdownHooks: Array<() => Promise<void> | void> = []
 
   constructor() {
     this.container = new Container()
@@ -69,7 +98,7 @@ export class Application implements AppContext {
    * otherwise would leave the app half-started.
    */
   setMode(mode: ApplicationMode): this {
-    if (this._booted) {
+    if (this.#booted) {
       throw new Error(`Cannot switch to '${mode}' mode: the application is already booted.`)
     }
     this.#mode = mode
@@ -313,7 +342,7 @@ export class Application implements AppContext {
    * Like AdonisJS app.booting().
    */
   booting(callback: () => Promise<void> | void): void {
-    this._bootingHooks.push(callback)
+    this.#bootingHooks.push(callback)
   }
 
   /**
@@ -321,7 +350,7 @@ export class Application implements AppContext {
    * Like AdonisJS app.booted().
    */
   booted(callback: () => Promise<void> | void): void {
-    if (this._booted) {
+    if (this.#booted) {
       // Already booted — run immediately. Invoke callback() INSIDE the
       // promise chain (not as `Promise.resolve(callback())`, which
       // evaluates callback() eagerly and lets a synchronous throw
@@ -334,7 +363,7 @@ export class Application implements AppContext {
         })
       return
     }
-    this._bootedHooks.push(callback)
+    this.#bootedHooks.push(callback)
   }
 
   // ─── Signal handling ──────────────────────────────────────
@@ -352,6 +381,166 @@ export class Application implements AppContext {
   listen(signal: NodeJS.Signals, callback: () => void): void {
     this.#signalHandlers.push([signal, callback])
     process.on(signal, callback)
+  }
+
+  /**
+   * What the process is running as (AdonisJS `getEnvironment`).
+   *
+   * Lives on the application, not on the Ignitor, because that is where a
+   * provider reads it: `if (app.getEnvironment() !== 'web') return`.
+   */
+  getEnvironment(): AppEnvironment {
+    return this.#environment
+  }
+
+  /**
+   * Declare what the process is running as (AdonisJS `setEnvironment`).
+   *
+   * Refused after boot: providers and preloads were already filtered on the
+   * old value, so changing it afterwards would describe an application that
+   * was never assembled.
+   */
+  setEnvironment(environment: AppEnvironment): this {
+    if (this.#booted) {
+      throw new Error(
+        `Cannot switch to the '${environment}' environment: the application is already booted.`,
+      )
+    }
+    this.#environment = environment
+    return this
+  }
+
+  /** `process.env.NODE_ENV`, or `'unknown'` (AdonisJS `nodeEnvironment`). */
+  get nodeEnvironment(): string {
+    return process.env.NODE_ENV ?? 'unknown'
+  }
+
+  /** Where the application is in its lifecycle (AdonisJS `getState`). */
+  getState(): ApplicationState {
+    return this.#state
+  }
+
+  /** True once boot and every ready hook have completed (AdonisJS `isReady`). */
+  get isReady(): boolean {
+    return this.#state === 'ready'
+  }
+
+  /** True while shutdown hooks are running (AdonisJS `isTerminating`). */
+  get isTerminating(): boolean {
+    return this.#state === 'terminating'
+  }
+
+  /** True once shutdown has completed (AdonisJS `isTerminated`). */
+  get isTerminated(): boolean {
+    return this.#state === 'terminated'
+  }
+
+  /** The name from the app's `package.json`, when it could be read. */
+  get appName(): string | undefined {
+    return this.#packageJson()?.name
+  }
+
+  /** The version from the app's `package.json`, when it could be read. */
+  get version(): string | undefined {
+    return this.#packageJson()?.version
+  }
+
+  /**
+   * A snapshot of the application, for a health endpoint or a bug report
+   * (AdonisJS `toJSON`).
+   */
+  toJSON(): {
+    appName: string | undefined
+    version: string | undefined
+    environment: AppEnvironment
+    nodeEnvironment: string
+    state: ApplicationState
+    isReady: boolean
+    isTerminating: boolean
+  } {
+    return {
+      appName: this.appName,
+      version: this.version,
+      environment: this.#environment,
+      nodeEnvironment: this.nodeEnvironment,
+      state: this.#state,
+      isReady: this.isReady,
+      isTerminating: this.isTerminating,
+    }
+  }
+
+  /**
+   * Listen for a signal, then stop listening (AdonisJS `listenOnce`).
+   *
+   * Registered through {@link listen} so the handler is still removed by
+   * `terminate()` when the signal never arrives — otherwise a stopped app
+   * would leave a listener behind, and the next real signal would run the
+   * handlers of every app instance that ever existed.
+   */
+  listenOnce(signal: NodeJS.Signals, callback: () => void): void {
+    const once = (): void => {
+      process.removeListener(signal, once)
+      callback()
+    }
+    this.listen(signal, once)
+  }
+
+  /** {@link listenOnce}, only when `condition` holds (AdonisJS `listenOnceIf`). */
+  listenOnceIf(condition: boolean, signal: NodeJS.Signals, callback: () => void): void {
+    if (condition) this.listenOnce(signal, callback)
+  }
+
+  /**
+   * Tell the process supervisor the app reached a state (AdonisJS `notify`).
+   *
+   * A no-op unless something is listening — systemd's `NOTIFY_SOCKET`, or a
+   * parent process. Silent by design: an app should not fail to start because
+   * nothing was there to hear it.
+   */
+  notify(message: string): void {
+    process.send?.({ type: 'ream:notify', message })
+  }
+
+  /**
+   * Import a module and return its default export (AdonisJS `importDefault`).
+   *
+   * Throws when there is none, naming the file: a preload or provider entry
+   * without a default export otherwise fails later, as `undefined is not a
+   * constructor`, far from the file at fault.
+   */
+  async importDefault<T = unknown>(importFn: () => Promise<unknown>, label?: string): Promise<T> {
+    const module = await importFn()
+    if (module === null || typeof module !== 'object' || !('default' in module)) {
+      throw new Error(
+        `Missing default export${label ? ` in "${label}"` : ''}. ` +
+          'Export the value as `export default`, or import the named export directly.',
+      )
+    }
+    // The caller declares what it expects to find, the same contract as
+    // `container.make<T>()` over a dynamic import.
+    return module.default as T
+  }
+
+  /** The app's `package.json`, read once and cached; `undefined` when absent. */
+  #packageJson(): { name?: string; version?: string } | undefined {
+    if (this.#packageJsonRead) return this.#packageJsonCache
+    this.#packageJsonRead = true
+    try {
+      const path = this.makePath('package.json')
+      const raw = readFileSync(path, 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed !== null && typeof parsed === 'object') {
+        const name = 'name' in parsed && typeof parsed.name === 'string' ? parsed.name : undefined
+        const version =
+          'version' in parsed && typeof parsed.version === 'string' ? parsed.version : undefined
+        this.#packageJsonCache = { name, version }
+      }
+    } catch {
+      // No app root, no package.json, unreadable, or malformed — every one of
+      // those means "we do not know the name", not "fail to boot".
+      this.#packageJsonCache = undefined
+    }
+    return this.#packageJsonCache
   }
 
   /**
@@ -377,7 +566,7 @@ export class Application implements AppContext {
 
   /** Register a provider instance. */
   register(provider: ProviderContract): void {
-    this.providers.push(provider)
+    this.#providers.push(provider)
     if (typeof provider.register === 'function') {
       provider.register()
     }
@@ -385,26 +574,32 @@ export class Application implements AppContext {
 
   /** Boot all registered providers. Runs booting/booted hooks. */
   async boot(): Promise<void> {
-    if (this._booted) return
+    if (this.#booted) return
 
     // Run booting hooks
-    for (const hook of this._bootingHooks) {
+    for (const hook of this.#bootingHooks) {
       await hook()
     }
 
     // Boot providers. `callProviderPhase` skips providers that don't
     // declare the phase — duck-typed packages (spectrum, warden, etc.)
     // implement only what they need.
-    for (const provider of this.providers) {
+    for (const provider of this.#providers) {
       await callProviderPhase(provider, 'boot')
     }
 
-    this._booted = true
+    this.#booted = true
+    this.#state = 'booted'
 
     // Run booted hooks
-    for (const hook of this._bootedHooks) {
+    for (const hook of this.#bootedHooks) {
       await hook()
     }
+
+    // Ready only once the booted hooks have run: they are where an app wires
+    // the things a request will need, so reporting ready before them would
+    // green a health check on an application that cannot serve yet.
+    this.#state = 'ready'
   }
 
   /**
@@ -414,8 +609,9 @@ export class Application implements AppContext {
    */
   async shutdown(): Promise<void> {
     const errors: unknown[] = []
+    this.#state = 'terminating'
 
-    for (const hook of this._shutdownHooks) {
+    for (const hook of this.#shutdownHooks) {
       try {
         await hook()
       } catch (err) {
@@ -423,7 +619,7 @@ export class Application implements AppContext {
       }
     }
 
-    for (const provider of [...this.providers].reverse()) {
+    for (const provider of [...this.#providers].reverse()) {
       try {
         await callProviderPhase(provider, 'shutdown')
       } catch (err) {
@@ -437,7 +633,11 @@ export class Application implements AppContext {
     }
     this.#signalHandlers = []
 
-    this._booted = false
+    this.#booted = false
+    // Terminated even when a hook threw: the hooks and providers have all been
+    // given their turn, so the application IS down. Reporting anything else
+    // would leave a supervisor waiting on a shutdown that already happened.
+    this.#state = 'terminated'
     if (errors.length === 1) throw errors[0]
     if (errors.length > 1) {
       throw new AggregateError(errors, 'Application.shutdown() completed with errors')
@@ -446,14 +646,14 @@ export class Application implements AppContext {
 
   /** Register a shutdown hook. */
   onShutdown(callback: () => Promise<void> | void): void {
-    this._shutdownHooks.push(callback)
+    this.#shutdownHooks.push(callback)
   }
 
   get isBooted(): boolean {
-    return this._booted
+    return this.#booted
   }
 
   get providerCount(): number {
-    return this.providers.length
+    return this.#providers.length
   }
 }

@@ -8,6 +8,7 @@ import 'reflect-metadata'
 
 // ─── Core ───────────────────────────────────────────────────
 
+export type { AppEnvironment, ApplicationMode, ApplicationState } from './Application.js'
 export { Application } from './Application.js'
 export { ConfigStore, configProvider, defineModuleConfig, env } from './ConfigLoader.js'
 export { Container } from './container/Container.js'
@@ -242,7 +243,6 @@ export type {
   FlagMetaData,
 } from './console/types.js'
 export type {
-  AppEnvironment,
   HyperServerLike,
   IgnitorConfig,
   ReamrcConfig,
@@ -371,4 +371,4 @@ export {
   StatsTracker,
 } from './scheduler/index.js'
 
-export const VERSION = '0.2.4'
+export const VERSION = '0.2.5'
