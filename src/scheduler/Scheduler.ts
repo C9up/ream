@@ -252,9 +252,12 @@ export class Scheduler {
       // `.then`-based detection + `Promise.resolve` wrap so non-native
       // thenables (e.g. RxJS-style) are handled uniformly.
       if (
+        // Object OR function: a thenable function is exotic but legal, and the
+        // guard this replaced accepted one. `in` narrows either.
+        (typeof result === 'object' || typeof result === 'function') &&
         result !== null &&
-        result !== undefined &&
-        typeof (result as { then?: unknown }).then === 'function'
+        'then' in result &&
+        typeof result.then === 'function'
       ) {
         Promise.resolve(result).catch(() => {})
       }
@@ -334,9 +337,12 @@ export class Scheduler {
       // reporter never crashes the ticker.
       const result = this.#errorReporter(err, { taskName }) as unknown
       if (
+        // Object OR function: a thenable function is exotic but legal, and the
+        // guard this replaced accepted one. `in` narrows either.
+        (typeof result === 'object' || typeof result === 'function') &&
         result !== null &&
-        result !== undefined &&
-        typeof (result as { then?: unknown }).then === 'function'
+        'then' in result &&
+        typeof result.then === 'function'
       ) {
         Promise.resolve(result).catch(() => {})
       }

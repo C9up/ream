@@ -56,9 +56,9 @@ export interface SessionDriverWithTagging extends SessionDriver {
 export function supportsTagging(driver: SessionDriver): driver is SessionDriverWithTagging {
   return (
     'tag' in driver &&
-    typeof (driver as SessionDriverWithTagging).tag === 'function' &&
+    typeof driver.tag === 'function' &&
     'tagged' in driver &&
-    typeof (driver as SessionDriverWithTagging).tagged === 'function'
+    typeof driver.tagged === 'function'
   )
 }
 

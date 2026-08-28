@@ -66,7 +66,7 @@ export function isPromise<T = unknown>(v: unknown): v is Promise<T> {
     v !== null &&
     typeof v === 'object' &&
     'then' in v &&
-    typeof (v as Record<string, unknown>).then === 'function'
+    typeof v.then === 'function'
   )
 }
 

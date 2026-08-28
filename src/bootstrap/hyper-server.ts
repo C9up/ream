@@ -38,7 +38,7 @@ function isHyperServerNapi(value: unknown): value is HyperServerNapiModule {
     typeof value === 'object' &&
     value !== null &&
     'HyperServer' in value &&
-    typeof (value as { HyperServer: unknown }).HyperServer === 'function'
+    typeof value.HyperServer === 'function'
   )
 }
 
