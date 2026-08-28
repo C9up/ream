@@ -202,7 +202,7 @@ export {
 // ─── Middleware ──────────────────────────────────────────────
 
 export type { MiddlewareFunction } from './middleware/Pipeline.js'
-export { compose, MiddlewareRegistry } from './middleware/Pipeline.js'
+export { composeMiddleware, MiddlewareRegistry } from './middleware/Pipeline.js'
 
 // ─── HttpKernel ─────────────────────────────────────────────
 

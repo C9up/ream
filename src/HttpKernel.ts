@@ -19,7 +19,7 @@ import type {
   MiddlewareRegistry,
   RuntimeValidator,
 } from './middleware/Pipeline.js'
-import { compose } from './middleware/Pipeline.js'
+import { composeMiddleware } from './middleware/Pipeline.js'
 import type { AnyConstructor, RouteDefinition, Router } from './router/Router.js'
 import type { CookieSigner } from './security/CookieSigner.js'
 import type { SignedUrl } from './security/SignedUrl.js'
@@ -318,7 +318,7 @@ export function createHttpKernel(
       // HttpContext ALS so HttpContext.get()/getOrFail() reach this request
       // anywhere down the call stack (AdonisJS parity) — transparent to the
       // pipeline itself.
-      const fullPipeline = compose([...serverMw, coreHandler])
+      const fullPipeline = composeMiddleware([...serverMw, coreHandler])
       await HttpContext.run(ctx, () => fullPipeline(ctx, async () => {}))
 
       ctx.events?.emit('http:response', {

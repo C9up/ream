@@ -1,5 +1,6 @@
 export { Secret } from '../env/Secret.js'
 export { base64 } from './base64.js'
+export { compose } from './compose.js'
 export { defineStaticProperty } from './defineStaticProperty.js'
 export { milliseconds, seconds } from './duration.js'
 export type { ImportAllFilesOptions, ReadAllFilesOptions } from './fs.js'

@@ -170,12 +170,18 @@ export class MiddlewareRegistry {
       handler,
     ]
 
-    return compose(stack)
+    return composeMiddleware(stack)
   }
 }
 
-/** Compose middleware into a single handler (onion pattern). */
-function compose(middleware: MiddlewareFunction[]): MiddlewareFunction {
+/**
+ * Compose middleware into a single handler (onion pattern).
+ *
+ * NOT `compose` — that name means mixin composition in `helpers`, the way it
+ * does in AdonisJS, and the two were one import away from each other on the
+ * barrel.
+ */
+function composeMiddleware(middleware: MiddlewareFunction[]): MiddlewareFunction {
   return async (ctx: HttpContext, finalNext: () => Promise<void>) => {
     let index = -1
 
@@ -257,4 +263,4 @@ function createValidationMiddleware(validators: RuntimeValidator[]): MiddlewareF
   }
 }
 
-export { compose }
+export { composeMiddleware }

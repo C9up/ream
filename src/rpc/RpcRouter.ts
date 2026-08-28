@@ -20,7 +20,7 @@ import {
 } from '@c9up/comet'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
-import { compose, runValidator } from '../middleware/Pipeline.js'
+import { composeMiddleware, runValidator } from '../middleware/Pipeline.js'
 
 export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown> | unknown
 
@@ -252,7 +252,7 @@ export class RpcRouter {
       }
       return mw
     })
-    await compose(fns)(ctx, async () => {})
+    await composeMiddleware(fns)(ctx, async () => {})
   }
 
   async #processOne(ctx: HttpContext, request: unknown): Promise<unknown> {
