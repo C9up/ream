@@ -11,6 +11,7 @@
  * 5. Handler
  */
 
+import { debugHttp } from '../debug.js'
 import { ReamError } from '../errors/ReamError.js'
 import { E_FORBIDDEN, E_UNAUTHORIZED, E_VALIDATION_ERROR } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
@@ -196,6 +197,12 @@ function composeMiddleware(middleware: MiddlewareFunction[]): MiddlewareFunction
       const fn = i < middleware.length ? middleware[i] : finalNext
       if (!fn) return
 
+      if (debugHttp.enabled && i < middleware.length) {
+        // `fn.name` is what a named middleware function or a bound class
+        // method carries; an inline arrow has none, and its position is the
+        // only thing that identifies it.
+        debugHttp('middleware %d/%d %s', i + 1, middleware.length, fn.name || '(anonymous)')
+      }
       await fn(ctx, () => dispatch(i + 1))
     }
 

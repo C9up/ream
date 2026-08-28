@@ -11,6 +11,7 @@
  */
 
 import type { Container } from './container/Container.js'
+import { debugHttp } from './debug.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
@@ -157,6 +158,14 @@ export function createHttpKernel(
     // only correct key; the previous PascalCase fallback was dead code.
     const host = reqData.headers.host
     const match = config.router.match(reqData.method, reqData.path, host)
+    if (debugHttp.enabled) {
+      debugHttp(
+        '%s %s -> %s',
+        reqData.method,
+        reqData.path,
+        match ? (match.route.name ?? match.route.path) : 'no match',
+      )
+    }
     const routeInfo = match
       ? {
           pattern: match.route.path,
@@ -327,6 +336,15 @@ export function createHttpKernel(
         path: reqData.path,
         status: ctx.response.getStatus(),
       })
+      if (debugHttp.enabled) {
+        debugHttp(
+          '%s %s <- %d (%s)',
+          reqData.method,
+          reqData.path,
+          ctx.response.getStatus(),
+          correlationId,
+        )
+      }
       const serialized = await serializeResponse(ctx)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
@@ -374,6 +392,15 @@ export function createHttpKernel(
         path: reqData.path,
         status: ctx.response.getStatus(),
       })
+      if (debugHttp.enabled) {
+        debugHttp(
+          '%s %s <- %d (%s)',
+          reqData.method,
+          reqData.path,
+          ctx.response.getStatus(),
+          correlationId,
+        )
+      }
       const serialized = await serializeResponse(ctx)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
