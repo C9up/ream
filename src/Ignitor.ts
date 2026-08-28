@@ -41,6 +41,7 @@ import { CookieSigner } from './security/CookieSigner.js'
 import { SignedUrl } from './security/SignedUrl.js'
 import { Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
+import { clearEncryption, setEncryption } from './services/encryption.js'
 import { clearRouter, setRouter } from './services/router.js'
 import { clearServer, setServer } from './services/server.js'
 import { registerSessionTemplateTags } from './session/templateTags.js'
@@ -217,6 +218,12 @@ export class Ignitor {
   /** Where each data package registers its migration runner. See `MigrationRegistry`. */
   #migrations: MigrationRegistry
   #errorBoundary: ErrorBoundary
+  /**
+   * The APP_KEY-backed signer, when there is one. Held so `stop()` can release
+   * the `services/encryption` locator against the exact instance it installed
+   * — an unguarded clear would tear down a newer Ignitor's binding.
+   */
+  #signer?: CookieSigner
   #_httpServer?: HyperServerLike
   #config: IgnitorConfig
   #appRoot?: URL
@@ -302,6 +309,8 @@ export class Ignitor {
       }
       const signer = new CookieSigner(appKey)
       this.#app.container.singleton('encryption', () => signer)
+      this.#signer = signer
+      setEncryption(signer)
       // Signed-URL helper (same APP_KEY): the router signs via makeSignedUrl,
       // HttpContext hands it to the request so hasValidSignature() can verify.
       const signedUrl = new SignedUrl({ secret: appKey })
@@ -846,6 +855,10 @@ export class Ignitor {
     clearApp(this.#app)
     clearRouter(this.#router)
     clearServer(this.#server)
+    // `signedUrl` is what the router was handed; the signer behind
+    // `services/encryption` is the same object, so releasing it here keeps the
+    // locator from outliving the app that built it.
+    if (this.#signer) clearEncryption(this.#signer)
 
     this.#phase = 'shutdown'
     if (errors.length === 1) throw errors[0]

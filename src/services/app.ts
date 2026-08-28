@@ -26,6 +26,15 @@ export function clearApp(app: Application): void {
   if (instance === app) instance = undefined
 }
 
+/**
+ * @internal Get the app instance directly. Used by the accessors that stand in
+ * for something the app OWNS (`services/config` is `app.config`), so they read
+ * through here instead of keeping a second copy that a re-boot could desync.
+ */
+export function getApp(): Application | undefined {
+  return instance
+}
+
 const app: Application = createServiceProxy<Application>(
   () => instance,
   'Application accessed before initialization. ' +
