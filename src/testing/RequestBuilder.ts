@@ -1,5 +1,5 @@
 /**
- * Fluent HTTP request builder with assertion methods (`@japa/api-client` model).
+ * Fluent HTTP request builder with assertion methods (`helix` model).
  *
  *   await client
  *     .get('/api/users/42')
@@ -84,7 +84,7 @@ export interface AuthStrategy {
 
 /**
  * HTTP methods. The common verbs are named; `request(url, method)` also accepts
- * any other method (e.g. `TRACE`, `CONNECT`) — Japa parity — via the wider
+ * any other method (e.g. `TRACE`, `CONNECT`) — helix parity — via the wider
  * string fallback.
  */
 export type HttpMethod =
@@ -104,7 +104,7 @@ const CSRF_COOKIE_NAME = 'XSRF-TOKEN'
 /** Header the client echoes the token back in (Axios/Angular default). */
 const CSRF_HEADER_NAME = 'x-xsrf-token'
 
-/** Content-type / accept shorthands — mirrors japa/api-client's `.type()`/`.accept()`. */
+/** Content-type / accept shorthands — mirrors helix's `.type()`/`.accept()`. */
 const TYPE_SHORTHANDS: Record<string, string> = {
   json: 'application/json',
   form: 'application/x-www-form-urlencoded',
@@ -119,14 +119,14 @@ function resolveMime(type: string): string {
   return TYPE_SHORTHANDS[type] ?? type
 }
 
-/** Primitive accepted as a query-string value (mirrors `.qs()` in japa/api-client). */
+/** Primitive accepted as a query-string value (mirrors `.qs()` in helix). */
 type QueryValue = string | number | boolean
 /** Query-string map — a value or an array of values (repeated key). */
 export type QueryParams = Record<string, QueryValue | ReadonlyArray<QueryValue>>
 
-/** A scalar accepted by `form()`/`fields()` — Japa parity (arrays repeat the key). */
+/** A scalar accepted by `form()`/`fields()` — helix parity (arrays repeat the key). */
 export type FieldValue = string | number | boolean | Buffer
-/** A value accepted by a multipart `field()`/`file()` — Japa parity (incl. streams/blobs). */
+/** A value accepted by a multipart `field()`/`file()` — helix parity (incl. streams/blobs). */
 export type MultipartValue = string | number | boolean | Buffer | Blob | Readable
 
 /**
@@ -139,12 +139,12 @@ export type HttpSender = (
   init: {
     headers: Record<string, string>
     body: Buffer
-    /** Per-request socket timeout (ms) — Japa `.timeout()`. Sender may honour it. */
+    /** Per-request socket timeout (ms) — helix `.timeout()`. Sender may honour it. */
     timeoutMs?: number
   },
 ) => Promise<TestResponse>
 
-/** Options for a multipart file part — mirrors Adonis/japa's `.file()` options. */
+/** Options for a multipart file part — mirrors Adonis/helix's `.file()` options. */
 export interface FilePart {
   /** Filename advertised in the part's `Content-Disposition`. Defaults to the field name / basename. */
   filename?: string
@@ -160,15 +160,15 @@ type MultipartPart =
   | { kind: 'field'; name: string; value: MultipartValue }
   | { kind: 'file'; name: string; filename: string; contentType: string; content: MultipartValue }
 
-/** HTTP statuses that trigger redirect-following (Japa `.redirects()`). */
+/** HTTP statuses that trigger redirect-following (helix `.redirects()`). */
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
-/** Japa follows 5 redirects by default. */
+/** helix follows 5 redirects by default. */
 const DEFAULT_MAX_REDIRECTS = 5
 
-/** Consumer-registered macros/getters (Japa `ApiRequest.macro`/`.getter`). */
+/** Consumer-registered macros/getters (helix `ApiRequest.macro`/`.getter`). */
 const requestMacros = new Map<string, unknown>()
 const requestGetters = new Map<string, (this: RequestBuilder, req: RequestBuilder) => unknown>()
-/** Consumer-registered request body serializers (Japa `ApiRequest.addSerializer`), by name. */
+/** Consumer-registered request body serializers (helix `ApiRequest.addSerializer`), by name. */
 const requestSerializers = new Map<
   string,
   (data: unknown) => { body: Buffer; contentType: string }
@@ -194,7 +194,7 @@ export class RequestBuilder {
   #timeoutMs: number | undefined
   #maxRedirects = DEFAULT_MAX_REDIRECTS
   #sent: Promise<ApiResponse> | null = null
-  // Lazy assertions (japa model): each `assert*`/`expect*` registers a check and
+  // Lazy assertions (helix model): each `assert*`/`expect*` registers a check and
   // returns `this` synchronously; the checks run in order when the builder is
   // awaited (`then`) — after the single send.
   #checks: Array<(res: ApiResponse) => void> = []
@@ -222,7 +222,7 @@ export class RequestBuilder {
   }
 
   header(name: string, value: string | string[]): this {
-    // Japa accepts string | string[]; a list is joined into one header value.
+    // helix accepts string | string[]; a list is joined into one header value.
     this.#headers[name.toLowerCase()] = Array.isArray(value) ? value.join(', ') : value
     return this
   }
@@ -233,7 +233,7 @@ export class RequestBuilder {
     return this
   }
 
-  /** Japa `.unsafeJson()` — set a JSON body without any transform (alias of {@link json}). */
+  /** helix `.unsafeJson()` — set a JSON body without any transform (alias of {@link json}). */
   unsafeJson(data: unknown): this {
     return this.json(data)
   }
@@ -245,7 +245,7 @@ export class RequestBuilder {
   }
 
   form(data: Record<string, FieldValue | FieldValue[]>): this {
-    // Array values repeat the key (`a=1&a=2`) — Japa parity.
+    // Array values repeat the key (`a=1&a=2`) — helix parity.
     const pairs: string[] = []
     for (const [k, v] of Object.entries(data)) {
       const values = Array.isArray(v) ? v : [v]
@@ -258,13 +258,13 @@ export class RequestBuilder {
     return this
   }
 
-  /** Japa `.unsafeForm()` — set a urlencoded body without transform (alias of {@link form}). */
+  /** helix `.unsafeForm()` — set a urlencoded body without transform (alias of {@link form}). */
   unsafeForm(data: Record<string, FieldValue | FieldValue[]>): this {
     return this.form(data)
   }
 
   /**
-   * Add a `multipart/form-data` field — mirrors Adonis/japa's `.field()`. Accepts
+   * Add a `multipart/form-data` field — mirrors Adonis/helix's `.field()`. Accepts
    * a string/number/boolean, a Buffer, a Blob, a Readable stream, or an array of
    * these (repeated part). Calling `.field()`/`.fields()`/`.file()` switches the
    * body to multipart; the boundary + `Content-Type` header are produced at send
@@ -282,7 +282,7 @@ export class RequestBuilder {
     return this
   }
 
-  /** Add several multipart fields at once — Japa `.fields()`. */
+  /** Add several multipart fields at once — helix `.fields()`. */
   fields(map: Record<string, MultipartValue | MultipartValue[]>): this {
     for (const [name, value] of Object.entries(map)) {
       this.field(name, value)
@@ -291,10 +291,10 @@ export class RequestBuilder {
   }
 
   /**
-   * Attach a file as a `multipart/form-data` part — mirrors Adonis/japa's
+   * Attach a file as a `multipart/form-data` part — mirrors Adonis/helix's
    * `.file(field, value, { filename, contentType })`. `value` is a Buffer, a
    * Blob, a Readable stream, OR a string absolute PATH to a file on disk (read at
-   * call time, Japa parity). The filename defaults to the path basename / field
+   * call time, helix parity). The filename defaults to the path basename / field
    * name; streams/blobs are drained to Buffers at send time.
    */
   file(field: string, value: Buffer | string | Blob | Readable, options: FilePart = {}): this {
@@ -322,7 +322,7 @@ export class RequestBuilder {
   }
 
   /**
-   * Append query-string params — mirrors japa/api-client's `.qs()`. Values are
+   * Append query-string params — mirrors helix's `.qs()`. Values are
    * URL-encoded; arrays repeat the key (`?tag=a&tag=b`). Merges with any query
    * string already on the path and with earlier `.qs()` calls.
    */
@@ -338,7 +338,7 @@ export class RequestBuilder {
   }
 
   /**
-   * Append query params WITHOUT any validation/normalisation — Japa
+   * Append query params WITHOUT any validation/normalisation — helix
    * `.unsafeQs({ … })`. Values are still URL-encoded so the wire stays valid, but
    * (unlike `.qs()`) no key filtering is applied; arrays repeat the key.
    */
@@ -346,13 +346,13 @@ export class RequestBuilder {
     return this.qs(params)
   }
 
-  /** Pass a bearer token as the `Authorization` header — japa `.bearerToken()`. */
+  /** Pass a bearer token as the `Authorization` header — helix `.bearerToken()`. */
   bearerToken(token: string): this {
     this.#headers.authorization = `Bearer ${token}`
     return this
   }
 
-  /** Pass HTTP Basic credentials as the `Authorization` header — japa `.basicAuth()`. */
+  /** Pass HTTP Basic credentials as the `Authorization` header — helix `.basicAuth()`. */
   basicAuth(user: string, password: string): this {
     const encoded = Buffer.from(`${user}:${password}`, 'utf8').toString('base64')
     this.#headers.authorization = `Basic ${encoded}`
@@ -361,7 +361,7 @@ export class RequestBuilder {
 
   /**
    * Set the request `Content-Type` from a shorthand (`'json'`, `'form'`, …) or a
-   * full MIME type — mirrors japa/api-client's `.type()`.
+   * full MIME type — mirrors helix's `.type()`.
    */
   type(mime: string): this {
     this.#headers['content-type'] = resolveMime(mime)
@@ -370,52 +370,52 @@ export class RequestBuilder {
 
   /**
    * Set the `Accept` header from a shorthand (`'json'`, `'html'`, …) or a full
-   * MIME type — mirrors japa/api-client's `.accept()`.
+   * MIME type — mirrors helix's `.accept()`.
    */
   accept(mime: string): this {
     this.#headers.accept = resolveMime(mime)
     return this
   }
 
-  /** Per-request timeout in ms — Japa `.timeout()`. Honoured by the sender. */
+  /** Per-request timeout in ms — helix `.timeout()`. Honoured by the sender. */
   timeout(ms: number): this {
     this.#timeoutMs = ms
     return this
   }
 
   /**
-   * Follow up to `count` redirects before resolving — Japa `.redirects()`.
-   * Defaults to 5 (Japa default); pass `0` to disable following.
+   * Follow up to `count` redirects before resolving — helix `.redirects()`.
+   * Defaults to 5 (helix default); pass `0` to disable following.
    */
   redirects(count: number): this {
     this.#maxRedirects = Math.max(0, count)
     return this
   }
 
-  // TLS knobs — Japa parity. The test server is plain HTTP over loopback, so
+  // TLS knobs — helix parity. The test server is plain HTTP over loopback, so
   // these are inert (there is no TLS handshake to configure); they exist so
-  // Japa-shaped code type-checks and runs unchanged. NAMED as a ream deviation.
-  /** No-op: the loopback test server has no TLS — Japa `.trustLocalhost()`. */
+  // helix-shaped code type-checks and runs unchanged. NAMED as a ream deviation.
+  /** No-op: the loopback test server has no TLS — helix `.trustLocalhost()`. */
   trustLocalhost(_trust = true): this {
     return this
   }
-  /** No-op: no TLS on the loopback test server — Japa `.ca()`. */
+  /** No-op: no TLS on the loopback test server — helix `.ca()`. */
   ca(_cert: string): this {
     return this
   }
-  /** No-op: no TLS on the loopback test server — Japa `.cert()`. */
+  /** No-op: no TLS on the loopback test server — helix `.cert()`. */
   cert(_chain: string): this {
     return this
   }
-  /** No-op: no TLS on the loopback test server — Japa `.privateKey()`. */
+  /** No-op: no TLS on the loopback test server — helix `.privateKey()`. */
   privateKey(_key: string): this {
     return this
   }
-  /** No-op: no TLS on the loopback test server — Japa `.pfx()`. */
+  /** No-op: no TLS on the loopback test server — helix `.pfx()`. */
   pfx(_encoded: string | Buffer): this {
     return this
   }
-  /** No-op: no TLS on the loopback test server — Japa `.disableTLSCerts()`. */
+  /** No-op: no TLS on the loopback test server — helix `.disableTLSCerts()`. */
   disableTLSCerts(): this {
     return this
   }
@@ -437,7 +437,7 @@ export class RequestBuilder {
     return this
   }
 
-  /** japa/api-client's spelling of {@link withCsrf}. */
+  /** helix's spelling of {@link withCsrf}. */
   withCsrfToken(token?: string): this {
     return this.withCsrf(token)
   }
@@ -482,10 +482,10 @@ export class RequestBuilder {
 
   /**
    * Thenable — `await client.get('/x')` sends the request and resolves to the
-   * {@link ApiResponse} (Japa/api-client parity). Assertion methods return `this`;
+   * {@link ApiResponse} (helix parity). Assertion methods return `this`;
    * awaiting one resolves via this `then` to the response after running the checks.
    */
-  // biome-ignore lint/suspicious/noThenProperty: the thenable IS the public API — `await client.get('/x')` is the documented Japa/api-client ergonomic; removing `.then` breaks every await-the-builder call site.
+  // biome-ignore lint/suspicious/noThenProperty: the thenable IS the public API — `await client.get('/x')` is the documented helix ergonomic; removing `.then` breaks every await-the-builder call site.
   then<R1 = ApiResponse, R2 = never>(
     onFulfilled?: ((value: ApiResponse) => R1 | PromiseLike<R1>) | null,
     onRejected?: ((reason: unknown) => R2 | PromiseLike<R2>) | null,
@@ -519,7 +519,7 @@ export class RequestBuilder {
   }
   expectJson(expected: unknown): this {
     // ream alias: partial JSON match with its own message (kept for back-compat;
-    // `assertBodyContains` is the Japa-named equivalent).
+    // `assertBodyContains` is the helix-named equivalent).
     return this.#assert((res) => {
       if (!partialMatch(res.json(), expected)) {
         throw new ExpectationError(
@@ -529,7 +529,7 @@ export class RequestBuilder {
     })
   }
 
-  // ── Japa assertions (lazy — delegate to the response) ─────────────────────
+  // ── helix assertions (lazy — delegate to the response) ─────────────────────
 
   assertStatus(code: number): this {
     return this.#assert((res) => res.assertStatus(code))
@@ -562,9 +562,9 @@ export class RequestBuilder {
     return this.#assert((res) => res.assertRedirectsTo(path))
   }
 
-  // ── Request debugging (Japa `request.dump*` — dumps the REQUEST) ──────────
+  // ── Request debugging (helix `request.dump*` — dumps the REQUEST) ──────────
 
-  /** Print the pending request (method/path/headers/body) — Japa `request.dump()`. */
+  /** Print the pending request (method/path/headers/body) — helix `request.dump()`. */
   dump(): this {
     process.stderr.write(
       `[helix:request.dump] ${this.#method} ${this.#path}\n` +
@@ -574,17 +574,17 @@ export class RequestBuilder {
     )
     return this
   }
-  /** Print only the pending request body — Japa `request.dumpBody()`. */
+  /** Print only the pending request body — helix `request.dumpBody()`. */
   dumpBody(): this {
     process.stderr.write(`[helix:request.dumpBody] ${capBody(this.#body.toString('utf8'), 2048)}\n`)
     return this
   }
-  /** Print only the pending request headers — Japa `request.dumpHeaders()`. */
+  /** Print only the pending request headers — helix `request.dumpHeaders()`. */
   dumpHeaders(): this {
     process.stderr.write(`[helix:request.dumpHeaders] ${JSON.stringify(this.#headers, null, 2)}\n`)
     return this
   }
-  /** Print only the pending request cookies — Japa `request.dumpCookies()`. */
+  /** Print only the pending request cookies — helix `request.dumpCookies()`. */
   dumpCookies(): this {
     process.stderr.write(`[helix:request.dumpCookies] ${JSON.stringify(this.#cookies, null, 2)}\n`)
     return this
@@ -640,7 +640,7 @@ export class RequestBuilder {
     // json()/form()/body(); encode them with a fresh boundary at send time.
     if (this.#multipart.length > 0) {
       const boundary = `----ReamRequestBuilder${crypto.randomUUID().replace(/-/g, '')}`
-      // Drain any stream/blob part to a Buffer before encoding (Japa parity).
+      // Drain any stream/blob part to a Buffer before encoding (helix parity).
       const resolved: ResolvedPart[] = await Promise.all(
         this.#multipart.map(async (p) =>
           p.kind === 'field'
@@ -679,7 +679,7 @@ export class RequestBuilder {
       timeoutMs: this.#timeoutMs,
     })
 
-    // Follow redirects up to the configured budget — Japa `.redirects()` (5 by default).
+    // Follow redirects up to the configured budget — helix `.redirects()` (5 by default).
     const chain: string[] = []
     let followed = 0
     while (
@@ -715,7 +715,7 @@ export class RequestBuilder {
   /**
    * Serialize `data` with a registered serializer and set it as the request body
    * — the send-side twin of {@link ApiResponse.addParser}. Register serializers
-   * via {@link RequestBuilder.addSerializer} (Japa `ApiRequest.addSerializer`).
+   * via {@link RequestBuilder.addSerializer} (helix `ApiRequest.addSerializer`).
    */
   serialize(name: string, data: unknown): this {
     const serializer = requestSerializers.get(name)
@@ -731,9 +731,9 @@ export class RequestBuilder {
   }
 
   /**
-   * Register a shared property (Japa `ApiRequest.macro`) or lazy getter
+   * Register a shared property (helix `ApiRequest.macro`) or lazy getter
    * (`ApiRequest.getter`). The callback is invoked with `this` bound to the
-   * builder AND the builder as its first arg, so both Japa's
+   * builder AND the builder as its first arg, so both helix's
    * `function () { return this.header('x') }` and `(req) => …` work.
    */
   static macro(name: string, value: unknown): void {
@@ -743,7 +743,7 @@ export class RequestBuilder {
     requestGetters.set(name, fn)
   }
 
-  /** Register a request body serializer — Japa `ApiRequest.addSerializer`. */
+  /** Register a request body serializer — helix `ApiRequest.addSerializer`. */
   static addSerializer(
     name: string,
     fn: (data: unknown) => { body: Buffer; contentType: string },
@@ -751,7 +751,7 @@ export class RequestBuilder {
     requestSerializers.set(name, fn)
   }
 
-  /** Register a response body parser — Japa `ApiRequest.addParser` (delegates to ApiResponse). */
+  /** Register a response body parser — helix `ApiRequest.addParser` (delegates to ApiResponse). */
   static addParser(
     contentType: string,
     fn: (body: string, headers: Record<string, string>) => unknown,

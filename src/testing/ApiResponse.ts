@@ -1,14 +1,14 @@
 /**
- * Rich HTTP test response — `@japa/api-client`'s `ApiResponse` parity.
+ * Rich HTTP test response — `helix`'s `ApiResponse` parity.
  *
- * Wraps the raw {@link TestResponse} and exposes the full Japa response surface:
+ * Wraps the raw {@link TestResponse} and exposes the full helix response surface:
  * accessor METHODS (`status()`, `headers()`, `body()`, `text()`, `header()`,
- * `cookies()`, `redirects()`, `error()`, …) matching Japa exactly, the complete
+ * `cookies()`, `redirects()`, `error()`, …) matching helix exactly, the complete
  * `assert*` family, response `dump*()` debuggers, and `macro()`/`getter()` for
  * consumer extension.
  *
- * `json()` is kept as an additive convenience (not in Japa, but harmless for
- * parity — Japa code never calls it) so `res.json()` call sites need no change.
+ * `json()` is kept as an additive convenience (not in helix, but harmless for
+ * parity — helix code never calls it) so `res.json()` call sites need no change.
  */
 
 import type { Dict } from '../types/helpers.js'
@@ -109,7 +109,7 @@ function parseCookies(setCookie: string | undefined): Record<string, ResponseCoo
   return out
 }
 
-/** A file parsed from a `multipart/form-data` response — Japa `files()` entry. */
+/** A file parsed from a `multipart/form-data` response — helix `files()` entry. */
 export interface ResponseFile {
   /** The form field name. */
   fieldName: string
@@ -123,7 +123,7 @@ export interface ResponseFile {
   content: Buffer
 }
 
-/** Consumer-registered response parsers (Japa `ApiRequest.addParser`), by content-type. */
+/** Consumer-registered response parsers (helix `ApiRequest.addParser`), by content-type. */
 const responseParsers = new Map<string, (body: string, headers: Dict) => unknown>()
 
 /**
@@ -188,8 +188,8 @@ function splitBuffer(buf: Buffer, delim: Buffer): Buffer[] {
 }
 
 /**
- * Validator for `assertAgainstApiSpec()` — mirrors Japa's OpenAPI plugin, which
- * is a SEPARATE opt-in (`@japa/openapi-assertions`). Register one to enable spec
+ * Validator for `assertAgainstApiSpec()` — mirrors helix's OpenAPI plugin, which
+ * is a SEPARATE opt-in (`a separate OpenAPI-assertions plugin`). Register one to enable spec
  * assertions; without it, the assertion throws a clear "not configured" error
  * rather than silently passing.
  */
@@ -206,7 +206,7 @@ function jsonOf(raw: TestResponse): unknown {
   }
 }
 
-/** The Japa error object returned by `response.error()`. */
+/** The helix error object returned by `response.error()`. */
 export interface ResponseError {
   /** The error status code (>= 400). */
   status: number
@@ -216,14 +216,14 @@ export interface ResponseError {
 
 /** Extra context the builder threads into the response. */
 export interface ApiResponseMeta {
-  /** The (final) request method — Japa `response.method()`. */
+  /** The (final) request method — helix `response.method()`. */
   method?: string
-  /** URLs followed when redirects were configured — Japa `response.redirects()`. */
+  /** URLs followed when redirects were configured — helix `response.redirects()`. */
   redirects?: string[]
 }
 
 /**
- * Every Japa status-shortcut assertion, as `methodName → code`. Consumed to
+ * Every helix status-shortcut assertion, as `methodName → code`. Consumed to
  * generate the `assert*` methods on both {@link ApiResponse} and the builder,
  * so the two surfaces never drift.
  */
@@ -254,21 +254,21 @@ export const STATUS_ASSERTIONS = {
   assertUnprocessableEntity: 422,
   assertLocked: 423,
   assertTooManyRequests: 429,
-  /** ream extra (not in Japa's list, kept for convenience). */
+  /** ream extra (not in helix's list, kept for convenience). */
   assertInternalServerError: 500,
 } as const
 
-/** Consumer-registered macros/getters (Japa `ApiResponse.macro`/`.getter`). */
+/** Consumer-registered macros/getters (helix `ApiResponse.macro`/`.getter`). */
 const responseMacros = new Map<string, unknown>()
 const responseGetters = new Map<string, (this: ApiResponse, res: ApiResponse) => unknown>()
 
 /**
  * The rich response. Constructed by the request builder from a raw
- * {@link TestResponse}; exposes the Japa accessor + assertion surface.
+ * {@link TestResponse}; exposes the helix accessor + assertion surface.
  *
  * PARITY NOTE: the status code / headers / raw text are METHODS — `status()`,
  * `headers()`, `text()` — and `body()` returns the content-type-parsed body,
- * exactly like Japa. `json()` is kept as an additive convenience.
+ * exactly like helix. `json()` is kept as an additive convenience.
  */
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface (StatusAssertions) types the status-shortcut asserts attached to the prototype from STATUS_ASSERTIONS — the same generated-method pattern as EonSchema/Macroable (AdonisJS parity); every member is implemented, so the merge is safe.
 export class ApiResponse {
@@ -283,35 +283,35 @@ export class ApiResponse {
     applyResponseExtensions(this)
   }
 
-  // ── Japa accessors (method form) ─────────────────────────────────────────
+  // ── helix accessors (method form) ─────────────────────────────────────────
 
-  /** HTTP status code — Japa `status()`. */
+  /** HTTP status code — helix `status()`. */
   status(): number {
     return this.#raw.status
   }
 
-  /** Status class digit (2 for 2xx, 4 for 4xx, …) — Japa `statusType()`. */
+  /** Status class digit (2 for 2xx, 4 for 4xx, …) — helix `statusType()`. */
   statusType(): number {
     return Math.floor(this.#raw.status / 100)
   }
 
-  /** All response headers (lower-cased keys) — Japa `headers()`. */
+  /** All response headers (lower-cased keys) — helix `headers()`. */
   headers(): Dict {
     return this.#raw.headers
   }
 
-  /** A single response header value — Japa `header(name)`. */
+  /** A single response header value — helix `header(name)`. */
   header(name: string): string | undefined {
     return this.#raw.headers[name.toLowerCase()]
   }
 
-  /** Raw response text — Japa `text()`. */
+  /** Raw response text — helix `text()`. */
   text(): string {
     return this.#raw.body
   }
 
   /**
-   * The parsed response body — Japa `body()`. Parses by `Content-Type`:
+   * The parsed response body — helix `body()`. Parses by `Content-Type`:
    * `application/json` → object, `application/x-www-form-urlencoded` → object,
    * `multipart/form-data` → the non-file fields (files come from {@link files});
    * otherwise the raw text. A registered parser (`ApiResponse.addParser`) for the
@@ -336,45 +336,45 @@ export class ApiResponse {
     return text
   }
 
-  /** Convenience JSON parse (additive; not in Japa). */
+  /** Convenience JSON parse (additive; not in helix). */
   json<T = unknown>(): T {
     return JSON.parse(this.#raw.body) as T
   }
 
-  /** The request method that produced this response — Japa `method()`. */
+  /** The request method that produced this response — helix `method()`. */
   method(): string {
     return this.#method
   }
 
-  /** Response `Content-Type` without parameters — Japa `type()`. */
+  /** Response `Content-Type` without parameters — helix `type()`. */
   type(): string | undefined {
     const ct = this.#raw.headers['content-type']
     return ct ? (ct.split(';')[0]?.trim() ?? ct) : undefined
   }
 
-  /** Charset from `Content-Type`, if any — Japa `charset()`. */
+  /** Charset from `Content-Type`, if any — helix `charset()`. */
   charset(): string | undefined {
     const ct = this.#raw.headers['content-type'] ?? ''
     const m = ct.match(/charset=([^;]+)/i)
     return m ? m[1].trim() : undefined
   }
 
-  /** All response cookies, parsed from `Set-Cookie` — Japa `cookies()`. */
+  /** All response cookies, parsed from `Set-Cookie` — helix `cookies()`. */
   cookies(): Record<string, ResponseCookie> {
     return parseCookies(this.#raw.headers['set-cookie'])
   }
 
-  /** A single parsed response cookie — Japa `cookie(name)`. */
+  /** A single parsed response cookie — helix `cookie(name)`. */
   cookie(name: string): ResponseCookie | undefined {
     return this.cookies()[name]
   }
 
-  /** URLs followed for a redirected request — Japa `redirects()`. */
+  /** URLs followed for a redirected request — helix `redirects()`. */
   redirects(): string[] {
     return [...this.#redirects]
   }
 
-  /** Parsed `Link` header (`rel → url`) — Japa `links()`. */
+  /** Parsed `Link` header (`rel → url`) — helix `links()`. */
   links(): Record<string, string> {
     const link = this.#raw.headers.link
     if (!link) return {}
@@ -387,7 +387,7 @@ export class ApiResponse {
   }
 
   /**
-   * Files parsed from a `multipart/form-data` response — Japa `files()`. Each
+   * Files parsed from a `multipart/form-data` response — helix `files()`. Each
    * entry carries the field name, filename, content-type and the raw bytes.
    * Empty for non-multipart responses.
    */
@@ -398,23 +398,23 @@ export class ApiResponse {
     return parseMultipartResponse(this.#raw.body, ctRaw).files
   }
 
-  /** Whether the response carries a body — Japa `hasBody()`. */
+  /** Whether the response carries a body — helix `hasBody()`. */
   hasBody(): boolean {
     return this.#raw.body.length > 0
   }
 
-  /** Whether the status is an error (>= 400) — Japa `hasError()`. */
+  /** Whether the status is an error (>= 400) — helix `hasError()`. */
   hasError(): boolean {
     return this.#raw.status >= 400
   }
 
-  /** Whether the status is a server error (>= 500) — Japa `hasFatalError()`. */
+  /** Whether the status is a server error (>= 500) — helix `hasFatalError()`. */
   hasFatalError(): boolean {
     return this.#raw.status >= 500
   }
 
   /**
-   * The error object when the response is an error, else `undefined` — Japa
+   * The error object when the response is an error, else `undefined` — helix
    * `error()`. Exposes `.status` and `.text` (superagent-style).
    */
   error(): ResponseError | undefined {
@@ -422,9 +422,9 @@ export class ApiResponse {
     return { status: this.#raw.status, text: this.#raw.body }
   }
 
-  // ── Debugging (Japa response `dump*`) ────────────────────────────────────
+  // ── Debugging (helix response `dump*`) ────────────────────────────────────
 
-  /** Print status + headers + body to stderr — Japa `response.dump()`. */
+  /** Print status + headers + body to stderr — helix `response.dump()`. */
   dump(): this {
     process.stderr.write(
       `[helix:response.dump] ${this.#method} → ${this.#raw.status}\n` +
@@ -433,26 +433,26 @@ export class ApiResponse {
     )
     return this
   }
-  /** Print only the response body — Japa `response.dumpBody()`. */
+  /** Print only the response body — helix `response.dumpBody()`. */
   dumpBody(): this {
     process.stderr.write(`[helix:response.dumpBody] ${capBody(this.#raw.body, 2048)}\n`)
     return this
   }
-  /** Print only the response headers — Japa `response.dumpHeaders()`. */
+  /** Print only the response headers — helix `response.dumpHeaders()`. */
   dumpHeaders(): this {
     process.stderr.write(
       `[helix:response.dumpHeaders] ${JSON.stringify(this.#raw.headers, null, 2)}\n`,
     )
     return this
   }
-  /** Print only the response cookies — Japa `response.dumpCookies()`. */
+  /** Print only the response cookies — helix `response.dumpCookies()`. */
   dumpCookies(): this {
     process.stderr.write(
       `[helix:response.dumpCookies] ${JSON.stringify(this.cookies(), null, 2)}\n`,
     )
     return this
   }
-  /** Print the error object, if any — Japa `response.dumpError()`. */
+  /** Print the error object, if any — helix `response.dumpError()`. */
   dumpError(): this {
     process.stderr.write(`[helix:response.dumpError] ${JSON.stringify(this.error(), null, 2)}\n`)
     return this
@@ -522,7 +522,7 @@ export class ApiResponse {
   }
 
   /**
-   * The body used by `assertBody*`, parsed per `Content-Type` (Japa parity):
+   * The body used by `assertBody*`, parsed per `Content-Type` (helix parity):
    * urlencoded/multipart → the structured `body()`; JSON or an unknown/absent
    * content-type → a tolerant JSON parse (so bodyless test fakes keep working).
    */
@@ -574,7 +574,7 @@ export class ApiResponse {
   }
 
   /**
-   * Assert the request was redirected to `path` — Japa `assertRedirectsTo`.
+   * Assert the request was redirected to `path` — helix `assertRedirectsTo`.
    * Checks the followed redirect chain (`redirects()`); also accepts a direct
    * 3xx `Location` match when no redirects were followed.
    */
@@ -599,9 +599,9 @@ export class ApiResponse {
   }
 
   /**
-   * Assert the response conforms to the registered OpenAPI spec — Japa
-   * `assertAgainstApiSpec()`. Japa ships this via the SEPARATE opt-in
-   * `@japa/openapi-assertions` plugin; register a validator with
+   * Assert the response conforms to the registered OpenAPI spec — helix
+   * `assertAgainstApiSpec()`. helix ships this via the SEPARATE opt-in
+   * `a separate OpenAPI-assertions plugin` plugin; register a validator with
    * {@link ApiResponse.registerApiSpecValidator} to enable it. Without one, this
    * throws (never silently passes).
    */
@@ -609,7 +609,7 @@ export class ApiResponse {
     if (!apiSpecValidator) {
       throw new ExpectationError(
         'assertAgainstApiSpec() requires an OpenAPI validator. Register one via ' +
-          'ApiResponse.registerApiSpecValidator(fn) (the opt-in equivalent of @japa/openapi-assertions).',
+          'ApiResponse.registerApiSpecValidator(fn) (the opt-in equivalent of a separate OpenAPI-assertions plugin).',
       )
     }
     apiSpecValidator(this)
@@ -617,9 +617,9 @@ export class ApiResponse {
   }
 
   /**
-   * Register a shared property (Japa `ApiResponse.macro`) or lazy getter
+   * Register a shared property (helix `ApiResponse.macro`) or lazy getter
    * (`ApiResponse.getter`). The callback is invoked with `this` bound to the
-   * response AND the response as its first argument, so both Japa's
+   * response AND the response as its first argument, so both helix's
    * `function () { return this.header('x') }` and `(res) => res.header('x')` work.
    */
   static macro(name: string, value: unknown): void {
@@ -629,7 +629,7 @@ export class ApiResponse {
     responseGetters.set(name, fn)
   }
 
-  /** Register a response body parser for a content-type — Japa `ApiRequest.addParser`. */
+  /** Register a response body parser for a content-type — helix `ApiRequest.addParser`. */
   static addParser(contentType: string, fn: (body: string, headers: Dict) => unknown): void {
     responseParsers.set(contentType, fn)
   }

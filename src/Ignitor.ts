@@ -103,7 +103,7 @@ export interface TestSuiteConfig {
   name: string
   /**
    * The suite's files: a glob, several, or a callback returning their URLs
-   * (Japa `TestFiles`).
+   * (helix `TestFiles`).
    */
   files: string | string[] | (() => URL[] | Promise<URL[]>)
   /** Per-test timeout for this suite, in ms. */
@@ -111,7 +111,7 @@ export interface TestSuiteConfig {
   /** Extra attempts on failure for this suite. */
   retries?: number
   /**
-   * Configure the suite before it runs (Japa `TestSuite.configure`). Receives
+   * Configure the suite before it runs (helix `TestSuite.configure`). Receives
    * the same handle as the bootstrap's `configureSuite`, and runs after it.
    *
    * Costs an import of the rc file in every worker, since a function cannot
@@ -137,7 +137,7 @@ export interface TestSuiteHandle {
 /**
  * The `tests` block of the rc file — AdonisJS `adonisrc.ts` `tests`, field for
  * field. The runner that consumes it is helix; ream reads the file, exactly as
- * `@adonisjs/core` reads adonisrc and hands the suites to Japa.
+ * `@adonisjs/core` reads adonisrc and hands the suites to helix.
  */
 export interface TestsConfig {
   /** Named suites. `ream test` with no argument runs them all, in order. */
@@ -151,36 +151,34 @@ export interface TestsConfig {
    * `tests/bootstrap.ts`; that stays the default here, and this overrides it.
    */
   bootstrap?: string
-
-  /**
-   * @deprecated Removed in 0.2.1. ream no longer knows about its test runner:
-   * the bridge moved to `@c9up/helix-plugin-ream`, which declares both sides
-   * as peers. Drop this key and configure the runner in `tests/bootstrap.ts`
-   * with `runTestsFromRcFile` from `@c9up/helix-plugin-ream/runner`.
-   */
-  japaPlugins?: RemovedIn_0_2_1_MovedToHelixPluginReam
 }
 
 /**
- * Names the reason in the type error itself.
+ * Every option the `tests` block accepts.
  *
- * `japaPlugins?: never` would say "Type 'boolean' is not assignable to type
- * 'never'", which tells nobody where the option went — and the option going
- * away with no signpost is the whole complaint this answers.
+ * Kept beside the interface because it is the same list: TypeScript's
+ * excess-property check only fires on an object literal, so a key that reached
+ * `defineConfig` through a variable or a spread is invisible to it.
  */
-type RemovedIn_0_2_1_MovedToHelixPluginReam = never
+const TESTS_OPTIONS = ['bootstrap', 'forceExit', 'suites', 'timeout'] as const
 
 /** defineConfig helper — like AdonisJS defineConfig(). */
 export function defineConfig(config: ReamrcConfig): ReamrcConfig {
-  // The type above catches an object literal, but not a value that reached
-  // here through a variable, a spread, or plain JavaScript. A removed option
-  // silently doing nothing is how someone spends an afternoon on it.
-  if ('japaPlugins' in (config.tests ?? {})) {
-    throw new Error(
-      '[E_REAMRC_REMOVED_OPTION] `tests.japaPlugins` was removed in ream 0.2.1. ' +
-        'ream no longer knows about its test runner — the bridge moved to ' +
-        '`@c9up/helix-plugin-ream`. Drop the key and call `runTestsFromRcFile` ' +
-        'from `@c9up/helix-plugin-ream/runner` in `tests/bootstrap.ts`.',
+  // A key nobody reads is worse than a rejected one: an option that was
+  // renamed, removed between versions, or simply mistyped sits in the rc file
+  // doing nothing, and the run behaves as if it had never been written. Say so
+  // instead, and list what the block does accept — which is also the answer to
+  // "then where did my option go".
+  const unknown = Object.keys(config.tests ?? {}).filter(
+    (key) => !TESTS_OPTIONS.includes(key as (typeof TESTS_OPTIONS)[number]),
+  )
+  if (unknown.length > 0) {
+    throw new ReamError(
+      'E_REAMRC_UNKNOWN_OPTION',
+      `\`tests\` has no option named ${unknown.map((k) => `\`${k}\``).join(', ')}.`,
+      {
+        hint: `The \`tests\` block accepts: ${TESTS_OPTIONS.join(', ')}. An option removed between versions is gone from the rc file too — the runner is configured in the bootstrap module now.`,
+      },
     )
   }
   return config

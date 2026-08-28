@@ -1,5 +1,5 @@
 /**
- * `ApiResponse` — the rich `@japa/api-client` response parity: METHOD accessors
+ * `ApiResponse` — the rich `helix` response parity: METHOD accessors
  * (`status()`/`headers()`/`body()`/`text()`/…), the immediate `assert*` surface,
  * `dump*`, and `macro`/`getter`.
  */
@@ -19,7 +19,7 @@ const raw = (over: Partial<TestResponse> = {}): TestResponse => {
   }
 }
 
-describe('ream > ApiResponse accessors (Japa method form)', () => {
+describe('ream > ApiResponse accessors (helix method form)', () => {
   it('exposes status()/headers()/text()/body()/json()/method()', () => {
     const res = new ApiResponse(
       raw({
@@ -74,7 +74,7 @@ describe('ream > ApiResponse accessors (Japa method form)', () => {
     expect(res.links().next).toBe('/next')
     expect(res.hasError()).toBe(true)
     expect(res.hasFatalError()).toBe(true)
-    // Japa error() is an object with status + text, not a string.
+    // helix error() is an object with status + text, not a string.
     expect(res.error()).toEqual({ status: 503, text: 'boom' })
   })
 
@@ -117,7 +117,7 @@ describe('ream > ApiResponse assertions', () => {
     const direct = new ApiResponse(raw({ status: 302, headers: { location: '/login?next=/x' } }))
     expect(() => direct.assertRedirectsTo('/login')).not.toThrow()
     expect(() => direct.assertRedirectsTo('/nope')).toThrow(/Expected redirect to "\/nope"/)
-    // Followed chain ending in 200 (Japa: assertion still holds).
+    // Followed chain ending in 200 (helix: assertion still holds).
     const followed = new ApiResponse(raw({ status: 200 }), { redirects: ['/login'] })
     expect(() => followed.assertRedirectsTo('/login')).not.toThrow()
   })
@@ -182,7 +182,7 @@ describe('ream > ApiResponse audit #3 parity', () => {
 })
 
 describe('ream > ApiResponse.macro/getter', () => {
-  it('getter receives `this` bound to the response (Japa form)', () => {
+  it('getter receives `this` bound to the response (helix form)', () => {
     ApiResponse.getter('ct', function () {
       return this.header('content-type')
     })

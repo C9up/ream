@@ -37,7 +37,7 @@ export { ApiResponse, type TestResponse } from './RequestBuilder.js'
  * named routes without the full Router.
  *
  * A value may be a bare path string OR `{ path, method }` — when the method is
- * present, `visit(name)` uses it (Japa route-registry parity, e.g.
+ * present, `visit(name)` uses it (helix route-registry parity, e.g.
  * `visit('users.store').json(...).assertCreated()` issues a POST).
  */
 export type RouteEntry = string | { path: string; method?: HttpMethod }
@@ -98,7 +98,7 @@ export class TestClient {
     return this
   }
 
-  // Verb shortcuts return the RICH builder — the full japa/api-client surface
+  // Verb shortcuts return the RICH builder — the full helix surface
   // (assertOk/assertStatus/assertBody/… + auth/csrf) AND awaitable (`await
   // client.get('/x')` sends and resolves to the response). One unified builder,
   // no split between `get()` and `fluent()`.
@@ -129,14 +129,14 @@ export class TestClient {
   }
 
   /**
-   * HEAD request — japa/api-client's `.head()`. Returns the rich builder so you
+   * HEAD request — helix's `.head()`. Returns the rich builder so you
    * can assert status/headers (a HEAD response carries headers, no body).
    */
   head(path: string): RequestBuilder {
     return this.fluent('HEAD', path)
   }
 
-  /** OPTIONS request — japa/api-client's `.options()`. */
+  /** OPTIONS request — helix's `.options()`. */
   options(path: string): RequestBuilder {
     return this.fluent('OPTIONS', path)
   }
@@ -161,7 +161,7 @@ export class TestClient {
   }
 
   /**
-   * GET a named route — japa/api-client's `.visit()`. Resolves `name` against
+   * GET a named route — helix's `.visit()`. Resolves `name` against
    * the `routes` manifest (`router.namedManifest()`), fills `:param`
    * placeholders, and returns the rich chainable builder. Throws a clear error
    * when no manifest was configured or the name is unknown.
@@ -173,14 +173,14 @@ export class TestClient {
       )
     }
     const entry = this.#routes[name]
-    // Method comes from the registry when the entry carries one (Japa parity),
+    // Method comes from the registry when the entry carries one (helix parity),
     // otherwise GET.
     const method: HttpMethod = typeof entry === 'object' && entry.method ? entry.method : 'GET'
     return this.fluent(method, resolveNamedRoute(this.#routes, name, params))
   }
 
   /**
-   * Generic request — japa/api-client's `client.request(url, method)` (note the
+   * Generic request — helix's `client.request(url, method)` (note the
    * arg order: URL first, method second, defaulting to GET). Returns the same
    * rich, awaitable builder as the verb shortcuts.
    */
@@ -294,7 +294,7 @@ async function sendRequest(
     // and surfaced as flaky `bob accepts` / `non-member 403` failures
     // in kitchen-sink's workspace.test.ts. 30s matches the helix
     // `--timeout=60000` per-test budget without masking real hangs. A
-    // per-request `.timeout(ms)` (Japa) overrides the default.
+    // per-request `.timeout(ms)` (helix) overrides the default.
     socket.setTimeout(timeoutMs && timeoutMs > 0 ? timeoutMs : 30_000, () => {
       socket.destroy()
       reject(new Error('TestClient request timed out'))

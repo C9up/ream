@@ -1,5 +1,5 @@
 /**
- * `loginAs(guard, user)` — AdonisJS's test seam. Its Japa plugin calls
+ * `loginAs(guard, user)` — AdonisJS's test seam. Its helix plugin calls
  * `guard.authenticateAsClient(...)`, so the GUARD says what to send. Without
  * it, every authenticated test in a migrated suite has to forge its own header
  * — which proves the forgery works, not the app.

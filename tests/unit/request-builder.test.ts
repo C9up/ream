@@ -94,7 +94,7 @@ describe('helix > RequestBuilder', () => {
   it('file() from a Buffer defaults filename to the field name + octet-stream', async () => {
     const sender = vi.fn(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
-    // A string arg is a PATH now (Japa parity); pass a Buffer for inline content.
+    // A string arg is a PATH now (helix parity); pass a Buffer for inline content.
     await builder.file('doc', Buffer.from('hello')).send()
 
     const text = sender.mock.calls[0][2].body.toString('utf8')
@@ -231,7 +231,7 @@ describe('helix > RequestBuilder', () => {
         body: '{"id":7}',
       }),
     )
-    // Japa model: assertions register + return `this`; the single await sends
+    // helix model: assertions register + return `this`; the single await sends
     // once and runs them all in order.
     await new RequestBuilder(sender, 'POST', '/u')
       .json({ name: 'Lin' })
@@ -242,7 +242,7 @@ describe('helix > RequestBuilder', () => {
   })
 })
 
-describe('RequestBuilder > qs / auth shortcuts (japa parity)', () => {
+describe('RequestBuilder > qs / auth shortcuts (helix parity)', () => {
   it('qs() appends url-encoded params, repeating keys for arrays', async () => {
     const sender = vi.fn(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/search')
@@ -434,7 +434,7 @@ describe('helix > partialMatch', () => {
   })
 })
 
-describe('helix > RequestBuilder > japa/api-client additions', () => {
+describe('helix > RequestBuilder > helix additions', () => {
   it('type()/accept() expand shorthands into headers', async () => {
     const sender = vi.fn(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
@@ -518,7 +518,7 @@ describe('helix > RequestBuilder > japa/api-client additions', () => {
   })
 })
 
-describe('helix > RequestBuilder Japa parity (F7-F9)', () => {
+describe('helix > RequestBuilder helix parity (F7-F9)', () => {
   it('fields() adds several multipart parts', async () => {
     const sender = vi.fn(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/u').fields({ a: '1', b: '2' }).send()
@@ -529,7 +529,7 @@ describe('helix > RequestBuilder Japa parity (F7-F9)', () => {
     expect(text).toContain('name="b"')
   })
 
-  it('unsafeQs() appends params from an object (Japa signature)', async () => {
+  it('unsafeQs() appends params from an object (helix signature)', async () => {
     const sender = vi.fn(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/s').unsafeQs({ a: 1, b: 'two' }).send()
     expect(sender.mock.calls[0][1]).toBe('/s?a=1&b=two')
@@ -553,7 +553,7 @@ describe('helix > RequestBuilder Japa parity (F7-F9)', () => {
     expect(res.text()).toBe('arrived')
   })
 
-  it('follows up to 5 redirects by DEFAULT (Japa parity)', async () => {
+  it('follows up to 5 redirects by DEFAULT (helix parity)', async () => {
     let hops = 0
     const sender = vi.fn(async () => {
       hops += 1
