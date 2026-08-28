@@ -91,6 +91,10 @@
       "types": "./src/testing/TestClient.ts",
       "import": "./src/testing/TestClient.ts"
     },
+    "./testing/utils": {
+      "types": "./src/testing/testUtils.ts",
+      "import": "./src/testing/testUtils.ts"
+    },
     "./bootstrap": {
       "types": "./src/bootstrap/hyper-server.ts",
       "import": "./src/bootstrap/hyper-server.ts"
@@ -317,6 +321,10 @@
       "./testing": {
         "types": "./dist/testing/TestClient.d.ts",
         "import": "./dist/testing/TestClient.js"
+      },
+      "./testing/utils": {
+        "types": "./dist/testing/testUtils.d.ts",
+        "import": "./dist/testing/testUtils.js"
       },
       "./bootstrap": {
         "types": "./dist/bootstrap/hyper-server.d.ts",
