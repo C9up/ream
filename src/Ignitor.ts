@@ -1137,6 +1137,7 @@ export class ConsoleKernel {
 
     return {
       getMetaData: async () => {
+        await this.#loadFrameworkCommands(found)
         await this.#discoverAppCommands(kernel, found)
         await this.#loadPackageCommands(found)
         // Imported here, not at the top of the file: the console stack is only
@@ -1146,6 +1147,24 @@ export class ConsoleKernel {
         return [...found.values()].map(serializeCommand)
       },
       getCommand: async (metadata) => found.get(metadata.commandName) ?? null,
+    }
+  }
+
+  /**
+   * Register the framework's own commands (`@c9up/ream/commands`).
+   *
+   * AdonisJS lists its equivalent in the rc file, which its starter kit writes.
+   * Ream registers them here instead, and first: these were subcommands of the
+   * `ream` binary before they were classes, so an application that upgrades
+   * would otherwise lose them without ever having asked for them. Loading them
+   * first also means an application that ships a command of the same name wins
+   * — the later registration replaces this one.
+   */
+  async #loadFrameworkCommands(found: Map<string, CommandClass>): Promise<void> {
+    const loader = await import('./commands/index.js')
+    for (const metadata of await loader.getMetaData()) {
+      const command = await loader.getCommand(metadata)
+      if (command !== null) found.set(command.commandName, command)
     }
   }
 

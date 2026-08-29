@@ -19,6 +19,10 @@
       "types": "./src/http/Exception.ts",
       "import": "./src/http/Exception.ts"
     },
+    "./commands": {
+      "types": "./src/commands/index.ts",
+      "import": "./src/commands/index.ts"
+    },
     "./console": {
       "types": "./src/console/index.ts",
       "import": "./src/console/index.ts"
@@ -269,6 +273,10 @@
       "./exceptions": {
         "types": "./dist/http/Exception.d.ts",
         "import": "./dist/http/Exception.js"
+      },
+      "./commands": {
+        "types": "./dist/commands/index.d.ts",
+        "import": "./dist/commands/index.js"
       },
       "./console": {
         "types": "./dist/console/index.d.ts",
