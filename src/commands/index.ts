@@ -19,6 +19,23 @@ interface Entry {
 }
 
 const COMMANDS: readonly Entry[] = [
+  // The registry commands first: a data package registers its runner, and
+  // these drive whatever registered — they name no store.
+  {
+    commandName: 'migrate',
+    description: 'Run pending migrations for every registered migration source',
+    load: () => import('./Migrate.js'),
+  },
+  {
+    commandName: 'migrate:rollback',
+    description: 'Roll back the last batch for every registered migration source',
+    load: () => import('./MigrateRollback.js'),
+  },
+  {
+    commandName: 'migrate:status',
+    description: 'Show applied and pending migrations for every source',
+    load: () => import('./MigrateStatus.js'),
+  },
   {
     commandName: 'schedule:list',
     description: 'List every registered scheduled task, its next run and its stats',
@@ -31,10 +48,16 @@ const COMMANDS: readonly Entry[] = [
   },
 ]
 
+/** `migrate:status` → `migrate`; a name without a colon has no namespace. */
+function namespaceOf(commandName: string): string | null {
+  const colon = commandName.indexOf(':')
+  return colon === -1 ? null : commandName.slice(0, colon)
+}
+
 export async function getMetaData(): Promise<SerializedCommand[]> {
   return COMMANDS.map((entry) => ({
     commandName: entry.commandName,
-    namespace: entry.commandName.slice(0, entry.commandName.indexOf(':')),
+    namespace: namespaceOf(entry.commandName),
     description: entry.description,
     aliases: [],
     options: { startApp: true },
