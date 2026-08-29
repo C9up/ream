@@ -78,16 +78,17 @@ const INTENDED_URL_KEY = '__intended_url'
 
 export interface SessionConfig {
   /**
-   * Which store to use. AdonisJS names this key `store`; `driver` is ream's
-   * older spelling and both are accepted, so a migrated `config/session.ts`
-   * runs with its imports rewritten and nothing else.
+   * Which store to use — a key of {@link stores}, or a driver name on its own.
+   * Read from the environment in the generated config, so a deployment picks
+   * its backend without editing a file.
    */
-  driver?: string
-  /** AdonisJS spelling of {@link driver}. */
   store?: string
+  /** Ream's older spelling of {@link store}. Both are accepted; `store` wins. */
+  driver?: string
   /**
-   * Named stores, AdonisJS-style: `{ store: 'redis', stores: { redis: … } }`.
-   * The selected entry supplies the driver name and its options.
+   * The stores this application can use, by name:
+   * `{ store: 'redis', stores: { redis: … } }`. The selected entry supplies the
+   * driver name and its options.
    */
   stores?: Record<string, { driver: string } & Record<string, unknown>>
   /** `file` driver only — the directory session files are written to. */
