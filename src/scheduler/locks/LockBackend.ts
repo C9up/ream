@@ -3,12 +3,17 @@
  *
  * The scheduler consults a `LockBackend` immediately before firing a
  * registered task so that in multi-instance deployments only one
- * instance runs a given task on each tick. Redis, database
- * advisory-lock, and other backends live in user-land — this module
- * ships only the interface and a single-process `MemoryLockBackend`.
+ * instance runs a given task on each tick.
+ *
+ * Two backends ship with it: `MemoryLockBackend`, correct while the
+ * application runs in one process, and `RedisLockBackend`, which is
+ * what a second replica needs — see `locks` for the factories a
+ * config file names.
  *
  * @implements Story 28.3
  */
+
+import { ReamError } from '../../errors/ReamError.js'
 
 export interface LockBackend {
   /**
@@ -35,4 +40,22 @@ export interface LockBackend {
    * TTL.
    */
   release(name: string): Promise<void>
+}
+
+/**
+ * Reject a TTL that cannot bound anything. A zero or negative lease
+ * expires the instant it is taken, so every instance would acquire the
+ * same lock and run the same task — the exact outcome locking exists to
+ * prevent, arriving silently.
+ */
+export function assertValidTtl(ttlMs: number): void {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new ReamError(
+      'SCHEDULE_INVALID_LOCK_TTL',
+      `Lock TTL must be a finite positive number, got ${ttlMs}`,
+      {
+        hint: 'Use a millisecond value greater than zero (typical range 1_000 - 600_000).',
+      },
+    )
+  }
 }

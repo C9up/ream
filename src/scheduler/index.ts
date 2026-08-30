@@ -1,5 +1,13 @@
+export type { SchedulerConfig } from './config.js'
+export { defineConfig as defineSchedulerConfig } from './config.js'
 export type { LockBackend } from './locks/LockBackend.js'
+export { type LockBackendFactory, locks } from './locks/locks.js'
 export { MemoryLockBackend } from './locks/MemoryLockBackend.js'
+export {
+  type LockRedisClient,
+  type LockRedisResolver,
+  RedisLockBackend,
+} from './locks/RedisLockBackend.js'
 export type { ErrorReporter } from './observability/ErrorReporter.js'
 export type {
   ScheduleEvent,

@@ -1,11 +1,10 @@
 /**
  * Default single-process lock backend backed by a `Map`.
  *
- * Correct for apps that run in a single Node.js process. For
- * horizontally-scaled deployments, implement `LockBackend` against a
- * shared store (Redis `SET NX PX`, Postgres advisory locks, etc.) —
- * those drivers live in user-land per the project's "agnostic per
- * package" rule.
+ * Correct for apps that run in a single Node.js process, and only
+ * those: two processes each keep their own map, so both acquire the
+ * same name and both run the task. Reach for `RedisLockBackend` the
+ * moment a second replica exists.
  *
  * Expiry is evaluated **lazily** at `acquire` time — no background
  * timer, no `setInterval`. This preserves Story 28.1's
@@ -20,22 +19,9 @@
  * @implements Story 28.3
  */
 
-import { ReamError } from '../../errors/ReamError.js'
-import type { LockBackend } from './LockBackend.js'
+import { assertValidTtl, type LockBackend } from './LockBackend.js'
 
 const SWEEP_THRESHOLD = 256
-
-function assertValidTtl(ttlMs: number): void {
-  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
-    throw new ReamError(
-      'SCHEDULE_INVALID_LOCK_TTL',
-      `Lock TTL must be a finite positive number, got ${ttlMs}`,
-      {
-        hint: 'Use a millisecond value greater than zero (typical range 1_000 – 600_000).',
-      },
-    )
-  }
-}
 
 export class MemoryLockBackend implements LockBackend {
   #locks = new Map<string, number>()

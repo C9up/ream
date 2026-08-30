@@ -24,8 +24,9 @@ import { getServiceRegistry } from '../decorators/Service.js'
 import { ReamError } from '../errors/ReamError.js'
 import type { AppContext } from '../Provider.js'
 import { Provider } from '../Provider.js'
+import type { SchedulerConfig } from './config.js'
 import { getScheduleMetadata } from './Schedule.js'
-import { Scheduler } from './Scheduler.js'
+import { Scheduler, type SchedulerOptions } from './Scheduler.js'
 
 export interface ScheduleProviderOptions {
   /**
@@ -45,7 +46,8 @@ export class ScheduleProvider extends Provider {
 
   constructor(app: AppContext, options: ScheduleProviderOptions = {}) {
     super(app)
-    this.scheduler = options.scheduler ?? new Scheduler()
+    this.scheduler =
+      options.scheduler ?? new Scheduler(schedulerOptionsFrom(app.config.get('scheduler')))
   }
 
   /**
@@ -180,3 +182,22 @@ export class ScheduleProvider extends Provider {
 
 // Default export so reamrc's provider loader can `() => import('@c9up/ream/<feature>/provider')` (resolves to { default }), matching events/rpc. Named export above stays.
 export default ScheduleProvider
+
+/**
+ * Turn `config/scheduler.ts` into the options the `Scheduler` takes.
+ *
+ * The lock is built here rather than in the config file because that file is
+ * read before the application boots — a Redis connection named in it does not
+ * exist yet, so the helpers hand back a factory and this calls it.
+ */
+function schedulerOptionsFrom(config: SchedulerConfig | undefined): SchedulerOptions {
+  if (config === undefined) return {}
+  const options: SchedulerOptions = {}
+  if (config.lock !== undefined) {
+    options.lockBackend = typeof config.lock === 'function' ? config.lock() : config.lock
+  }
+  if (config.defaultLockTtlMs !== undefined) {
+    options.defaultLockTtlMs = config.defaultLockTtlMs
+  }
+  return options
+}

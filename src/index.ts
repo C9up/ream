@@ -347,12 +347,16 @@ export {
 export type {
   ErrorReporter,
   LockBackend,
+  LockBackendFactory,
+  LockRedisClient,
+  LockRedisResolver,
   RunTaskOutcome,
   ScheduleEvent,
   ScheduleEventSink,
   ScheduleInvocation,
   ScheduleMetadata,
   ScheduleProviderOptions,
+  SchedulerConfig,
   SchedulerOptions,
   ScheduleTaskCompletedEvent,
   ScheduleTaskFailedEvent,
@@ -362,8 +366,11 @@ export type {
   TaskStats,
 } from './scheduler/index.js'
 export {
+  defineSchedulerConfig,
   getScheduleMetadata,
+  locks,
   MemoryLockBackend,
+  RedisLockBackend,
   SCHEDULE_METADATA_KEY,
   Schedule,
   ScheduleProvider,

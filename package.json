@@ -155,6 +155,10 @@
       "types": "./src/scheduler/ScheduleProvider.ts",
       "import": "./src/scheduler/ScheduleProvider.ts"
     },
+    "./scheduler/config": {
+      "types": "./src/scheduler/config.ts",
+      "import": "./src/scheduler/config.ts"
+    },
     "./storage/provider": {
       "types": "./src/storage/StaticProvider.ts",
       "import": "./src/storage/StaticProvider.ts"
@@ -409,6 +413,10 @@
       "./scheduler/provider": {
         "types": "./dist/scheduler/ScheduleProvider.d.ts",
         "import": "./dist/scheduler/ScheduleProvider.js"
+      },
+      "./scheduler/config": {
+        "types": "./dist/scheduler/config.d.ts",
+        "import": "./dist/scheduler/config.js"
       },
       "./storage/provider": {
         "types": "./dist/storage/StaticProvider.d.ts",
