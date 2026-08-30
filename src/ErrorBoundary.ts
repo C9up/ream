@@ -10,6 +10,8 @@
  * - system.fatal — unrecoverable process-level errors
  */
 
+import { currentNodeEnv } from './env/nodeEnv.js'
+
 export type ErrorSeverity = 'info' | 'warning' | 'critical'
 
 export interface ErrorEvent {
@@ -54,7 +56,7 @@ export class ErrorBoundary {
     // warning. Production code-paths still get coverage via direct
     // `handleError`/`serviceError` calls; only the Node-level signal
     // bridging is suppressed.
-    if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
+    if (process.env.VITEST === 'true' || currentNodeEnv() === 'test') {
       this.#installed = true
       return
     }

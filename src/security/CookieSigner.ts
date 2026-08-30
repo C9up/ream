@@ -2,19 +2,22 @@
  * Cookie signing and encryption.
  * Uses Rust NAPI via crypto facade when available.
  *
- * NAMED DEVIATION — the wire format is NOT AdonisJS's.
+ * The cipher is `aes-256-gcm`, where authentication is part of the cipher
+ * rather than a second primitive bolted on: encrypt-then-MAC assembled by hand
+ * is a well-known source of subtle breaks.
  *
- * AdonisJS encrypts with `aes-256-cbc` and appends its own HMAC
- * (`base64url(payload).base64url(iv).hmac`). Ream uses `aes-256-gcm`, where
- * authentication is part of the cipher rather than a second primitive bolted on
- * — encrypt-then-MAC assembled by hand is a well-known source of subtle breaks,
- * and there is no reason to reproduce it.
+ * That is upstream's own current choice, not a divergence from it — v7 ships
+ * AES-256-GCM, ChaCha20-Poly1305 and AES-SIV as first-class drivers, and its
+ * documented example configures `aes256gcm` as the default. The CBC + HMAC
+ * construction lives on there under the name `legacy`, described in its own
+ * source as maintaining compatibility with the OLD v6 format.
  *
- * The consequence, stated plainly: a cookie encrypted by an AdonisJS app cannot
- * be decrypted here. Migrating an app invalidates the encrypted cookies already
- * in users' browsers — they are signed out once, at deploy. Everything the app
- * CALLS (`encrypt` / `decrypt` / `sign` / `unsign`, with purpose and expiry)
- * behaves the same.
+ * The consequence, stated plainly: a cookie encrypted by a v6-era application
+ * cannot be decrypted here — those users are signed out once, at deploy. The
+ * same is true of upstream v7 unless the legacy driver is configured. Should
+ * that migration path ever be wanted, the answer is the one taken there: an
+ * additional, explicitly named legacy reader — never a downgrade of the
+ * default.
  */
 
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto'
@@ -29,14 +32,28 @@ export class E_MISSING_APP_KEY extends Error {
   }
 }
 
-/** Raised when the APP_KEY is too short to be worth having. */
+/** Raised when the APP_KEY is too short, or is a value everyone already has. */
 export class E_INSECURE_APP_KEY extends Error {
   readonly code = 'E_INSECURE_APP_KEY' as const
-  constructor() {
-    super('APP_KEY is too short — it must be at least 16 characters.')
+  constructor(reason = 'it must be at least 16 characters') {
+    super(`APP_KEY is not usable — ${reason}.`)
     this.name = 'E_INSECURE_APP_KEY'
   }
 }
+
+/**
+ * Keys that appear in scaffolding, documentation and tutorials.
+ *
+ * A key anyone can read is not a secret: with it, cookies, sessions, CSRF
+ * tokens and signed URLs can all be forged. Refusing them costs a developer
+ * one `ream generate:key` and costs an attacker everything.
+ */
+const PUBLICLY_KNOWN_KEYS = new Set([
+  'change-me-to-a-unique-32+-byte-secret!!',
+  'change-me',
+  'your-app-key-here',
+  'secret',
+])
 
 /** The envelope carried inside an encrypted or signed value. */
 interface Envelope {
@@ -61,6 +78,11 @@ export class CookieSigner {
     // configuration error, not something to discover at decrypt time.
     if (typeof secret !== 'string' || secret.length === 0) throw new E_MISSING_APP_KEY()
     if (secret.length < 16) throw new E_INSECURE_APP_KEY()
+    if (PUBLICLY_KNOWN_KEYS.has(secret.trim().toLowerCase())) {
+      throw new E_INSECURE_APP_KEY(
+        'it is a placeholder from the scaffolding, which everyone can read. Run `ream generate:key`',
+      )
+    }
     this.#secret = secret
     // Derive a 32-byte key for AES-256-GCM via HKDF-like derivation
     this.#keyBuffer = Buffer.from(createHmac('sha256', secret).update('cookie-key').digest())

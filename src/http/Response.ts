@@ -60,8 +60,6 @@ function assertNoCRLF(name: string, value: string): void {
  */
 function contentDisposition(disposition: string, filename: string): string {
   const quoted = filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control
-  // characters is the point — they cannot travel in a header field.
   const ascii = quoted.replace(/[^\x20-\x7e]/g, '_')
   const base = `${disposition}; filename="${ascii}"`
   if (ascii === quoted) return base
@@ -665,7 +663,11 @@ export class Response extends Macroable {
    */
   redirect(): RedirectBuilder
   redirect(path: string, forwardQueryString?: boolean, statusCode?: number): void
-  redirect(path?: string, forwardQueryString = false, statusCode = 302): RedirectBuilder | void {
+  redirect(
+    path?: string,
+    forwardQueryString = false,
+    statusCode = 302,
+  ): RedirectBuilder | undefined {
     if (!this.#redirectBuilderFactory) {
       throw new Error(
         'redirect() requires an HttpContext. Response was created outside a request handler.',
@@ -1063,14 +1065,25 @@ export class Response extends Macroable {
   // ─── Cookies ──────────────────────────────────────────────
 
   /**
-   * Set a SIGNED response cookie (AdonisJS default). The value is HMAC-signed
-   * with the app's `APP_KEY` (via the injected signer) so tampering is detected
-   * on read; `request.cookie()` verifies + unwraps it. Falls back to a plain
-   * cookie when no APP_KEY / encryption service is configured.
+   * Set a SIGNED response cookie (the default). The value is HMAC-signed with
+   * the app's `APP_KEY`, so tampering is detected on read; `request.cookie()`
+   * verifies and unwraps it.
+   *
+   * Requires APP_KEY, and REFUSES rather than falling back to a plain cookie.
+   * A silent fallback is the worst of both: the caller asked for integrity,
+   * the value ships without it, and `request.cookie()` on the far side hands
+   * back whatever the client wrote as though it had been verified.
+   *
+   * The cookie's NAME is signed along with its value, so a signed cookie
+   * cannot be lifted onto another name and still verify.
    */
   cookie(name: string, value: string, options?: CookieOptions): this {
-    const signed = this.#cookieSigner ? this.#cookieSigner.sign(value) : value
-    return this.#writeCookie(name, signed, options)
+    if (!this.#cookieSigner) {
+      throw new Error(
+        'cookie() signs the value and needs APP_KEY — set it so the encryption service is registered, or use plainCookie() when the value does not need signing.',
+      )
+    }
+    return this.#writeCookie(name, this.#cookieSigner.sign(value, undefined, name), options)
   }
 
   /**

@@ -383,7 +383,14 @@ export class Request extends Macroable {
   cookie(name: string, defaultValue?: string): string | null
   cookie(name: string, defaultValue?: string): string | null {
     const raw = this.plainCookie<string>(name, undefined, { encoded: false })
-    const value = raw === null ? null : this.#cookieSigner ? this.#cookieSigner.unsign(raw) : raw
+    // No signer means nothing here was ever signed. Handing the raw value back
+    // would present whatever the client wrote as a verified one — the reader
+    // cannot tell the difference, which is exactly the confusion signing
+    // exists to remove. `plainCookie()` is the way to read an unsigned value.
+    if (!this.#cookieSigner) return defaultValue ?? null
+    // The name is part of the signature, so a value moved to another cookie
+    // fails here rather than being honoured under its new name.
+    const value = raw === null ? null : this.#cookieSigner.unsign<string>(raw, name)
     return value ?? defaultValue ?? null
   }
 
@@ -675,9 +682,18 @@ export class Request extends Macroable {
   }
 
   /**
-   * A JSON-safe view of the request (AdonisJS `serialize`), for logs and error
-   * reports. Carries no body: it may hold credentials, and a log line is the
-   * last place they should land.
+   * A JSON-safe view of the request, for logs and error reports.
+   *
+   * NAMED DEVIATION — upstream's `serialize()` is a full debugging dump: body,
+   * cookies and every header verbatim. This one is built for the place it
+   * actually gets used, which is a log line or an error report, and a log line
+   * is somewhere credentials must not land. So the body and the cookies stay
+   * out, and the headers that carry a credential come back as `[redacted]`
+   * rather than as their value — the header is still LISTED, because knowing
+   * that a request arrived with an `authorization` header is most of what a
+   * reader wants, and its contents are none of it.
+   *
+   * Reach for `headers()` when the real values are what you need.
    */
   serialize(): Record<string, unknown> {
     return {
@@ -686,7 +702,7 @@ export class Request extends Macroable {
       method: this.method(),
       protocol: this.protocol(),
       host: this.host(),
-      headers: this.headers(),
+      headers: redactSensitiveHeaders(this.headers()),
       qs: this.qs(),
       params: this.params(),
     }
@@ -999,6 +1015,33 @@ function isPlainObject(value: unknown): value is Dict<unknown> {
 }
 
 /** True for an IPv4 dotted-quad or a (bracketed) IPv6 literal — hosts with no subdomains. */
+/**
+ * Headers whose VALUE is a credential. Listing them is useful; printing them
+ * hands whoever reads the log a working key.
+ */
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+  'x-auth-token',
+  'x-access-token',
+  'x-csrf-token',
+  'x-xsrf-token',
+  'x-session-token',
+  'x-amz-security-token',
+])
+
+/** Replace each credential-bearing header's value with a marker, keeping the name. */
+function redactSensitiveHeaders(headers: Dict): Dict {
+  const out: Dict = {}
+  for (const [name, value] of Object.entries(headers)) {
+    out[name] = SENSITIVE_HEADERS.has(name.toLowerCase()) ? '[redacted]' : value
+  }
+  return out
+}
+
 function isIpLiteral(host: string): boolean {
   if (host.startsWith('[') || host.includes('::')) return true
   return /^(\d{1,3}\.){3}\d{1,3}$/.test(host)

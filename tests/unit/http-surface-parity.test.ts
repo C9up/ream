@@ -10,6 +10,7 @@ import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { Request } from '../../src/http/Request.js'
 import { Response } from '../../src/http/Response.js'
+import { CookieSigner } from '../../src/security/CookieSigner.js'
 
 function request(headers: Record<string, string> = {}, query = '', body = ''): Request {
   return new Request({ method: 'GET', path: '/', query, headers, body })
@@ -148,6 +149,9 @@ describe('Response > stream drains without being awaited', () => {
 describe('Response > cookie attributes', () => {
   function cookieHeader(name: string, value: string, options?: Parameters<Response['cookie']>[2]) {
     const res = new Response()
+    // `cookie()` signs, so it needs a key — the attributes below are what is
+    // under test, and they are written the same either way.
+    res.setCookieSigner(new CookieSigner('a'.repeat(32)))
     res.cookie(name, value, options)
     return res.getHeaders()['set-cookie']
   }

@@ -428,3 +428,43 @@ describe('ignitor > migration registry', () => {
     expect(second.names()).toEqual(['atlas'])
   })
 })
+
+describe('Ignitor > warm-up assembles without running', () => {
+  it('stops before ready, so nothing starts listening', async () => {
+    const ig = await new Ignitor().setEnvironment('console').warmUp()
+
+    // Routes and commands are declared; no server, no ready() hooks.
+    expect(ig.getApp().getMode()).toBe('warmup')
+    expect(ig.getApp().isReady).toBe(false)
+    await ig.stop()
+  })
+
+  it('lets a provider see it is only being inspected', async () => {
+    const seen: string[] = []
+    const ig = new Ignitor().setEnvironment('console')
+    ig.getApp().booting(() => {
+      seen.push(ig.getApp().getMode())
+    })
+
+    await ig.warmUp()
+
+    // A provider that opens a pool or starts a worker reads this and doesn't.
+    expect(seen).toEqual(['warmup'])
+    await ig.stop()
+  })
+
+  it('refuses to be started afterwards', async () => {
+    const ig = await new Ignitor().setEnvironment('console').warmUp()
+
+    await expect(ig.start()).rejects.toThrow(/warmup/)
+    await ig.stop()
+  })
+
+  it('a normal start is still in run mode', async () => {
+    const ig = await new Ignitor().setEnvironment('console').start()
+
+    expect(ig.getApp().getMode()).toBe('run')
+    expect(ig.getApp().isReady).toBe(true)
+    await ig.stop()
+  })
+})

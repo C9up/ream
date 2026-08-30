@@ -179,3 +179,42 @@ describe('Router.parsePattern (AdonisJS parity)', () => {
     expect(new Router().parsePattern('/health')).toEqual([])
   })
 })
+
+describe('Router > a host matches case-insensitively', () => {
+  function scoped() {
+    const router = new Router()
+    router.get('/a', () => {}).domain('api.example.com')
+    router.get('/b', () => {}).domain('*.example.com')
+    router.commit()
+    return router
+  }
+
+  it('matches an exact domain whatever case the client sent', () => {
+    // A hostname is case-insensitive (RFC 4343), and some proxies and older
+    // clients do send it uppercased. Comparing verbatim sends that request to
+    // a fallback, or to a 404.
+    const router = scoped()
+
+    expect(router.match('GET', '/a', 'api.example.com')).toBeDefined()
+    expect(router.match('GET', '/a', 'API.EXAMPLE.COM')).toBeDefined()
+    expect(router.match('GET', '/a', 'Api.Example.Com')).toBeDefined()
+  })
+
+  it('matches a wildcard domain the same way', () => {
+    const router = scoped()
+
+    expect(router.match('GET', '/b', 'blog.example.com')).toBeDefined()
+    expect(router.match('GET', '/b', 'BLOG.EXAMPLE.COM')).toBeDefined()
+  })
+
+  it('still refuses a host the pattern does not cover', () => {
+    const router = scoped()
+
+    expect(router.match('GET', '/a', 'api.evil.test')).toBeUndefined()
+    expect(router.match('GET', '/b', 'example.com')).toBeUndefined()
+  })
+
+  it('ignores the port', () => {
+    expect(scoped().match('GET', '/a', 'API.example.com:8080')).toBeDefined()
+  })
+})

@@ -328,28 +328,6 @@ export class Ignitor {
       this.#app.setAppRoot(root)
     }
 
-    // Encryption / cookie-signing service (AdonisJS `APP_KEY` idiom). Registered
-    // only when APP_KEY is set; HttpContext hands it to Response/Request so
-    // `cookie()` can sign, `encryptedCookie()` can encrypt and `request.cookie()`
-    // can verify. Without APP_KEY, cookies stay plain (unsigned).
-    const appKey = process.env.APP_KEY
-    if (appKey) {
-      if (appKey.length < 16) {
-        throw new Error(
-          'APP_KEY is too short — use at least a 16-character (ideally 32-byte) random key for cookie signing/encryption.',
-        )
-      }
-      const signer = new CookieSigner(appKey)
-      this.#app.container.singleton('encryption', () => signer)
-      this.#signer = signer
-      setEncryption(signer)
-      // Signed-URL helper (same APP_KEY): the router signs via makeSignedUrl,
-      // HttpContext hands it to the request so hasValidSignature() can verify.
-      const signedUrl = new SignedUrl({ secret: appKey })
-      this.#app.container.singleton('signedUrl', () => signedUrl)
-      this.#router.setSignedUrl(signedUrl)
-    }
-
     // Set service singletons so route/kernel files can import them
     setApp(this.#app)
     setRouter(this.#router)
@@ -454,7 +432,102 @@ export class Ignitor {
 
   // ─── Lifecycle ────────────────────────────────────────────
 
+  /**
+   * Register the encryption service, once the environment is loaded.
+   *
+   * NOT in the constructor: `APP_KEY` lives in `.env`, and `.env` is read at
+   * the top of `start()`. Reading it earlier saw only what the shell had
+   * already exported, so a scaffolded app — whose key IS in `.env` — got no
+   * signer at all, and every signed cookie and signed URL was refused.
+   *
+   * Upstream has the same ordering: the environment is loaded and validated
+   * before the services that read it are wired.
+   */
+  #registerEncryption(): void {
+    // Encryption / cookie-signing service (AdonisJS `APP_KEY` idiom). Registered
+    // only when APP_KEY is set; HttpContext hands it to Response/Request so
+    // `cookie()` can sign, `encryptedCookie()` can encrypt and `request.cookie()`
+    // can verify.
+    //
+    // Without APP_KEY those methods REFUSE rather than degrading to plain
+    // values: an app that asked for a signed cookie and silently got an
+    // unsigned one reads the client's own input back as though it had been
+    // verified. `plainCookie()` is how an unsigned value is written and read.
+    const appKey = process.env.APP_KEY
+    // Cleared first: a previous application in this process may have left its
+    // own signer in the locator, and inheriting it would sign this
+    // application's cookies with a key it never configured.
+    setEncryption(undefined)
+    if (appKey) {
+      if (appKey.length < 16) {
+        throw new Error(
+          'APP_KEY is too short — use at least a 16-character (ideally 32-byte) random key for cookie signing/encryption.',
+        )
+      }
+      const signer = new CookieSigner(appKey)
+      this.#app.container.singleton('encryption', () => signer)
+      this.#signer = signer
+      setEncryption(signer)
+      // Signed-URL helper (same APP_KEY): the router signs via makeSignedUrl,
+      // HttpContext hands it to the request so hasValidSignature() can verify.
+      const signedUrl = new SignedUrl({ secret: appKey })
+      this.#app.container.singleton('signedUrl', () => signedUrl)
+      this.#router.setSignedUrl(signedUrl)
+    }
+  }
+
+  /**
+   * Assemble the application WITHOUT running it — the shape a codegen pass, a
+   * route listing or a config dump needs.
+   *
+   * Stops after the providers have started and the preload files have been
+   * imported: routes and commands are declared, but no HTTP server listens and
+   * no `ready()` hook fires. A provider that opens a connection pool or starts
+   * a worker there is asked not to, through `app.getMode()`.
+   *
+   * Mirrors upstream's warm-up: an app created in `warmup` mode stops at the
+   * warmed state, and `start()` refuses to take it further.
+   */
+  async warmUp(): Promise<Ignitor> {
+    this.#app.setMode('warmup')
+    if (this.#phase !== 'created') {
+      throw new ReamError(
+        'IGNITOR_ALREADY_STARTED',
+        `warmUp() called while in phase '${this.#phase}' — an Ignitor boots once`,
+        { hint: 'Create a new Ignitor instance instead of re-warming this one.' },
+      )
+    }
+    this.#loadEnvironmentFiles()
+    this.#registerEncryption()
+    try {
+      await this.#phaseRegister()
+      await this.#phaseBoot()
+      await this.#phaseStart()
+    } catch (err) {
+      // Same rollback as start(): a partial warm-up may have opened watchers
+      // or tickers, and the original error is the one worth surfacing.
+      try {
+        await this.stop()
+      } catch {
+        /* surface the boot error, not the rollback error */
+      }
+      throw err
+    }
+    return this
+  }
+
   async start(): Promise<Ignitor> {
+    // Checked before the phase guard: "assembled for inspection" is a more
+    // useful thing to be told than "already started", and it is the reason.
+    if (this.#app.getMode() !== 'run') {
+      throw new ReamError(
+        'IGNITOR_WARMUP_ONLY',
+        `Cannot start an application assembled in '${this.#app.getMode()}' mode.`,
+        {
+          hint: 'warmUp() is for inspecting an application; build a fresh Ignitor to run one.',
+        },
+      )
+    }
     // Double-start guard: a second start() would re-run phaseRegister and
     // instantiate + register every reamrc provider a second time.
     if (this.#phase !== 'created') {
@@ -465,6 +538,7 @@ export class Ignitor {
       )
     }
     this.#loadEnvironmentFiles()
+    this.#registerEncryption()
     try {
       await this.#phaseRegister()
       await this.#phaseBoot()
@@ -576,6 +650,15 @@ export class Ignitor {
   }
 
   async #phaseStart(): Promise<void> {
+    // Providers start BEFORE the preload files, matching upstream's warm-up
+    // order (`providers.start()` → `starting` hooks → preloads). A preload is
+    // where an app writes its routes and kernel, and those reach for services
+    // a provider wires in `start()`; importing them first hands them a
+    // half-built container.
+    for (const provider of this.#providers) {
+      await callProviderPhase(provider, 'start')
+    }
+
     // Import preload files (routes.ts, kernel.ts, etc.)
     if (this.#reamrc?.preloads) {
       for (const preloadEntry of this.#reamrc.preloads) {
@@ -602,11 +685,6 @@ export class Ignitor {
     }
     if (this.#inlineRoutes) {
       this.#inlineRoutes(this.#router)
-    }
-
-    // Call start() on providers
-    for (const provider of this.#providers) {
-      await callProviderPhase(provider, 'start')
     }
 
     this.#phase = 'started'
@@ -765,6 +843,10 @@ export class Ignitor {
       })
     }
 
+    // Ready LAST: the HTTP server is listening and every provider's ready()
+    // hook has run. A health check that greens before this points a load
+    // balancer at a process that cannot answer.
+    this.#app.markReady()
     this.#phase = 'ready'
   }
 

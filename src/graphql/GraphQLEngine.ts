@@ -22,6 +22,7 @@
  */
 
 import * as fs from 'node:fs'
+import { currentNodeEnv } from '../env/nodeEnv.js'
 import { loadNapi } from '../helpers/napi-loader.js'
 import type { HttpContext } from '../http/HttpContext.js'
 
@@ -231,7 +232,7 @@ export class GraphQLEngine {
     }
     this.#schemaSource = fs.readFileSync(config.schemaPath, 'utf8')
     this.path = config.path ?? '/graphql'
-    this.#playground = config.playground ?? process.env.NODE_ENV !== 'production'
+    this.#playground = config.playground ?? currentNodeEnv() !== 'production'
     this.#maxQueryBytes = config.maxQueryBytes ?? 100_000
     this.#maxDepth = config.maxDepth ?? 12
     this.#maxComplexity = config.maxComplexity ?? 1000
@@ -288,7 +289,7 @@ export class GraphQLEngine {
       ctx.response.status(200).json(result)
     } catch (err) {
       const message =
-        process.env.NODE_ENV !== 'production' && err instanceof Error
+        currentNodeEnv() !== 'production' && err instanceof Error
           ? err.message
           : 'Internal server error'
       ctx.response.status(500).json({ errors: [{ message }] })

@@ -174,7 +174,7 @@ const requestSerializers = new Map<
   (data: unknown) => { body: Buffer; contentType: string }
 >()
 
-// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface (StatusAssertions) types the status-shortcut asserts attached from STATUS_ASSERTIONS at load — the same generated-method pattern as EonSchema/Macroable (AdonisJS parity); every member is implemented, so the merge is safe.
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the StatusAssertions interface below types the status shortcuts attached from STATUS_ASSERTIONS at load — every member is implemented, so the merge is safe.
 export class RequestBuilder {
   #sender: HttpSender
   #method: HttpMethod
@@ -761,7 +761,6 @@ export class RequestBuilder {
 }
 
 /** The status-shortcut assertions (lazy) are typed onto the builder. */
-// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface (StatusAssertions) types the status-shortcut asserts attached from STATUS_ASSERTIONS at load — the same generated-method pattern as EonSchema/Macroable (AdonisJS parity); every member is implemented, so the merge is safe.
 export interface RequestBuilder extends StatusAssertions<RequestBuilder> {}
 
 // Attach the lazy status-shortcut assertions from the shared map so the builder

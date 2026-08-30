@@ -6,6 +6,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { currentNodeEnv } from '../env/nodeEnv.js'
 import { durationToSeconds } from '../helpers/duration.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { CookieDriver } from './drivers/CookieDriver.js'
@@ -104,7 +105,9 @@ export default class SessionMiddleware {
     const cookieName = this.#config.cookieName
     const maxAge = this.#config.maxAge
     const rolling = this.#config.rolling
-    const isProduction = process.env.NODE_ENV === 'production'
+    // Normalised: `NODE_ENV=prod` reaching here as "not production" ships
+    // the session cookie without Secure, over plain HTTP.
+    const isProduction = currentNodeEnv() === 'production'
 
     // Read the session cookie — pre-parsed by the Rust HyperServer.
     //

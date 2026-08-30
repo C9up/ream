@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { Request } from '../../src/http/Request.js'
+import { CookieSigner } from '../../src/security/CookieSigner.js'
+
+/**
+ * A response that can sign — `cookie()` refuses without a key, and what these
+ * tests are about is the attributes it writes.
+ */
+async function signingResponse(Response: typeof import('../../src/http/Response.js').Response) {
+  const res = new Response()
+  res.setCookieSigner(new CookieSigner('a'.repeat(32)))
+  return res
+}
 
 describe('security regressions > request/cookie parsing', () => {
   it('Request.qs does not throw on malformed percent-encoding', () => {
@@ -18,7 +29,11 @@ describe('security regressions > request/cookie parsing', () => {
     expect(req.qs().ok).toBe('1')
   })
 
-  it('Request.cookie reads from the pre-parsed cookies map', () => {
+  /** Read a cookie as it arrived, without signature verification. */
+  const raw = (req: Request, name: string) =>
+    req.plainCookie<string>(name, undefined, { encoded: false })
+
+  it('Request reads from the pre-parsed cookies map', () => {
     const req = new Request({
       method: 'GET',
       path: '/',
@@ -27,12 +42,12 @@ describe('security regressions > request/cookie parsing', () => {
       body: '',
       cookies: { session: 'abc', token: 'xyz' },
     })
-    expect(req.cookie('session')).toBe('abc')
-    expect(req.cookie('missing')).toBeNull()
+    expect(raw(req, 'session')).toBe('abc')
+    expect(raw(req, 'missing')).toBeNull()
     expect(req.cookies()).toEqual({ session: 'abc', token: 'xyz' })
   })
 
-  it('Request.cookie falls back to header parsing for legacy fixtures', () => {
+  it('Request falls back to header parsing for legacy fixtures', () => {
     const req = new Request({
       method: 'GET',
       path: '/',
@@ -40,8 +55,8 @@ describe('security regressions > request/cookie parsing', () => {
       headers: { cookie: 'a=1; b=2' },
       body: '',
     })
-    expect(req.cookie('a')).toBe('1')
-    expect(req.cookie('b')).toBe('2')
+    expect(raw(req, 'a')).toBe('1')
+    expect(raw(req, 'b')).toBe('2')
   })
 
   it('Request.cookies() fallback preserves cookies with empty values (RFC 6265)', () => {
@@ -55,8 +70,8 @@ describe('security regressions > request/cookie parsing', () => {
       body: '',
     })
     expect(req.cookies()).toEqual({ session: '', flag: 'on', trace: '' })
-    expect(req.cookie('session')).toBe('')
-    expect(req.cookie('trace')).toBe('')
+    expect(raw(req, 'session')).toBe('')
+    expect(raw(req, 'trace')).toBe('')
   })
 })
 
@@ -107,7 +122,7 @@ describe('security regressions > Response.append Set-Cookie stays multi-line', (
   it('append Set-Cookie interleaves with cookie() into the same channel', async () => {
     const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
-    res.cookie('sid', 'abc', { path: '/' })
+    res.plainCookie('sid', 'abc', { path: '/', encode: false })
     res.append('set-cookie', 'flag=on; Path=/')
     const lines = (res.getHeaders()['set-cookie'] ?? '').split('\n')
     expect(lines).toHaveLength(2)
@@ -127,7 +142,7 @@ describe('security regressions > Response.append Set-Cookie stays multi-line', (
 describe('security regressions > cookie SameSite=None requires Secure', () => {
   it('Response.cookie throws when SameSite=None is paired with secure=false', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none', secure: false })).toThrow(
       /SameSite=None requires Secure/,
     )
@@ -135,7 +150,7 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
 
   it('Response.cookie throws when SameSite=None is paired with secure omitted', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none' })).toThrow(
       /SameSite=None requires Secure/,
     )
@@ -143,13 +158,13 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
 
   it('Response.cookie accepts SameSite=None when secure=true', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none', secure: true })).not.toThrow()
   })
 
   it('Response.cookie still accepts SameSite=lax/strict without Secure', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     expect(() => res.cookie('a', 'b', { sameSite: 'lax' })).not.toThrow()
     expect(() => res.cookie('c', 'd', { sameSite: 'strict' })).not.toThrow()
   })
@@ -158,7 +173,7 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
 describe('security regressions > cookie maxAge=0 emits Max-Age=0 (RFC 6265 delete-now)', () => {
   it('Response.cookie maxAge=0 → Set-Cookie carries Max-Age=0', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     res.cookie('sid', '', { maxAge: 0, path: '/' })
     const setCookie = res.getHeaders()['set-cookie']
     expect(setCookie).toContain('Max-Age=0')
@@ -166,21 +181,21 @@ describe('security regressions > cookie maxAge=0 emits Max-Age=0 (RFC 6265 delet
 
   it('Response.cookie maxAge=-1 → Set-Cookie carries Max-Age=-1', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     res.cookie('sid', '', { maxAge: -1 })
     expect(res.getHeaders()['set-cookie']).toContain('Max-Age=-1')
   })
 
   it('Response.cookie maxAge omitted → no Max-Age attribute', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     res.cookie('sid', 'abc', { path: '/' })
     expect(res.getHeaders()['set-cookie']).not.toContain('Max-Age')
   })
 
   it('Response.cookie maxAge=3600 → Set-Cookie carries Max-Age=3600 (positive path)', async () => {
     const { Response } = await import('../../src/http/Response.js')
-    const res = new Response()
+    const res = await signingResponse(Response)
     res.cookie('sid', 'abc', { maxAge: 3600 })
     expect(res.getHeaders()['set-cookie']).toContain('Max-Age=3600')
   })

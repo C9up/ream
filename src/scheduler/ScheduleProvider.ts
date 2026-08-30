@@ -41,7 +41,6 @@ let activeProvider: ScheduleProvider | undefined
 
 export class ScheduleProvider extends Provider {
   readonly scheduler: Scheduler
-  #booted = false
   /** Task names already registered, so a second pass adds only what is new. */
   readonly #known = new Set<string>()
   #registered = false
@@ -189,7 +188,6 @@ export class ScheduleProvider extends Provider {
           }
         }
       }
-      this.#booted = true
     } catch (err) {
       // Roll back any partial registrations so a retry does not hit
       // DUPLICATE_TASK and the scheduler is never half-initialized.

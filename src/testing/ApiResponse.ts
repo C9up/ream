@@ -270,7 +270,7 @@ const responseGetters = new Map<string, (this: ApiResponse, res: ApiResponse) =>
  * `headers()`, `text()` — and `body()` returns the content-type-parsed body,
  * exactly like helix. `json()` is kept as an additive convenience.
  */
-// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface (StatusAssertions) types the status-shortcut asserts attached to the prototype from STATUS_ASSERTIONS — the same generated-method pattern as EonSchema/Macroable (AdonisJS parity); every member is implemented, so the merge is safe.
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the StatusAssertions interface below types the status shortcuts attached to the prototype from STATUS_ASSERTIONS — every member is implemented, so the merge is safe.
 export class ApiResponse {
   readonly #raw: TestResponse
   readonly #method: string
@@ -659,7 +659,6 @@ export type StatusAssertions<T> = {
 }
 
 // Merge the generated status-shortcut methods into the ApiResponse type.
-// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface (StatusAssertions) types the status-shortcut asserts attached to the prototype from STATUS_ASSERTIONS — the same generated-method pattern as EonSchema/Macroable (AdonisJS parity); every member is implemented, so the merge is safe.
 export interface ApiResponse extends StatusAssertions<ApiResponse> {}
 
 /** Apply registered macros/getters onto a freshly built response. */

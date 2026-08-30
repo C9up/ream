@@ -7,6 +7,8 @@
  * @implements FR71, FR72, FR73, FR77
  */
 
+import { currentNodeEnv } from '../env/nodeEnv.js'
+
 /**
  * Is this a Ream error, and one of these codes?
  *
@@ -164,6 +166,6 @@ export class ReamError extends Error {
    * Auto-format based on NODE_ENV.
    */
   toFormattedString(): string {
-    return process.env.NODE_ENV === 'production' ? this.toProdString() : this.toDevString()
+    return currentNodeEnv() === 'production' ? this.toProdString() : this.toDevString()
   }
 }

@@ -298,7 +298,11 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
   })
 
   it('a signed cookie round-trips: response.cookie() → request.cookie()', () => {
-    const value = signer.sign('hello')
+    const res = new Response()
+    res.setCookieSigner(signer)
+    res.cookie('token', 'hello')
+    const value = (res.getHeaders()['set-cookie'] ?? '').split(';')[0].slice('token='.length)
+
     const req = new Request(rawWithCookie('token', value), {})
     req.setCookieSigner(signer)
     expect(req.cookie('token')).toBe('hello')
@@ -306,9 +310,26 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
   })
 
   it('request.cookie() returns null for a tampered signed cookie', () => {
-    const req = new Request(rawWithCookie('token', `${signer.sign('hello')}X`), {})
+    const req = new Request(
+      rawWithCookie('token', `${signer.sign('hello', undefined, 'token')}X`),
+      {},
+    )
     req.setCookieSigner(signer)
     expect(req.cookie('token')).toBeNull()
+  })
+
+  it('a signed cookie moved to another name does not verify', () => {
+    // The cookie's name is signed with its value, so lifting a value from a
+    // harmless cookie into one the app trusts fails here instead of being
+    // honoured under its new name.
+    const res = new Response()
+    res.setCookieSigner(signer)
+    res.cookie('theme', 'dark')
+    const value = (res.getHeaders()['set-cookie'] ?? '').split(';')[0].slice('theme='.length)
+
+    const req = new Request(rawWithCookie('role', value), {})
+    req.setCookieSigner(signer)
+    expect(req.cookie('role')).toBeNull()
   })
 
   it('encryptedCookie() encrypts on write and decrypts on read', () => {
@@ -327,10 +348,22 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     expect(() => new Response().encryptedCookie('x', 'y')).toThrow(/APP_KEY/)
   })
 
-  it('cookie() falls back to a plain cookie when no signer is configured', () => {
-    const r = new Response()
-    r.cookie('sid', 'abc')
-    expect(r.getHeaders()['set-cookie'] ?? '').toContain('sid=abc')
+  it('cookie() refuses to write without APP_KEY rather than sending it plain', () => {
+    // A silent fallback is the worst of both: the caller asked for integrity,
+    // the value ships without it, and the far side reads whatever the client
+    // wrote as though it had been verified.
+    expect(() => new Response().cookie('sid', 'abc')).toThrow(/APP_KEY/)
+  })
+
+  it('request.cookie() answers nothing rather than an unverified value', () => {
+    const req = new Request(rawWithCookie('sid', 'abc'), {})
+
+    // No signer means nothing here was ever signed; handing the raw value
+    // back would present the client's own input as verified.
+    expect(req.cookie('sid')).toBeNull()
+    expect(req.cookie('sid', 'fallback')).toBe('fallback')
+    // The unsigned value is still reachable, explicitly.
+    expect(req.plainCookie('sid', undefined, { encoded: false })).toBe('abc')
   })
 })
 

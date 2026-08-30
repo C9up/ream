@@ -1602,12 +1602,21 @@ function matchPath(pattern: string, actual: string): MatchedParams | null {
   return params
 }
 
-/** Match domain pattern against actual host. Supports wildcards like *.example.com */
+/**
+ * Match a domain pattern against the request's host. Supports wildcards like
+ * `*.example.com`.
+ *
+ * Both sides are lowercased: a hostname is case-insensitive (RFC 4343), so a
+ * client that sends `API.Example.COM` — which is legal, and what some proxies
+ * and older clients do — must reach the same route as `api.example.com`.
+ * Comparing them verbatim sends that request to a fallback, or to a 404.
+ */
 function matchDomain(pattern: string, host: string): boolean {
-  const actualHost = host.split(':')[0] // strip port
-  if (pattern === actualHost) return true
-  if (pattern.startsWith('*.')) {
-    const suffix = pattern.slice(1) // ".example.com"
+  const actualHost = host.split(':')[0].toLowerCase() // strip port
+  const wanted = pattern.toLowerCase()
+  if (wanted === actualHost) return true
+  if (wanted.startsWith('*.')) {
+    const suffix = wanted.slice(1) // ".example.com"
     return actualHost.endsWith(suffix) && actualHost.length > suffix.length
   }
   return false

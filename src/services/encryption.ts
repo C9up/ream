@@ -14,8 +14,18 @@ import { createServiceProxy } from './createServiceProxy.js'
 
 let instance: CookieSigner | undefined
 
-/** @internal Set the signer (called by Ignitor once APP_KEY is validated). */
-export function setEncryption(signer: CookieSigner): void {
+/**
+ * @internal Set the signer, or clear it with `undefined`.
+ *
+ * Called by the Ignitor for EVERY boot, key or no key. Leaving a previous
+ * application's signer in place when this one has none is the dangerous
+ * reading: `import encryption from '.../services/encryption'` would answer
+ * with a key this application never configured, and sign its cookies with it.
+ * Last boot owns the locator — the same rule as `setApp` / `setRouter` /
+ * `setServer` beside it. A process running two applications at once should
+ * resolve `'encryption'` from its own container, which is per-application.
+ */
+export function setEncryption(signer: CookieSigner | undefined): void {
   instance = signer
 }
 

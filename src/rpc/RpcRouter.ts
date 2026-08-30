@@ -18,6 +18,7 @@ import {
   parseRequest as parseRpcRequest,
   buildError as rpcError,
 } from '@c9up/comet'
+import { currentNodeEnv } from '../env/nodeEnv.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
 import { composeMiddleware, runValidator } from '../middleware/Pipeline.js'
@@ -316,7 +317,7 @@ export class RpcRouter {
         return rpcError(err.code, message, id, err.data)
       }
       // Otherwise don't leak internal error details to the caller.
-      const isDev = process.env.NODE_ENV !== 'production'
+      const isDev = currentNodeEnv() !== 'production'
       const message = isDev && err instanceof Error ? err.message : 'Internal error'
       return rpcError(-32603, message, id)
     }

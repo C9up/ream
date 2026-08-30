@@ -416,9 +416,7 @@ describe('ScheduleProvider > a task declared after boot', () => {
 
     await provider.start()
 
-    expect(scheduler.registrations.map((r) => r.name)).toEqual([
-      'Reports.nightly',
-    ])
+    expect(scheduler.registrations.map((r) => r.name)).toEqual(['Reports.nightly'])
   })
 
   it('does not register a task twice across the two passes', async () => {

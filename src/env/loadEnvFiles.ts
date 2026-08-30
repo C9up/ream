@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 import { interpolate } from './interpolate.js'
+import { normalizeNodeEnv } from './nodeEnv.js'
 
 /**
  * Load `.env` files into `process.env` — the shared primitive behind both the
@@ -17,7 +18,10 @@ import { interpolate } from './interpolate.js'
  *   developer's local overrides don't leak into tests).
  */
 export function loadEnvFiles(appRoot: URL, options: { skipEnvLocal?: boolean } = {}): void {
-  const nodeEnv = process.env.NODE_ENV
+  // Normalised, so `NODE_ENV=prod` loads `.env.production` — the file the
+  // deployment actually wrote — instead of looking for `.env.prod`.
+  const raw = normalizeNodeEnv(process.env.NODE_ENV)
+  const nodeEnv = raw === 'unknown' ? undefined : raw
   const files = [
     nodeEnv ? `.env.${nodeEnv}.local` : null,
     options.skipEnvLocal ? null : '.env.local',

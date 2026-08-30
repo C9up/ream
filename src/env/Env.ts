@@ -5,6 +5,7 @@ import {
   removeIdentifier,
 } from './interpolate.js'
 import { loadEnvFiles } from './loadEnvFiles.js'
+import { normalizeNodeEnv } from './nodeEnv.js'
 import { type SchemaNode, schema } from './schema.js'
 
 /**
@@ -87,7 +88,7 @@ export class Env<Values extends Record<string, unknown>> {
     appRoot: URL,
     schema: S,
   ): Promise<Env<EnvRecord<S>>> {
-    loadEnvFiles(appRoot, { skipEnvLocal: process.env.NODE_ENV === 'test' })
+    loadEnvFiles(appRoot, { skipEnvLocal: normalizeNodeEnv(process.env.NODE_ENV) === 'test' })
 
     return new Env(Env.rules(schema).validate(process.env))
   }

@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
 import { type DirectoriesNode, directories as defaultDirectories } from './directories.js'
+import { currentNodeEnv } from './env/nodeEnv.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
@@ -34,10 +35,11 @@ export type ApplicationMode = 'run' | 'warmup'
  * What the process is running as (AdonisJS `AppEnvironments`).
  *
  * Providers and preloads are filtered on it — a console-only provider must not
- * boot inside an HTTP request. `repl` is absent because ream has no REPL; it
- * belongs here the day one exists, not before.
+ * boot inside an HTTP request, and `ream repl` is not `ream serve`: a provider
+ * that opens a connection pool for the web has no business doing it because
+ * someone opened a shell.
  */
-export type AppEnvironment = 'web' | 'console' | 'test' | 'unknown'
+export type AppEnvironment = 'web' | 'console' | 'test' | 'repl' | 'unknown'
 
 /**
  * Where the application is in its lifecycle (AdonisJS `ApplicationStates`).
@@ -316,18 +318,24 @@ export class Application implements AppContext {
 
   /** Check if running in production. */
   get inProduction(): boolean {
-    return process.env.NODE_ENV === 'production'
+    return currentNodeEnv() === 'production'
   }
 
-  /** Check if running in development. */
+  /**
+   * Check if running in development.
+   *
+   * An EXACT match, not "anything that is not production or test". An absent
+   * `NODE_ENV` normalises to `unknown`, and a staging box says `staging` —
+   * neither is development, and reading them as such turns on hot reload, the
+   * GraphQL playground and full error pages on a machine nobody configured.
+   */
   get inDev(): boolean {
-    const env = process.env.NODE_ENV
-    return env !== 'production' && env !== 'test'
+    return currentNodeEnv() === 'development'
   }
 
   /** Check if running in test mode. */
   get inTest(): boolean {
-    return process.env.NODE_ENV === 'test'
+    return currentNodeEnv() === 'test'
   }
 
   /** Check if managed by PM2. */
@@ -410,9 +418,9 @@ export class Application implements AppContext {
     return this
   }
 
-  /** `process.env.NODE_ENV`, or `'unknown'` (AdonisJS `nodeEnvironment`). */
+  /** The normalised `NODE_ENV`, or `'unknown'` when it is unset. */
   get nodeEnvironment(): string {
-    return process.env.NODE_ENV ?? 'unknown'
+    return currentNodeEnv()
   }
 
   /** Where the application is in its lifecycle (AdonisJS `getState`). */
@@ -497,8 +505,17 @@ export class Application implements AppContext {
    * parent process. Silent by design: an app should not fail to start because
    * nothing was there to hear it.
    */
-  notify(message: string): void {
-    process.send?.({ type: 'ream:notify', message })
+  notify(message: unknown, callback?: (error: Error | null) => void): void {
+    // Passed through verbatim, as upstream does. Wrapping it in an envelope
+    // meant a supervisor waiting for the conventional `'ready'` string — the
+    // systemd / pm2 idiom — received an object it did not recognise, and
+    // waited out its start-up timeout instead.
+    //
+    // `unknown` rather than `string`: `process.send` takes any serialisable
+    // value, and a supervisor that wants the port and the host in one message
+    // should be able to send them.
+    if (callback) process.send?.(message, undefined, undefined, callback)
+    else process.send?.(message)
   }
 
   /**
@@ -595,10 +612,20 @@ export class Application implements AppContext {
     for (const hook of this.#bootedHooks) {
       await hook()
     }
+  }
 
-    // Ready only once the booted hooks have run: they are where an app wires
-    // the things a request will need, so reporting ready before them would
-    // green a health check on an application that cannot serve yet.
+  /**
+   * Mark the application ready — the LAST thing that happens, after the
+   * providers' `ready()` hooks and after the HTTP server is accepting
+   * connections.
+   *
+   * Not at the end of `boot()`: booting is when providers are wired, not when
+   * the application can serve. A health check that reads `ready` there greens
+   * a process with no listening socket, and a rolling deploy shifts traffic
+   * onto it. Upstream sets its own `ready` state at the same point, after the
+   * start callback and the ready hooks.
+   */
+  markReady(): void {
     this.#state = 'ready'
   }
 

@@ -7,6 +7,7 @@
  */
 
 import { format } from 'node:util'
+import { currentNodeEnv } from '../env/nodeEnv.js'
 import { Macroable } from '../utils/Macroable.js'
 import type { HttpContext } from './HttpContext.js'
 
@@ -272,7 +273,7 @@ type LogLevel = 'error' | 'warn' | 'info'
 export class ExceptionHandler extends Macroable {
   protected debug: boolean
   /** Render `statusPages` (browser HTML). Defaults to production only (AdonisJS). */
-  protected renderStatusPages: boolean = process.env.NODE_ENV === 'production'
+  protected renderStatusPages: boolean = currentNodeEnv() === 'production'
   /** Status → HTML renderer, keys may be single codes or `'500..599'` ranges. */
   protected statusPages: Record<string, StatusPageRenderer> = {}
   /** Master reporting switch (AdonisJS `reportErrors`). */
