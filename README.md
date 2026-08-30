@@ -105,7 +105,7 @@ universe through the container, never via a static import.
 | [@c9up/eon](https://github.com/C9up/eon) | Time-series data layer (TDengine-backed) |
 | [@c9up/rune](https://github.com/C9up/rune) | Validation engine |
 | [@c9up/warden](https://github.com/C9up/warden) | Authentication |
-| [@c9up/transit](https://github.com/C9up/transit) | Federated sign-in (OAuth1, OAuth2) |
+| [@c9up/transit](https://github.com/C9up/transit) | Federated sign-in (OpenID Connect, OAuth1, OAuth2) |
 | [@c9up/sigil](https://github.com/C9up/sigil) | Password hashing (argon2, bcrypt, scrypt) |
 | [@c9up/blackhole](https://github.com/C9up/blackhole) | Security filter — XSS, CSRF, rate-limiting (Rust-native) |
 | [@c9up/spectrum](https://github.com/C9up/spectrum) | Structured logging |
