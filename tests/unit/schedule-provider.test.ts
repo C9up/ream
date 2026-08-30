@@ -385,3 +385,63 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
   })
 })
+
+describe('ScheduleProvider > a task declared after boot', () => {
+  beforeEach(() => {
+    clearServiceRegistry()
+  })
+
+  it('is discovered at start, which is when app/modules is loaded', async () => {
+    const container = new Container()
+    const app = buildApp(container)
+    const scheduler = new MockScheduler()
+    const provider = new ScheduleProvider(app, {
+      scheduler: scheduler as unknown as Scheduler,
+    })
+
+    provider.register()
+    await provider.boot()
+    expect(scheduler.registrations).toHaveLength(0)
+
+    // What `#autoloadModules()` does during the start phase: importing a
+    // module file registers its @Service classes. Before this fix the
+    // scheduler had already read the registry and never looked again — the
+    // task simply never fired, with nothing said about it.
+    @Service()
+    class Reports {
+      @Schedule('* * * * *')
+      async nightly() {}
+    }
+    void Reports
+
+    await provider.start()
+
+    expect(scheduler.registrations.map((r) => r.name)).toEqual([
+      'Reports.nightly',
+    ])
+  })
+
+  it('does not register a task twice across the two passes', async () => {
+    const container = new Container()
+    const app = buildApp(container)
+    const scheduler = new MockScheduler()
+
+    @Service()
+    class Billing {
+      @Schedule('0 3 * * *')
+      async invoice() {}
+    }
+    void Billing
+
+    const provider = new ScheduleProvider(app, {
+      scheduler: scheduler as unknown as Scheduler,
+    })
+    provider.register()
+    await provider.boot()
+    await provider.start()
+
+    // Both phases walk the registry; a task already registered is skipped
+    // rather than fired twice per tick.
+    expect(scheduler.registrations).toHaveLength(1)
+  })
+})

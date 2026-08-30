@@ -42,6 +42,8 @@ let activeProvider: ScheduleProvider | undefined
 export class ScheduleProvider extends Provider {
   readonly scheduler: Scheduler
   #booted = false
+  /** Task names already registered, so a second pass adds only what is new. */
+  readonly #known = new Set<string>()
   #registered = false
 
   constructor(app: AppContext, options: ScheduleProviderOptions = {}) {
@@ -84,8 +86,44 @@ export class ScheduleProvider extends Provider {
     this.#registered = true
   }
 
+  /**
+   * Discovery runs at START, not at boot, and that is the whole point.
+   *
+   * `app/modules/**` is auto-loaded during the start phase — after every
+   * provider has booted. A `@Service()` carrying `@Schedule` there, which is
+   * where one naturally lives, was therefore registered into the service
+   * registry AFTER this had already read it. The task was never registered,
+   * and nothing said so: no error, no warning, the application started
+   * normally and the task simply never fired.
+   *
+   * Reading the registry once the modules are in place is what fixes it. A
+   * service declared anywhere earlier — a provider, a preload — is in the
+   * registry by then too, so nothing is lost by waiting.
+   */
   override async boot(): Promise<void> {
-    if (this.#booted) return
+    // Anything already in the registry — declared by a provider, or imported
+    // by one. The rest is caught at start().
+    this.#discover()
+  }
+
+  override async start(): Promise<void> {
+    this.#discover()
+    if (activeProvider !== undefined && activeProvider !== this) {
+      // A previous app's scheduler is still running — stop it before this one
+      // starts, otherwise every @Schedule task fires twice per tick.
+      activeProvider.scheduler.stop()
+    }
+    activeProvider = this
+    this.scheduler.start()
+  }
+
+  /**
+   * Walk the service registry and register every `@Schedule` it declares.
+   *
+   * Idempotent: a second call registers nothing twice, so an application that
+   * restarts its Ignitor does not end up firing everything in duplicate.
+   */
+  #discover(): void {
     const registry = getServiceRegistry()
     const registered: string[] = []
 
@@ -120,6 +158,8 @@ export class ScheduleProvider extends Provider {
           }
 
           const taskName = `${target.name}.${methodName}`
+          // Registered on an earlier pass: skip rather than fire it twice.
+          if (this.#known.has(taskName)) continue
           try {
             this.scheduler.register(taskName, cronExpr, async () => {
               // Resolve from the container on every fire so transient
@@ -135,6 +175,7 @@ export class ScheduleProvider extends Provider {
               await (method as (...args: unknown[]) => unknown).call(instance)
             })
             registered.push(taskName)
+            this.#known.add(taskName)
           } catch (cause) {
             const inner = cause as ReamError & { message?: string; hint?: string }
             throw new ReamError(
@@ -162,16 +203,6 @@ export class ScheduleProvider extends Provider {
       }
       throw err
     }
-  }
-
-  override async start(): Promise<void> {
-    if (activeProvider !== undefined && activeProvider !== this) {
-      // A previous app's scheduler is still running — stop it before this one starts,
-      // otherwise every @Schedule task fires twice per tick.
-      activeProvider.scheduler.stop()
-    }
-    activeProvider = this
-    this.scheduler.start()
   }
 
   override async shutdown(): Promise<void> {
