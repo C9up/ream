@@ -110,6 +110,8 @@ export class MultipartFile {
 
   /** Magic-byte fingerprint — set by {@link detectType}; absent for content `file-type` can't detect (text: txt/csv/svg/json). */
   #detected?: { ext: string; mime: string }
+  /** Whether the magic-byte pass has run, however it turned out. */
+  #detectionRan = false
 
   constructor(options: {
     fieldName: string
@@ -136,9 +138,22 @@ export class MultipartFile {
    * extension in force — same fallback AdonisJS uses.
    */
   async detectType(): Promise<void> {
-    const { fileTypeFromBuffer } = await import('file-type')
+    const { fileTypeFromBuffer, supportedExtensions } = await import('file-type')
+    detectableExtensions = supportedExtensions
     const result = await fileTypeFromBuffer(this.content)
     if (result) this.#detected = { ext: result.ext, mime: result.mime }
+    this.#detectionRan = true
+  }
+
+  /**
+   * Where {@link mime} and {@link extname} came from.
+   *
+   * `'detected'` means the bytes said so. `'claimed'` means they did not, and
+   * what is reported is the filename and the header the client sent — which
+   * the client chose.
+   */
+  get typeSource(): 'detected' | 'claimed' {
+    return this.#detected ? 'detected' : 'claimed'
   }
 
   /**
@@ -201,9 +216,33 @@ export class MultipartFile {
         this.errors.push(
           `Extension '${this.extname}' not allowed. Allowed: ${options.extnames.join(', ')}`,
         )
+      } else if (this.#claimsATypeItCannotBe(options.extnames)) {
+        // Every allowed format carries a signature, and none was found — so the
+        // bytes are definitively not one of them, whatever the name says. A
+        // shell script uploaded as `avatar.png` with `Content-Type: image/png`
+        // otherwise passes an image allowlist, because both halves of what was
+        // checked came from the client.
+        this.errors.push(
+          `Extension '${this.extname}' is claimed by the upload, not found in its content. ` +
+            `Every allowed format (${options.extnames.join(', ')}) has a signature, and this file carries none.`,
+        )
       }
     }
     return this.errors.length === 0
+  }
+
+  /**
+   * Whether refusing this upload is warranted on the strength of the allowlist
+   * alone.
+   *
+   * Only when the magic-byte pass actually ran and found nothing, AND every
+   * allowed extension is one it would have recognised. For a list that allows
+   * `csv` or `txt`, finding nothing is the normal case and says nothing.
+   */
+  #claimsATypeItCannotBe(extnames: string[]): boolean {
+    if (this.#detected || !this.#detectionRan) return false
+    if (!detectableExtensions) return false
+    return extnames.every((extension) => detectableExtensions?.has(extension))
   }
 
   get isValid(): boolean {
@@ -363,3 +402,11 @@ export function hydrateMultipartPayload(payload: {
   )
   return { fields, files }
 }
+
+/**
+ * The extensions `file-type` can recognise, captured on the first detection.
+ *
+ * Module-level because it is a property of the library, not of a file, and
+ * because `validate()` is synchronous while reading it is not.
+ */
+let detectableExtensions: ReadonlySet<string> | undefined
