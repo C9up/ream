@@ -282,7 +282,7 @@ export class Container {
       key = this.#tokenToKey(target)
       if (seenAliases.has(key)) {
         const cycle = [...seenAliases, key].join(' → ')
-        throw new ReamError('CIRCULAR_DEPENDENCY', `Circular alias detected: ${cycle}`, {
+        throw new ReamError('E_CIRCULAR_DEPENDENCY', `Circular alias detected: ${cycle}`, {
           hint: 'An alias chain must end at a real binding — remove one of the aliases.',
           context: { chain: cycle },
         })
@@ -302,7 +302,7 @@ export class Container {
 
     if (chain.set.has(key)) {
       const cycle = [...chain.stack, key].join(' → ')
-      throw new ReamError('CIRCULAR_DEPENDENCY', `Circular dependency detected: ${cycle}`, {
+      throw new ReamError('E_CIRCULAR_DEPENDENCY', `Circular dependency detected: ${cycle}`, {
         hint: 'Break the cycle by resolving one dependency lazily inside a method (`await container.make(Dep)`) instead of injecting it in the constructor.',
         context: { chain: cycle },
       })
@@ -565,7 +565,7 @@ export class Container {
     const allKeys = [...this.#bindings.keys(), ...this.#overrides.keys()]
     const suggestion = didYouMean(key, allKeys)
     throw new ReamError(
-      'CONTAINER_NOT_FOUND',
+      'E_CONTAINER_NOT_FOUND',
       `No binding found for '${key}'.${suggestion ? ` ${suggestion}` : ''}`,
       {
         hint: 'Register it with container.singleton() or decorate with @inject().',
@@ -666,7 +666,7 @@ export class Container {
       //     instead of `new target()` with undefined deps.
       if (target.length > 0) {
         throw new ReamError(
-          'CONTAINER_MISSING_METADATA',
+          'E_CONTAINER_MISSING_METADATA',
           `Cannot auto-construct ${target.name}: it declares ${target.length} constructor parameter(s) but no dependency metadata was found.`,
           {
             hint: 'Enable decorator metadata (swc/tsc emitDecoratorMetadata), annotate constructor params with @Inject(token), or declare static containerInjections.',
@@ -734,13 +734,13 @@ export class Container {
       // is the global registry and round-trips across modules.
       if (Symbol.keyFor(token) === undefined) {
         throw new ReamError(
-          'CONTAINER_INVALID_TOKEN',
+          'E_CONTAINER_INVALID_TOKEN',
           `Unique Symbol() tokens are not supported — use Symbol.for("${token.description ?? 'name'}") so different modules see the same symbol.`,
         )
       }
       const desc = token.description
       if (desc === undefined) {
-        throw new ReamError('CONTAINER_INVALID_TOKEN', 'Symbol tokens must have a description.')
+        throw new ReamError('E_CONTAINER_INVALID_TOKEN', 'Symbol tokens must have a description.')
       }
       this.#assertNotReserved(desc, 'symbol description')
       return `Symbol(${desc})`
@@ -750,9 +750,13 @@ export class Container {
 
   #assertNotReserved(name: string, kind: 'string' | 'symbol description'): void {
     if (RESERVED_TOKEN_NAMES.has(name)) {
-      throw new ReamError('CONTAINER_RESERVED_TOKEN', `Reserved container token name '${name}'.`, {
-        hint: `'${name}' would collide with an Object.prototype key. Pick a different ${kind}.`,
-      })
+      throw new ReamError(
+        'E_CONTAINER_RESERVED_TOKEN',
+        `Reserved container token name '${name}'.`,
+        {
+          hint: `'${name}' would collide with an Object.prototype key. Pick a different ${kind}.`,
+        },
+      )
     }
   }
 }

@@ -10,7 +10,7 @@ function req(path: string) {
 /** Mirrors warden's WardenError shape: a real Error carrying status + code. */
 class AuthorizationFailure extends Error {
   readonly status = 403
-  readonly code = 'WARDEN_AUTHORIZATION_FAILURE'
+  readonly code = 'E_AUTHORIZATION_FAILURE'
   constructor() {
     super('You are not authorized to perform this action')
     this.name = 'WardenError'
@@ -56,7 +56,7 @@ describe('bouncer > HTTP authorization integration (56.6)', () => {
 
     expect(res.status).toBe(403)
     const body = JSON.parse(res.body)
-    expect(body.error.code).toBe('WARDEN_AUTHORIZATION_FAILURE')
+    expect(body.error.code).toBe('E_AUTHORIZATION_FAILURE')
   })
 
   it('lets the handler proceed when authorize() resolves', async () => {

@@ -137,7 +137,7 @@ describe('Scheduler.runTaskNow', () => {
     expect(skippedEvents[0]).toMatchObject({ reason: 'already-running' })
   })
 
-  it('unknown task name notifies the errorReporter with SCHEDULE_TASK_UNKNOWN', async () => {
+  it('unknown task name notifies the errorReporter with E_SCHEDULE_TASK_UNKNOWN', async () => {
     const reporter = vi.fn<ErrorReporter>()
     const scheduler = new Scheduler({
       nativeModule: buildFakeNative(),
@@ -147,11 +147,11 @@ describe('Scheduler.runTaskNow', () => {
     expect(result.outcome).toBe('unknown')
     expect(reporter).toHaveBeenCalledTimes(1)
     const [err, ctx] = reporter.mock.calls[0] ?? []
-    expect((err as { code?: string })?.code).toBe('SCHEDULE_TASK_UNKNOWN')
+    expect((err as { code?: string })?.code).toBe('E_SCHEDULE_TASK_UNKNOWN')
     expect(ctx).toEqual({ taskName: 'nope' })
   })
 
-  it('runTaskNow returns failed with SCHEDULE_TASK_TIMEOUT when timeoutMs elapses', async () => {
+  it('runTaskNow returns failed with E_SCHEDULE_TASK_TIMEOUT when timeoutMs elapses', async () => {
     const scheduler = new Scheduler({ nativeModule: buildFakeNative() })
     scheduler.register('slow', '*/1 * * * *', async () => {
       await new Promise((r) => setTimeout(r, 1000))

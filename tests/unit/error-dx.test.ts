@@ -37,8 +37,8 @@ describe('error-dx > ReamError', () => {
   })
 
   it('auto-generates docsUrl from code', () => {
-    const err = new ReamError('CONTAINER_NOT_FOUND', 'Not found')
-    expect(err.docsUrl).toBe('https://docs.ream.dev/errors/CONTAINER_NOT_FOUND')
+    const err = new ReamError('E_CONTAINER_NOT_FOUND', 'Not found')
+    expect(err.docsUrl).toBe('https://docs.ream.dev/errors/E_CONTAINER_NOT_FOUND')
   })
 
   it('allows custom docsUrl', () => {
@@ -47,7 +47,7 @@ describe('error-dx > ReamError', () => {
   })
 
   it('toDevString shows full box format', () => {
-    const err = new ReamError('ATLAS_QUERY_ERROR', 'Invalid query', {
+    const err = new ReamError('E_ATLAS_QUERY_ERROR', 'Invalid query', {
       context: { table: 'orders', column: 'statsu' },
       hint: "Column 'statsu' does not exist. Did you mean 'status'?",
       sourceFile: 'app/modules/order/services/OrderService.ts',
@@ -57,7 +57,7 @@ describe('error-dx > ReamError', () => {
     const output = err.toDevString()
     expect(output).toContain('┌')
     expect(output).toContain('└')
-    expect(output).toContain('[ATLAS_QUERY_ERROR]')
+    expect(output).toContain('[E_ATLAS_QUERY_ERROR]')
     expect(output).toContain('Invalid query')
     expect(output).toContain('table: orders')
     expect(output).toContain('column: statsu')
@@ -67,13 +67,13 @@ describe('error-dx > ReamError', () => {
   })
 
   it('toProdString shows code + message only', () => {
-    const err = new ReamError('ATLAS_QUERY_ERROR', 'Invalid query', {
+    const err = new ReamError('E_ATLAS_QUERY_ERROR', 'Invalid query', {
       hint: 'secret hint',
       context: { secret: 'data' },
     })
 
     const output = err.toProdString()
-    expect(output).toBe('[ATLAS_QUERY_ERROR] Invalid query')
+    expect(output).toBe('[E_ATLAS_QUERY_ERROR] Invalid query')
     expect(output).not.toContain('hint')
     expect(output).not.toContain('secret')
   })
@@ -105,7 +105,7 @@ describe('error-dx > ReamError', () => {
   it('fromNapi wraps non-JSON error', () => {
     const napiErr = new Error('plain error')
     const err = ReamError.fromNapi(napiErr)
-    expect(err.code).toBe('UNKNOWN')
+    expect(err.code).toBe('E_UNKNOWN')
     expect(err.message).toBe('plain error')
   })
 })
@@ -115,50 +115,50 @@ describe('error-dx > ReamError', () => {
 describe('error-dx > Module error subclasses', () => {
   it('ContainerError prefixes code', () => {
     const err = new ContainerError('NOT_FOUND', 'Binding missing')
-    expect(err.code).toBe('CONTAINER_NOT_FOUND')
+    expect(err.code).toBe('E_CONTAINER_NOT_FOUND')
     expect(err.name).toBe('ContainerError')
     expect(err instanceof ReamError).toBe(true)
   })
 
   it('AtlasError prefixes code', () => {
     const err = new AtlasError('QUERY_ERROR', 'Bad query')
-    expect(err.code).toBe('ATLAS_QUERY_ERROR')
+    expect(err.code).toBe('E_ATLAS_QUERY_ERROR')
     expect(err.name).toBe('AtlasError')
   })
 
   it('RouterError prefixes code', () => {
     const err = new RouterError('NOT_FOUND', 'Route missing')
-    expect(err.code).toBe('ROUTER_NOT_FOUND')
+    expect(err.code).toBe('E_ROUTER_NOT_FOUND')
   })
 
   it('PipelineError prefixes code', () => {
     const err = new PipelineError('STAGE_FAILED', 'Guard rejected')
-    expect(err.code).toBe('PIPELINE_STAGE_FAILED')
+    expect(err.code).toBe('E_PIPELINE_STAGE_FAILED')
   })
 
   it('RuneError prefixes code', () => {
     const err = new RuneError('VALIDATION_FAILED', 'Invalid input')
-    expect(err.code).toBe('RUNE_VALIDATION_FAILED')
+    expect(err.code).toBe('E_RUNE_VALIDATION_FAILED')
   })
 
   it('WardenError prefixes code', () => {
     const err = new WardenError('STRATEGY_NOT_FOUND', 'No strategy')
-    expect(err.code).toBe('WARDEN_STRATEGY_NOT_FOUND')
+    expect(err.code).toBe('E_WARDEN_STRATEGY_NOT_FOUND')
   })
 
   it('EventsError prefixes code', () => {
     const err = new EventsError('TIMEOUT', 'Request timed out')
-    expect(err.code).toBe('EVENTS_TIMEOUT')
+    expect(err.code).toBe('E_EVENTS_TIMEOUT')
   })
 
   it('ForgeError prefixes code', () => {
     const err = new ForgeError('UNKNOWN_TYPE', 'Bad type')
-    expect(err.code).toBe('FORGE_UNKNOWN_TYPE')
+    expect(err.code).toBe('E_FORGE_UNKNOWN_TYPE')
   })
 
   it('all subclasses inherit docsUrl', () => {
     const err = new AtlasError('QUERY_ERROR', 'Bad query')
-    expect(err.docsUrl).toBe('https://docs.ream.dev/errors/ATLAS_QUERY_ERROR')
+    expect(err.docsUrl).toBe('https://docs.ream.dev/errors/E_ATLAS_QUERY_ERROR')
   })
 })
 
@@ -258,13 +258,13 @@ describe('error-dx > Pipeline stage errors', () => {
   })
 
   it('createPipelineError preserves ReamError fields', () => {
-    const original = new ReamError('WARDEN_UNAUTHORIZED', 'Not authenticated', {
+    const original = new ReamError('E_WARDEN_UNAUTHORIZED', 'Not authenticated', {
       sourceFile: 'Guard.ts',
       sourceLine: 10,
     })
     const err = createPipelineError(4, original)
 
-    expect(err.code).toBe('WARDEN_UNAUTHORIZED')
+    expect(err.code).toBe('E_WARDEN_UNAUTHORIZED')
     expect(err.sourceFile).toBe('Guard.ts')
     expect(err.sourceLine).toBe(10)
   })
@@ -303,7 +303,7 @@ describe('error-dx > validatePipelineConfig', () => {
       routes: [{ middleware: ['auth', 'nonexistent'] }],
     })
     expect(errors).toHaveLength(1)
-    expect(errors[0].code).toBe('PIPELINE_UNKNOWN_MIDDLEWARE')
+    expect(errors[0].code).toBe('E_PIPELINE_UNKNOWN_MIDDLEWARE')
     expect(errors[0].message).toContain('nonexistent')
     expect(errors[0].context.registered).toContain('auth')
   })

@@ -188,7 +188,7 @@ function composeMiddleware(middleware: MiddlewareFunction[]): MiddlewareFunction
 
     async function dispatch(i: number): Promise<void> {
       if (i <= index) {
-        throw new ReamError('PIPELINE_DOUBLE_NEXT', 'next() called multiple times', {
+        throw new ReamError('E_PIPELINE_DOUBLE_NEXT', 'next() called multiple times', {
           hint: 'A middleware called next() more than once. Each middleware should call next() at most once.',
         })
       }

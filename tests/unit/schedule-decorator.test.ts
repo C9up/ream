@@ -119,7 +119,7 @@ describe('@Schedule decorator', () => {
         static willFail() {}
       }
       expect(BadStatic).toBeDefined()
-    }).toThrow(expect.objectContaining({ code: 'SCHEDULE_INVALID_TARGET' }))
+    }).toThrow(expect.objectContaining({ code: 'E_SCHEDULE_INVALID_TARGET' }))
   })
 
   it('rejects @Schedule on getters', () => {
@@ -131,6 +131,6 @@ describe('@Schedule decorator', () => {
         }
       }
       expect(BadGetter).toBeDefined()
-    }).toThrow(expect.objectContaining({ code: 'SCHEDULE_INVALID_TARGET' }))
+    }).toThrow(expect.objectContaining({ code: 'E_SCHEDULE_INVALID_TARGET' }))
   })
 })

@@ -19,12 +19,12 @@ describe('ReamError > construction', () => {
   })
 
   it('creates error with full options', () => {
-    const err = new ReamError('ATLAS_ERROR', 'Column not found', {
+    const err = new ReamError('E_ATLAS_ERROR', 'Column not found', {
       context: { entity: 'Order', column: 'statut' },
       hint: 'Did you mean: status?',
       sourceFile: 'crates/ream-query/src/compiler.rs',
       sourceLine: 142,
-      docsUrl: 'https://docs.ream.dev/errors/ATLAS_ERROR',
+      docsUrl: 'https://docs.ream.dev/errors/E_ATLAS_ERROR',
     })
     expect(err.context.entity).toBe('Order')
     expect(err.hint).toBe('Did you mean: status?')
@@ -51,9 +51,9 @@ describe('ReamError > fromNapi', () => {
     expect(err.sourceFile).toBe('lib.rs')
   })
 
-  it('falls back to UNKNOWN for non-JSON errors', () => {
+  it('falls back to E_UNKNOWN for non-JSON errors', () => {
     const err = ReamError.fromNapi(new Error('plain error'))
-    expect(err.code).toBe('UNKNOWN')
+    expect(err.code).toBe('E_UNKNOWN')
     expect(err.message).toBe('plain error')
   })
 })

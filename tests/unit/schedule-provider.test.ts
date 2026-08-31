@@ -134,7 +134,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     expect(makeSpy).toHaveBeenCalledWith(Job)
   })
 
-  it('wraps INVALID_CRON failures from Scheduler.register into SCHEDULE_INVALID_CRON', async () => {
+  it('wraps INVALID_CRON failures from Scheduler.register into E_SCHEDULE_INVALID_CRON', async () => {
     @Service()
     class Broken {
       @Schedule('not a real cron')
@@ -153,7 +153,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
 
     await expect(provider.boot()).rejects.toMatchObject({
-      code: 'SCHEDULE_INVALID_CRON',
+      code: 'E_SCHEDULE_INVALID_CRON',
       context: expect.objectContaining({
         task: 'Broken.run',
         cronExpr: 'not a real cron',
@@ -291,13 +291,13 @@ describe('ScheduleProvider > discovery + registration', () => {
       scheduler: scheduler as unknown as Scheduler,
     })
 
-    await expect(provider.boot()).rejects.toMatchObject({ code: 'SCHEDULE_INVALID_CRON' })
+    await expect(provider.boot()).rejects.toMatchObject({ code: 'E_SCHEDULE_INVALID_CRON' })
 
     // The first two registrations must have been rolled back.
     expect(scheduler.unregistrations.sort()).toEqual(['Mixed.first', 'Mixed.second'].sort())
   })
 
-  it('rejects anonymous classes with SCHEDULE_ANONYMOUS_CLASS', async () => {
+  it('rejects anonymous classes with E_SCHEDULE_ANONYMOUS_CLASS', async () => {
     // Build a truly nameless class. Modern JS infers `.name` from the
     // const binding, so we override it explicitly to simulate the
     // `export default class { ... }` / IIFE cases where the name is
@@ -321,7 +321,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
 
     await expect(provider.boot()).rejects.toMatchObject({
-      code: 'SCHEDULE_ANONYMOUS_CLASS',
+      code: 'E_SCHEDULE_ANONYMOUS_CLASS',
     })
   })
 
@@ -348,7 +348,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     expect(await container.resolve<unknown>('scheduler')).toBe(provider.scheduler)
   })
 
-  it('register() throws SCHEDULE_PROVIDER_ALREADY_REGISTERED when a different provider claimed the token first', () => {
+  it('register() throws E_SCHEDULE_PROVIDER_ALREADY_REGISTERED when a different provider claimed the token first', () => {
     const container = new Container()
     const providerA = new ScheduleProvider(buildApp(container), {
       scheduler: new MockScheduler() as unknown as Scheduler,
@@ -358,11 +358,11 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
     providerA.register()
     expect(() => providerB.register()).toThrow(
-      expect.objectContaining({ code: 'SCHEDULE_PROVIDER_ALREADY_REGISTERED' }),
+      expect.objectContaining({ code: 'E_SCHEDULE_PROVIDER_ALREADY_REGISTERED' }),
     )
   })
 
-  it('rejects symbol-keyed methods with SCHEDULE_SYMBOL_METHOD', async () => {
+  it('rejects symbol-keyed methods with E_SCHEDULE_SYMBOL_METHOD', async () => {
     const runKey = Symbol('run')
     @Service()
     class SymbolMethod {
@@ -381,7 +381,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
 
     await expect(provider.boot()).rejects.toMatchObject({
-      code: 'SCHEDULE_SYMBOL_METHOD',
+      code: 'E_SCHEDULE_SYMBOL_METHOD',
     })
   })
 })

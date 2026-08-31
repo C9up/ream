@@ -7,7 +7,7 @@
 import { ReamError } from './ReamError.js'
 
 /** Pipeline stage names in execution order. */
-export const PIPELINE_STAGES = [
+export const E_PIPELINE_STAGES = [
   'Security (Blackhole)',
   'Logging',
   'Global Middleware',
@@ -20,12 +20,12 @@ export const PIPELINE_STAGES = [
   'Response Logging',
 ] as const
 
-export type PipelineStageName = (typeof PIPELINE_STAGES)[number]
+export type PipelineStageName = (typeof E_PIPELINE_STAGES)[number]
 
 /**
  * Create a pipeline stage error with position context.
  *
- * @param stageIndex - Zero-based index in PIPELINE_STAGES (clamped to valid range)
+ * @param stageIndex - Zero-based index in E_PIPELINE_STAGES (clamped to valid range)
  * @param originalError - The error that occurred
  * @param context - Additional context
  */
@@ -34,13 +34,13 @@ export function createPipelineError(
   originalError: Error,
   context?: Record<string, string>,
 ): ReamError {
-  const total = PIPELINE_STAGES.length
+  const total = E_PIPELINE_STAGES.length
   const clampedIndex = Math.max(0, Math.min(stageIndex, total - 1))
-  const stageName = PIPELINE_STAGES[clampedIndex]
+  const stageName = E_PIPELINE_STAGES[clampedIndex]
   const position = `${clampedIndex + 1}/${total}`
-  const nextStage = clampedIndex + 1 < total ? PIPELINE_STAGES[clampedIndex + 1] : '(end)'
+  const nextStage = clampedIndex + 1 < total ? E_PIPELINE_STAGES[clampedIndex + 1] : '(end)'
 
-  const errorCode = originalError instanceof ReamError ? originalError.code : 'PIPELINE_ERROR'
+  const errorCode = originalError instanceof ReamError ? originalError.code : 'E_PIPELINE_ERROR'
 
   return new ReamError(errorCode, originalError.message, {
     pipelineStage: `${position} (${stageName})`,
@@ -80,7 +80,7 @@ export function validatePipelineConfig(config: {
         if (!registered.has(mw) && !reported.has(mw)) {
           reported.add(mw)
           errors.push(
-            new ReamError('PIPELINE_UNKNOWN_MIDDLEWARE', `Middleware '${mw}' is not registered`, {
+            new ReamError('E_PIPELINE_UNKNOWN_MIDDLEWARE', `Middleware '${mw}' is not registered`, {
               hint: `Register it with middleware.register('${mw}', handler) before using it on routes.`,
               context: {
                 middleware: mw,

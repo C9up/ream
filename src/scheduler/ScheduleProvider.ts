@@ -63,7 +63,7 @@ export class ScheduleProvider extends Provider {
    * reload, repeated `app.start()` in tests) re-binds the same
    * scheduler without error. A DIFFERENT `ScheduleProvider` trying
    * to claim the `'scheduler'` token throws
-   * `SCHEDULE_PROVIDER_ALREADY_REGISTERED` so dueling providers do
+   * `E_SCHEDULE_PROVIDER_ALREADY_REGISTERED` so dueling providers do
    * not silently overwrite each other.
    */
   override register(): void {
@@ -74,7 +74,7 @@ export class ScheduleProvider extends Provider {
       // `container.resolve('scheduler')` because resolution is now async.
       if (this.#registered) return
       throw new ReamError(
-        'SCHEDULE_PROVIDER_ALREADY_REGISTERED',
+        'E_SCHEDULE_PROVIDER_ALREADY_REGISTERED',
         "Container token 'scheduler' is already bound to a different instance",
         {
           hint: 'Only one ScheduleProvider can own the scheduler binding. Remove the duplicate provider from your reamrc.ts.',
@@ -133,7 +133,7 @@ export class ScheduleProvider extends Provider {
 
         if (!target.name) {
           throw new ReamError(
-            'SCHEDULE_ANONYMOUS_CLASS',
+            'E_SCHEDULE_ANONYMOUS_CLASS',
             'Anonymous classes cannot declare @Schedule — task names would collide',
             {
               hint: 'Name the class explicitly (e.g. `export class Jobs { ... }`) so task names are unique and debuggable.',
@@ -148,7 +148,7 @@ export class ScheduleProvider extends Provider {
           // documented contract.
           if (typeof methodName === 'symbol') {
             throw new ReamError(
-              'SCHEDULE_SYMBOL_METHOD',
+              'E_SCHEDULE_SYMBOL_METHOD',
               `@Schedule on symbol-keyed method is not supported on class '${target.name}'`,
               {
                 hint: 'Use a regular named method so the task can be addressed uniquely.',
@@ -167,7 +167,7 @@ export class ScheduleProvider extends Provider {
               const method = instance[methodName]
               if (typeof method !== 'function') {
                 throw new ReamError(
-                  'SCHEDULE_METHOD_NOT_FOUND',
+                  'E_SCHEDULE_METHOD_NOT_FOUND',
                   `Scheduled method ${taskName} is not callable on resolved instance`,
                 )
               }
@@ -178,7 +178,7 @@ export class ScheduleProvider extends Provider {
           } catch (cause) {
             const inner = cause as ReamError & { message?: string; hint?: string }
             throw new ReamError(
-              'SCHEDULE_INVALID_CRON',
+              'E_SCHEDULE_INVALID_CRON',
               `Failed to register scheduled task '${taskName}': ${inner.message ?? String(cause)}`,
               {
                 context: { task: taskName, cronExpr },

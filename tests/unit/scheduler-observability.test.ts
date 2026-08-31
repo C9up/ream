@@ -228,7 +228,7 @@ describe('Scheduler observability', () => {
           nativeModule: buildNative(),
           eventSink: {} as unknown as ScheduleEventSink,
         }),
-    ).toThrow(expect.objectContaining({ code: 'SCHEDULE_INVALID_EVENT_SINK' }))
+    ).toThrow(expect.objectContaining({ code: 'E_SCHEDULE_INVALID_EVENT_SINK' }))
   })
 
   it('rejects a non-function errorReporter at construction time', () => {
@@ -238,7 +238,7 @@ describe('Scheduler observability', () => {
           nativeModule: buildNative(),
           errorReporter: 'not a function' as unknown as ErrorReporter,
         }),
-    ).toThrow(expect.objectContaining({ code: 'SCHEDULE_INVALID_ERROR_REPORTER' }))
+    ).toThrow(expect.objectContaining({ code: 'E_SCHEDULE_INVALID_ERROR_REPORTER' }))
   })
 
   it('emits skipped with reason=acquire-failed when lockBackend.acquire throws', async () => {

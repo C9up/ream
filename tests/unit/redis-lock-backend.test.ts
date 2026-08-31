@@ -116,7 +116,7 @@ describe('RedisLockBackend', () => {
     // A lease that expires the instant it is taken lets every instance
     // acquire the same lock — the outcome locking exists to prevent.
     await expect(backend.acquire('invoices', 0)).rejects.toMatchObject({
-      code: 'SCHEDULE_INVALID_LOCK_TTL',
+      code: 'E_SCHEDULE_INVALID_LOCK_TTL',
     } satisfies Partial<ReamError>)
   })
 

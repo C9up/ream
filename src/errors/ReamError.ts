@@ -42,10 +42,20 @@ export function isReamError(error: unknown, ...codes: string[]): boolean {
 
 export class ReamError extends Error {
   /**
-   * Error code, `E_`-prefixed as every framework code is — an application
-   * matching on one should never have to remember which convention a
-   * particular package followed (e.g. "E_ATLAS_QUERY_ERROR",
-   * "E_CONTAINER_NOT_FOUND").
+   * Error code: `E_<NAMESPACE>_<REASON>`.
+   *
+   * `E_` because every framework code carries it, so an application can filter
+   * on one rule instead of remembering which convention a package followed.
+   * The namespace after it says which package raised the error — without it
+   * `E_FORBIDDEN` would mean three different things across the ecosystem and a
+   * consumer could not tell them apart (e.g. "E_ATLAS_QUERY_ERROR",
+   * "E_CONTAINER_NOT_FOUND", "E_WARDEN_UNKNOWN_POLICY").
+   *
+   * The exception is an identifier that already exists upstream —
+   * `E_UNAUTHORIZED_ACCESS`, `E_INVALID_CREDENTIALS`, `E_VALIDATION_ERROR`.
+   * Those are passed through verbatim, so code branching on one sees the same
+   * string it would elsewhere, and two packages naming the same upstream
+   * failure legitimately share it.
    */
   readonly code: string
 
@@ -98,7 +108,7 @@ export class ReamError extends Error {
     try {
       const parsed = JSON.parse(error.message)
       if (typeof parsed !== 'object' || parsed === null || typeof parsed.code !== 'string') {
-        return new ReamError('UNKNOWN', error.message)
+        return new ReamError('E_UNKNOWN', error.message)
       }
       return new ReamError(parsed.code, parsed.message ?? error.message, {
         context:
@@ -110,7 +120,7 @@ export class ReamError extends Error {
       })
     } catch {
       // Not a JSON error — wrap as generic
-      return new ReamError('UNKNOWN', error.message)
+      return new ReamError('E_UNKNOWN', error.message)
     }
   }
 

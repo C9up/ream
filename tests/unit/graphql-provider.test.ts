@@ -71,7 +71,7 @@ describe('GraphQLProvider > wired', () => {
     expect(provider.engine).toBe(engine)
   })
 
-  it('throws GRAPHQL_PROVIDER_ALREADY_REGISTERED when a different engine claims the `graphql` token', () => {
+  it('throws E_GRAPHQL_PROVIDER_ALREADY_REGISTERED when a different engine claims the `graphql` token', () => {
     const container = new Container()
     new GraphQLProvider(buildApp(container), { engine: makeEngine() }).register()
     const other = new GraphQLProvider(buildApp(container), { engine: makeEngine() })
@@ -81,7 +81,7 @@ describe('GraphQLProvider > wired', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(ReamError)
       if (error instanceof ReamError) {
-        expect(error.code).toBe('GRAPHQL_PROVIDER_ALREADY_REGISTERED')
+        expect(error.code).toBe('E_GRAPHQL_PROVIDER_ALREADY_REGISTERED')
       }
     }
   })

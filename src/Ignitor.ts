@@ -492,7 +492,7 @@ export class Ignitor {
     this.#app.setMode('warmup')
     if (this.#phase !== 'created') {
       throw new ReamError(
-        'IGNITOR_ALREADY_STARTED',
+        'E_IGNITOR_ALREADY_STARTED',
         `warmUp() called while in phase '${this.#phase}' — an Ignitor boots once`,
         { hint: 'Create a new Ignitor instance instead of re-warming this one.' },
       )
@@ -521,7 +521,7 @@ export class Ignitor {
     // useful thing to be told than "already started", and it is the reason.
     if (this.#app.getMode() !== 'run') {
       throw new ReamError(
-        'IGNITOR_WARMUP_ONLY',
+        'E_IGNITOR_WARMUP_ONLY',
         `Cannot start an application assembled in '${this.#app.getMode()}' mode.`,
         {
           hint: 'warmUp() is for inspecting an application; build a fresh Ignitor to run one.',
@@ -532,7 +532,7 @@ export class Ignitor {
     // instantiate + register every reamrc provider a second time.
     if (this.#phase !== 'created') {
       throw new ReamError(
-        'IGNITOR_ALREADY_STARTED',
+        'E_IGNITOR_ALREADY_STARTED',
         `start() called while in phase '${this.#phase}' — an Ignitor boots once`,
         { hint: 'Create a new Ignitor instance instead of restarting this one.' },
       )
@@ -777,7 +777,7 @@ export class Ignitor {
       }
     } else if (this.#app.getEnvironment() === 'web' && !this.#config.serverFactory) {
       throw new ReamError(
-        'IGNITOR_NO_SERVER_FACTORY',
+        'E_IGNITOR_NO_SERVER_FACTORY',
         'httpServer() requires a serverFactory in config',
         {
           hint: 'Example: new Ignitor({ serverFactory: (port, host) => new HyperServer(port, host) })',

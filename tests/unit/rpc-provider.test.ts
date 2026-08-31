@@ -44,7 +44,7 @@ describe('RpcProvider > container binding', () => {
     expect(await container.resolve('rpc')).toBe(provider.rpc)
   })
 
-  it('throws RPC_PROVIDER_ALREADY_REGISTERED when a different provider claims the `rpc` token', () => {
+  it('throws E_RPC_PROVIDER_ALREADY_REGISTERED when a different provider claims the `rpc` token', () => {
     const container = new Container()
     new RpcProvider(buildApp(container)).register()
     const other = new RpcProvider(buildApp(container))
@@ -54,7 +54,7 @@ describe('RpcProvider > container binding', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(ReamError)
       if (error instanceof ReamError) {
-        expect(error.code).toBe('RPC_PROVIDER_ALREADY_REGISTERED')
+        expect(error.code).toBe('E_RPC_PROVIDER_ALREADY_REGISTERED')
       }
     }
   })

@@ -56,7 +56,7 @@ export class RpcProvider extends Provider {
       // `container.resolve('rpc')` because resolution is now async.
       if (this.#registered) return
       throw new ReamError(
-        'RPC_PROVIDER_ALREADY_REGISTERED',
+        'E_RPC_PROVIDER_ALREADY_REGISTERED',
         "Container token 'rpc' is already bound to a different instance",
         {
           hint: 'Only one RpcProvider can own the rpc binding. Remove the duplicate provider from your reamrc.ts.',

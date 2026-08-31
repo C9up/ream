@@ -62,7 +62,7 @@ export interface RunTaskOptions {
   /**
    * Cancel the on-demand run after `timeoutMs` milliseconds. On
    * timeout, `runTaskNow` returns `{ outcome: 'failed', error: ... }`
-   * with a `SCHEDULE_TASK_TIMEOUT` error. The user callback continues
+   * with a `E_SCHEDULE_TASK_TIMEOUT` error. The user callback continues
    * running in the background — JavaScript does not support
    * pre-emptive cancellation; the timeout is observational only.
    */
@@ -140,18 +140,18 @@ function loadNative(): NativeModule {
 /**
  * Convert a thrown native error into a `ReamError`. Prefers parsing the
  * JSON payload shipped by Rust (`ream_napi_core::ReamError::into()`);
- * falls back to wrapping opaque errors under `SCHEDULER_NATIVE_ERROR`
+ * falls back to wrapping opaque errors under `E_SCHEDULER_NATIVE_ERROR`
  * so scheduler context is never lost.
  */
 function translateNativeError(e: unknown): ReamError {
   const asError = e as Error
   const parsed = ReamError.fromNapi(asError)
-  // `fromNapi` returns an `UNKNOWN`-coded error when the message is not
+  // `fromNapi` returns an `E_UNKNOWN`-coded error when the message is not
   // a JSON payload. Preserve that context under a scheduler-specific
   // code so callers can trace the failure back to this layer.
-  if (parsed.code === 'UNKNOWN') {
+  if (parsed.code === 'E_UNKNOWN') {
     return new ReamError(
-      'SCHEDULER_NATIVE_ERROR',
+      'E_SCHEDULER_NATIVE_ERROR',
       `ream-scheduler NAPI call failed: ${asError.message}`,
       {
         hint: 'This is likely a bug in the scheduler. Please file an issue with the stack trace.',
@@ -204,7 +204,7 @@ export class Scheduler {
       const be = options.lockBackend as Partial<LockBackend>
       if (typeof be.acquire !== 'function' || typeof be.release !== 'function') {
         throw new ReamError(
-          'SCHEDULE_INVALID_LOCK_BACKEND',
+          'E_SCHEDULE_INVALID_LOCK_BACKEND',
           'Scheduler options.lockBackend must implement acquire(name, ttlMs) and release(name)',
         )
       }
@@ -212,7 +212,7 @@ export class Scheduler {
     if (options.defaultLockTtlMs !== undefined) {
       if (!Number.isFinite(options.defaultLockTtlMs) || options.defaultLockTtlMs <= 0) {
         throw new ReamError(
-          'SCHEDULE_INVALID_LOCK_TTL',
+          'E_SCHEDULE_INVALID_LOCK_TTL',
           `Scheduler options.defaultLockTtlMs must be a finite positive number, got ${options.defaultLockTtlMs}`,
           {
             hint: 'Use a millisecond value greater than zero (typical range 1_000 – 600_000).',
@@ -224,14 +224,14 @@ export class Scheduler {
       const sink = options.eventSink as Partial<ScheduleEventSink>
       if (typeof sink.emit !== 'function') {
         throw new ReamError(
-          'SCHEDULE_INVALID_EVENT_SINK',
+          'E_SCHEDULE_INVALID_EVENT_SINK',
           'Scheduler options.eventSink must implement emit(event)',
         )
       }
     }
     if (options.errorReporter !== undefined && typeof options.errorReporter !== 'function') {
       throw new ReamError(
-        'SCHEDULE_INVALID_ERROR_REPORTER',
+        'E_SCHEDULE_INVALID_ERROR_REPORTER',
         'Scheduler options.errorReporter must be a function',
       )
     }
@@ -376,13 +376,13 @@ export class Scheduler {
   ): void {
     if (typeof callback !== 'function') {
       throw new ReamError(
-        'SCHEDULE_INVALID_CALLBACK',
+        'E_SCHEDULE_INVALID_CALLBACK',
         `Scheduler.register expected a function callback for task '${name}', got ${typeof callback}`,
       )
     }
     if (name === '') {
       throw new ReamError(
-        'SCHEDULE_INVALID_TASK_NAME',
+        'E_SCHEDULE_INVALID_TASK_NAME',
         'Scheduler.register requires a non-empty task name',
       )
     }
@@ -451,7 +451,7 @@ export class Scheduler {
       // thrown error here is unexpected. Drop the local entry anyway
       // — the doc promises idempotence — but surface any unexpected
       // native failure that is not a missing-task situation.
-      if (err.code !== 'UNKNOWN_TASK' && err.code !== 'SCHEDULER_NATIVE_ERROR') {
+      if (err.code !== 'UNKNOWN_TASK' && err.code !== 'E_SCHEDULER_NATIVE_ERROR') {
         this.#tasks.delete(name)
         throw err
       }
@@ -538,7 +538,7 @@ export class Scheduler {
       // real task invocations.
       this.#report(
         new ReamError(
-          'SCHEDULE_TASK_UNKNOWN',
+          'E_SCHEDULE_TASK_UNKNOWN',
           `runTaskNow called with unknown task name: '${name}'`,
         ),
         name,
@@ -560,7 +560,7 @@ export class Scheduler {
                   outcome: 'failed',
                   durationMs: options.timeoutMs ?? 0,
                   error: new ReamError(
-                    'SCHEDULE_TASK_TIMEOUT',
+                    'E_SCHEDULE_TASK_TIMEOUT',
                     `Task '${name}' did not complete within ${options.timeoutMs} ms (background execution continues)`,
                   ),
                 })

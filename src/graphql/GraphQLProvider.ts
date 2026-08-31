@@ -53,7 +53,7 @@ export class GraphQLProvider extends Provider {
         return
       }
       throw new ReamError(
-        'GRAPHQL_PROVIDER_ALREADY_REGISTERED',
+        'E_GRAPHQL_PROVIDER_ALREADY_REGISTERED',
         "Container token 'graphql' is already bound to a different instance",
         {
           hint: 'Only one GraphQLProvider can own the graphql binding. Remove the duplicate provider from your reamrc.ts.',

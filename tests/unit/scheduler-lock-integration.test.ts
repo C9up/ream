@@ -215,7 +215,7 @@ describe('Scheduler lock integration', () => {
   it('constructor rejects invalid defaultLockTtlMs values', () => {
     for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => new Scheduler({ nativeModule: buildNative(), defaultLockTtlMs: bad })).toThrow(
-        expect.objectContaining({ code: 'SCHEDULE_INVALID_LOCK_TTL' }),
+        expect.objectContaining({ code: 'E_SCHEDULE_INVALID_LOCK_TTL' }),
       )
     }
   })
@@ -227,13 +227,13 @@ describe('Scheduler lock integration', () => {
           nativeModule: buildNative(),
           lockBackend: {} as unknown as LockBackend,
         }),
-    ).toThrow(expect.objectContaining({ code: 'SCHEDULE_INVALID_LOCK_BACKEND' }))
+    ).toThrow(expect.objectContaining({ code: 'E_SCHEDULE_INVALID_LOCK_BACKEND' }))
   })
 
   it('rejects empty task names at register time', () => {
     const { scheduler } = build({ lockBackend: new MemoryLockBackend() })
     expect(() => scheduler.register('', '*/1 * * * *', () => {})).toThrow(
-      expect.objectContaining({ code: 'SCHEDULE_INVALID_TASK_NAME' }),
+      expect.objectContaining({ code: 'E_SCHEDULE_INVALID_TASK_NAME' }),
     )
   })
 

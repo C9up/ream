@@ -381,7 +381,7 @@ describe('container > autoConstruct without decorator metadata (dev loader)', ()
     expect(repo.db).toEqual({ dialect: 'sqlite' })
   })
 
-  it('throws CONTAINER_MISSING_METADATA instead of constructing with undefined deps', async () => {
+  it('throws E_CONTAINER_MISSING_METADATA instead of constructing with undefined deps', async () => {
     @Service()
     class NeedsDeps {
       captured: unknown

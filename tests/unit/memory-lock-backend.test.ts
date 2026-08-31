@@ -51,7 +51,7 @@ describe('MemoryLockBackend', () => {
     const invalid = [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
     for (const ttl of invalid) {
       await expect(backend.acquire('ttl-test', ttl)).rejects.toMatchObject({
-        code: 'SCHEDULE_INVALID_LOCK_TTL',
+        code: 'E_SCHEDULE_INVALID_LOCK_TTL',
       } satisfies Partial<ReamError>)
     }
   })
