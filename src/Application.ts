@@ -683,4 +683,16 @@ export class Application implements AppContext {
   get providerCount(): number {
     return this.#providers.length
   }
+
+  /**
+   * The registered providers, in registration order.
+   *
+   * Read-only, and the reason it exists: `ream inspect` reported `0 providers`
+   * on an application running twelve of them, because it read a property that
+   * had never been added. A count alone does not answer the question inspect
+   * is opened for — which provider is wired — so the list is what it returns.
+   */
+  get providers(): readonly ProviderContract[] {
+    return [...this.#providers]
+  }
 }

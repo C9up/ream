@@ -225,3 +225,36 @@ describe('config > defineModuleConfig', () => {
     expect(config.port).toBe(3000)
   })
 })
+
+describe('Application > the registered providers are readable', () => {
+  class Alpha {
+    // biome-ignore lint/complexity/noUselessConstructor: the contract takes the app
+    constructor(_app: unknown) {}
+  }
+  class Beta {
+    // biome-ignore lint/complexity/noUselessConstructor: the contract takes the app
+    constructor(_app: unknown) {}
+  }
+
+  it('names them in registration order', () => {
+    const app = new Application(new URL('file:///tmp/app/'))
+    app.register(new Alpha(app))
+    app.register(new Beta(app))
+
+    // `inspect` read a property that did not exist and reported `0 providers`
+    // on an application running twelve — a count would not have answered the
+    // question it is opened for, which is *which* provider is wired.
+    expect(app.providers.map((p) => p.constructor.name)).toEqual(['Alpha', 'Beta'])
+    expect(app.providerCount).toBe(2)
+  })
+
+  it('hands back a fresh array each time, not the internal one', () => {
+    const app = new Application(new URL('file:///tmp/app/'))
+    app.register(new Alpha(app))
+
+    // Two calls, two arrays: whatever a caller does to what it got cannot
+    // reach the list the application boots from.
+    expect(app.providers).not.toBe(app.providers)
+    expect(app.providers).toEqual(app.providers)
+  })
+})
