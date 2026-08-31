@@ -170,7 +170,10 @@ mod tests {
 
         assert_eq!(err.hint.as_deref(), Some("Did you mean: status?"));
         assert_eq!(err.context.get("entity").map(|s| s.as_str()), Some("Order"));
-        assert_eq!(err.context.get("column").map(|s| s.as_str()), Some("statut"));
+        assert_eq!(
+            err.context.get("column").map(|s| s.as_str()),
+            Some("statut")
+        );
         assert_eq!(err.source_file.as_deref(), Some("src/query.rs"));
         assert_eq!(err.source_line, Some(42));
         assert_eq!(
@@ -181,9 +184,11 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = ReamError::new("MY_CODE", "Something broke")
-            .with_hint("Try this fix");
-        assert_eq!(format!("{}", err), "[MY_CODE] Something broke (hint: Try this fix)");
+        let err = ReamError::new("MY_CODE", "Something broke").with_hint("Try this fix");
+        assert_eq!(
+            format!("{}", err),
+            "[MY_CODE] Something broke (hint: Try this fix)"
+        );
     }
 
     #[test]

@@ -214,7 +214,11 @@ mod tests {
             count: Arc::new(AtomicUsize::new(0)),
         });
         scheduler
-            .register("job", "*/1 * * * *", Arc::clone(&invoker) as Arc<dyn TaskInvoker>)
+            .register(
+                "job",
+                "*/1 * * * *",
+                Arc::clone(&invoker) as Arc<dyn TaskInvoker>,
+            )
             .unwrap();
         let err = scheduler
             .register("job", "*/1 * * * *", invoker as Arc<dyn TaskInvoker>)
@@ -354,7 +358,8 @@ mod tests {
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
-            let mut t1 = RegisteredTask::new("boom".into(), schedule, panicker, Utc::now()).unwrap();
+            let mut t1 =
+                RegisteredTask::new("boom".into(), schedule, panicker, Utc::now()).unwrap();
             t1.next_run = past;
             guard.insert("boom".into(), t1);
 
@@ -517,8 +522,7 @@ mod tests {
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/5 * * * *").unwrap();
-            let mut t =
-                RegisteredTask::new("drift".into(), schedule, invoker, Utc::now()).unwrap();
+            let mut t = RegisteredTask::new("drift".into(), schedule, invoker, Utc::now()).unwrap();
             // Simulate a 10-minute stall: next_run is 10 minutes in the
             // past. A catch-up implementation would fire twice.
             t.next_run = Utc::now() - chrono::Duration::minutes(10);
@@ -536,7 +540,10 @@ mod tests {
         // next_run should now be strictly in the future.
         let guard = registry.lock().unwrap();
         let t = guard.get("drift").unwrap();
-        assert!(t.next_run > Utc::now(), "next_run must be advanced past now");
+        assert!(
+            t.next_run > Utc::now(),
+            "next_run must be advanced past now"
+        );
     }
 
     /// If `Schedule::next_after(now)` returns `None` (theoretical for
@@ -558,8 +565,7 @@ mod tests {
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
-            let mut t =
-                RegisteredTask::new("once".into(), schedule, invoker, Utc::now()).unwrap();
+            let mut t = RegisteredTask::new("once".into(), schedule, invoker, Utc::now()).unwrap();
             // Park in the past so the task fires on the next dispatch.
             t.next_run = Utc::now() - chrono::Duration::seconds(5);
             guard.insert("once".into(), t);

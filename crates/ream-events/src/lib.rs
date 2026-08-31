@@ -11,16 +11,16 @@
 
 pub mod bus;
 pub mod event;
+#[cfg(feature = "redis-store")]
+pub mod redis_store;
 pub mod retry;
 pub mod router;
 pub mod store;
-#[cfg(feature = "redis-store")]
-pub mod redis_store;
 
 pub use bus::{Bus, RequestHandler};
 pub use event::Event;
-pub use retry::{FallibleHandler, RetryConfig};
-pub use router::{EventHandler, EventRouter, SubscriptionId, wildcard_matches};
-pub use store::{EventStatus, EventStore, MemoryStore, TrackedEvent};
 #[cfg(feature = "redis-store")]
 pub use redis_store::RedisStore;
+pub use retry::{FallibleHandler, RetryConfig};
+pub use router::{wildcard_matches, EventHandler, EventRouter, SubscriptionId};
+pub use store::{EventStatus, EventStore, MemoryStore, TrackedEvent};

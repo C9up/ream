@@ -47,10 +47,13 @@ pub struct MultipartPayload {
 /// Parse a `multipart/form-data` body. The boundary is extracted from the
 /// `Content-Type` header by the caller. Returns `Err` if the body is
 /// malformed; the server then surfaces a 400.
-pub async fn parse_multipart(boundary: &str, body: Bytes) -> Result<MultipartPayload, multer::Error> {
+pub async fn parse_multipart(
+    boundary: &str,
+    body: Bytes,
+) -> Result<MultipartPayload, multer::Error> {
+    use futures_core::Stream;
     use std::pin::Pin;
     use std::task::{Context, Poll};
-    use futures_core::Stream;
 
     // multer expects a Stream<Item = Result<Bytes, _>>. We hand it the whole
     // body as one chunk — Rust collected everything in `hyper_to_ream_request`
@@ -72,7 +75,10 @@ pub async fn parse_multipart(boundary: &str, body: Bytes) -> Result<MultipartPay
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or("").to_string();
         let file_name = field.file_name().map(|s| s.to_string());
-        let content_type = field.content_type().map(|m| m.to_string()).unwrap_or_default();
+        let content_type = field
+            .content_type()
+            .map(|m| m.to_string())
+            .unwrap_or_default();
 
         // `bytes()` consumes the field — we drop the `Field` after.
         let bytes = field.bytes().await?;
@@ -135,13 +141,20 @@ mod tests {
         Bytes::from(body)
     }
 
-    fn body_with_file(boundary: &str, name: &str, filename: &str, ct: &str, content: &[u8]) -> Bytes {
+    fn body_with_file(
+        boundary: &str,
+        name: &str,
+        filename: &str,
+        ct: &str,
+        content: &[u8],
+    ) -> Bytes {
         let mut bytes = format!(
             "--{boundary}\r\n\
              Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n\
              Content-Type: {ct}\r\n\
              \r\n"
-        ).into_bytes();
+        )
+        .into_bytes();
         bytes.extend_from_slice(content);
         bytes.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         Bytes::from(bytes)
@@ -180,7 +193,13 @@ mod tests {
 
     #[tokio::test]
     async fn parses_a_single_file() {
-        let body = body_with_file("BOUND", "avatar", "pic.png", "image/png", &[0x89, 0x50, 0x4e, 0x47]);
+        let body = body_with_file(
+            "BOUND",
+            "avatar",
+            "pic.png",
+            "image/png",
+            &[0x89, 0x50, 0x4e, 0x47],
+        );
         let payload = parse_multipart("BOUND", body).await.unwrap();
         assert_eq!(payload.files.len(), 1);
         let file = &payload.files[0];
@@ -188,7 +207,9 @@ mod tests {
         assert_eq!(file.client_name, "pic.png");
         assert_eq!(file.content_type, "image/png");
         assert_eq!(file.size, 4);
-        let bytes = base64::engine::general_purpose::STANDARD.decode(&file.content_b64).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&file.content_b64)
+            .unwrap();
         assert_eq!(bytes, [0x89, 0x50, 0x4e, 0x47]);
     }
 
@@ -197,7 +218,8 @@ mod tests {
         // No `Content-Type:` header on the part → defaults to octet-stream
         let mut bytes = b"--BOUND\r\n\
                           Content-Disposition: form-data; name=\"x\"; filename=\"f.bin\"\r\n\
-                          \r\n".to_vec();
+                          \r\n"
+            .to_vec();
         bytes.extend_from_slice(&[1, 2, 3]);
         bytes.extend_from_slice(b"\r\n--BOUND--\r\n");
         let payload = parse_multipart("BOUND", Bytes::from(bytes)).await.unwrap();

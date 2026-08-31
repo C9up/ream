@@ -90,7 +90,10 @@ mod tests {
     #[test]
     fn test_catch_unwind_napi_error_passthrough() {
         let result: napi::Result<i32> = catch_unwind_napi(|| {
-            Err(napi::Error::new(napi::Status::GenericFailure, "normal error"))
+            Err(napi::Error::new(
+                napi::Status::GenericFailure,
+                "normal error",
+            ))
         });
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -108,8 +111,7 @@ mod tests {
 
     #[test]
     fn test_catch_unwind_static_str_panic() {
-        let result: napi::Result<i32> =
-            catch_unwind_napi(|| panic!("static str panic"));
+        let result: napi::Result<i32> = catch_unwind_napi(|| panic!("static str panic"));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.reason.contains("static str panic"));
@@ -123,8 +125,7 @@ mod tests {
 
     #[test]
     fn test_catch_unwind_sync_panic() {
-        let result: napi::Result<i32> =
-            catch_unwind_napi_infallible(|| panic!("sync panic"));
+        let result: napi::Result<i32> = catch_unwind_napi_infallible(|| panic!("sync panic"));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.reason.contains("sync panic"));
@@ -132,7 +133,9 @@ mod tests {
 
     #[test]
     fn test_extract_panic_message_string() {
-        let msg = extract_panic_message(&(Box::new(String::from("hello")) as Box<dyn std::any::Any + Send>));
+        let msg = extract_panic_message(
+            &(Box::new(String::from("hello")) as Box<dyn std::any::Any + Send>),
+        );
         assert_eq!(msg, "hello");
     }
 

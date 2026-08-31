@@ -106,11 +106,7 @@ pub async fn execute_with_retry(
 }
 
 /// Create a service.error event from a failed event.
-pub fn create_error_event(
-    original_event: &Event,
-    error: &str,
-    severity: &str,
-) -> Event {
+pub fn create_error_event(original_event: &Event, error: &str, severity: &str) -> Event {
     let error_data = serde_json::json!({
         "source": original_event.name,
         "originalEventId": original_event.id,
@@ -147,7 +143,11 @@ mod tests {
 
     #[test]
     fn test_retry_config_delay_no_overflow() {
-        let config = RetryConfig { max_retries: 255, base_delay_ms: 100, max_delay_ms: 30_000 };
+        let config = RetryConfig {
+            max_retries: 255,
+            base_delay_ms: 100,
+            max_delay_ms: 30_000,
+        };
         // Should not panic even with high attempt values
         let delay = config.delay_for_attempt(64);
         assert_eq!(delay, Duration::from_millis(30_000)); // capped
@@ -163,7 +163,13 @@ mod tests {
         let store = Arc::new(MemoryStore::new());
         store.push(event.clone(), 3).unwrap();
 
-        let result = execute_with_retry(&handler, &event, &config, Some(&(store.clone() as Arc<dyn EventStore>))).await;
+        let result = execute_with_retry(
+            &handler,
+            &event,
+            &config,
+            Some(&(store.clone() as Arc<dyn EventStore>)),
+        )
+        .await;
         assert!(result.is_ok());
 
         let tracked = store.get(&event.id).unwrap();
@@ -185,11 +191,21 @@ mod tests {
         });
 
         let event = Event::new("test", "{}");
-        let config = RetryConfig { max_retries: 3, base_delay_ms: 1, max_delay_ms: 10 };
+        let config = RetryConfig {
+            max_retries: 3,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
         let store = Arc::new(MemoryStore::new());
         store.push(event.clone(), 3).unwrap();
 
-        let result = execute_with_retry(&handler, &event, &config, Some(&(store.clone() as Arc<dyn EventStore>))).await;
+        let result = execute_with_retry(
+            &handler,
+            &event,
+            &config,
+            Some(&(store.clone() as Arc<dyn EventStore>)),
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(attempt_count.load(Ordering::Relaxed), 3);
     }
@@ -199,11 +215,21 @@ mod tests {
         let handler: FallibleHandler = Arc::new(|_| Err("permanent failure".to_string()));
 
         let event = Event::new("test", "{}");
-        let config = RetryConfig { max_retries: 2, base_delay_ms: 1, max_delay_ms: 10 };
+        let config = RetryConfig {
+            max_retries: 2,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
         let store = Arc::new(MemoryStore::new());
         store.push(event.clone(), 2).unwrap();
 
-        let result = execute_with_retry(&handler, &event, &config, Some(&(store.clone() as Arc<dyn EventStore>))).await;
+        let result = execute_with_retry(
+            &handler,
+            &event,
+            &config,
+            Some(&(store.clone() as Arc<dyn EventStore>)),
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "permanent failure");
 
@@ -227,11 +253,21 @@ mod tests {
     async fn test_execute_catches_panic() {
         let handler: FallibleHandler = Arc::new(|_| panic!("boom"));
         let event = Event::new("test", "{}");
-        let config = RetryConfig { max_retries: 0, base_delay_ms: 1, max_delay_ms: 10 };
+        let config = RetryConfig {
+            max_retries: 0,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
         let store = Arc::new(MemoryStore::new());
         store.push(event.clone(), 0).unwrap();
 
-        let result = execute_with_retry(&handler, &event, &config, Some(&(store.clone() as Arc<dyn EventStore>))).await;
+        let result = execute_with_retry(
+            &handler,
+            &event,
+            &config,
+            Some(&(store.clone() as Arc<dyn EventStore>)),
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "handler panicked");
 
@@ -243,7 +279,11 @@ mod tests {
     async fn test_execute_zero_retries() {
         let handler: FallibleHandler = Arc::new(|_| Err("fail".to_string()));
         let event = Event::new("test", "{}");
-        let config = RetryConfig { max_retries: 0, base_delay_ms: 1, max_delay_ms: 10 };
+        let config = RetryConfig {
+            max_retries: 0,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
 
         let result = execute_with_retry(&handler, &event, &config, None).await;
         assert!(result.is_err());

@@ -24,7 +24,8 @@ mod inner {
         /// Connect to Redis/KeyDB.
         /// url format: "redis://127.0.0.1:6379" or "redis://:password@host:port/db"
         pub fn new(url: &str) -> Result<Self, String> {
-            let client = Client::open(url).map_err(|e| format!("Redis connection failed: {}", e))?;
+            let client =
+                Client::open(url).map_err(|e| format!("Redis connection failed: {}", e))?;
             let conn = client
                 .get_connection()
                 .map_err(|e| format!("Redis connection failed: {}", e))?;
@@ -43,8 +44,8 @@ mod inner {
                 max_retries,
                 last_error: None,
             };
-            let json =
-                serde_json::to_string(&tracked).map_err(|e| format!("Serialization error: {}", e))?;
+            let json = serde_json::to_string(&tracked)
+                .map_err(|e| format!("Serialization error: {}", e))?;
             let key = format!("{}{}", KEY_PREFIX, event.id);
 
             let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -61,8 +62,8 @@ mod inner {
             let key = format!("{}{}", KEY_PREFIX, event_id);
 
             let is_failed = matches!(status, EventStatus::Failed { .. });
-            let status_json =
-                serde_json::to_string(&status).map_err(|e| format!("Serialization error: {}", e))?;
+            let status_json = serde_json::to_string(&status)
+                .map_err(|e| format!("Serialization error: {}", e))?;
             let retry_count = if let EventStatus::Retrying { attempt } = &status {
                 *attempt
             } else {
@@ -74,7 +75,8 @@ mod inner {
                 String::new()
             };
 
-            let lua_script = redis::Script::new(r#"
+            let lua_script = redis::Script::new(
+                r#"
                 local key = KEYS[1]
                 local pending_set = ARGV[1]
                 local failed_set = ARGV[2]
@@ -102,7 +104,8 @@ mod inner {
                     redis.call('SADD', failed_set, event_id)
                 end
                 return 1
-            "#);
+            "#,
+            );
 
             let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
             lua_script
@@ -156,7 +159,10 @@ mod inner {
             if ids.is_empty() {
                 return vec![];
             }
-            let keys: Vec<String> = ids.iter().map(|id| format!("{}{}", KEY_PREFIX, id)).collect();
+            let keys: Vec<String> = ids
+                .iter()
+                .map(|id| format!("{}{}", KEY_PREFIX, id))
+                .collect();
             let mut pipe = redis::pipe();
             for key in &keys {
                 pipe.get(key);

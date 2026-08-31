@@ -42,8 +42,11 @@ impl Schedule {
 pub fn parse_cron(expr: &str) -> Result<Schedule, ReamError> {
     let trimmed = expr.trim();
     if trimmed.is_empty() {
-        return Err(ReamError::new("INVALID_CRON", "Cron expression is empty")
-            .with_hint("Standard cron format has 5 fields: minute hour day-of-month month day-of-week"));
+        return Err(
+            ReamError::new("INVALID_CRON", "Cron expression is empty").with_hint(
+                "Standard cron format has 5 fields: minute hour day-of-month month day-of-week",
+            ),
+        );
     }
 
     let field_count = trimmed.split_whitespace().count();

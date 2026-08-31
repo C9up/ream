@@ -35,14 +35,17 @@ impl EventRouter {
     /// Subscribe to events matching a pattern.
     /// Supports exact match ("order.created") and wildcard ("order.*").
     pub async fn subscribe(&self, pattern: &str, handler: EventHandler) -> SubscriptionId {
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if pattern.contains('*') {
             let mut wildcards = self.wildcards.write().await;
             wildcards.push((pattern.to_string(), id, handler));
         } else {
             let mut exact = self.exact.write().await;
-            exact.entry(pattern.to_string())
+            exact
+                .entry(pattern.to_string())
                 .or_default()
                 .push((id, handler));
         }
@@ -103,10 +106,15 @@ impl EventRouter {
                 handler(event_clone);
             }));
             if let Err(e) = result {
-                let msg = e.downcast_ref::<&str>().copied()
+                let msg = e
+                    .downcast_ref::<&str>()
+                    .copied()
                     .or_else(|| e.downcast_ref::<String>().map(String::as_str))
                     .unwrap_or("unknown panic");
-                eprintln!("[events] handler panicked for event '{}': {}", event.name, msg);
+                eprintln!(
+                    "[events] handler panicked for event '{}': {}",
+                    event.name, msg
+                );
             }
         }
 
@@ -146,7 +154,10 @@ pub fn wildcard_matches(pattern: &str, event_name: &str) -> bool {
         if *last == "**" {
             let prefix_parts = &pattern_parts[..pattern_parts.len() - 1];
             return name_parts.len() >= prefix_parts.len()
-                && prefix_parts.iter().zip(name_parts.iter()).all(|(p, n)| p == n);
+                && prefix_parts
+                    .iter()
+                    .zip(name_parts.iter())
+                    .all(|(p, n)| p == n);
         }
     }
 
@@ -155,7 +166,10 @@ pub fn wildcard_matches(pattern: &str, event_name: &str) -> bool {
         return false;
     }
 
-    pattern_parts.iter().zip(name_parts.iter()).all(|(p, n)| *p == "*" || p == n)
+    pattern_parts
+        .iter()
+        .zip(name_parts.iter())
+        .all(|(p, n)| *p == "*" || p == n)
 }
 
 #[cfg(test)]
@@ -196,9 +210,14 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
         let count_clone = count.clone();
 
-        router.subscribe("order.created", Arc::new(move |_| {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        })).await;
+        router
+            .subscribe(
+                "order.created",
+                Arc::new(move |_| {
+                    count_clone.fetch_add(1, Ordering::Relaxed);
+                }),
+            )
+            .await;
 
         let event = Event::new("order.created", "{}");
         let dispatched = router.dispatch(&event).await;
@@ -213,9 +232,14 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
         let count_clone = count.clone();
 
-        router.subscribe("order.*", Arc::new(move |_| {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        })).await;
+        router
+            .subscribe(
+                "order.*",
+                Arc::new(move |_| {
+                    count_clone.fetch_add(1, Ordering::Relaxed);
+                }),
+            )
+            .await;
 
         let dispatched1 = router.dispatch(&Event::new("order.created", "{}")).await;
         let dispatched2 = router.dispatch(&Event::new("order.paid", "{}")).await;
@@ -234,9 +258,14 @@ mod tests {
 
         for _ in 0..3 {
             let c = count.clone();
-            router.subscribe("test.event", Arc::new(move |_| {
-                c.fetch_add(1, Ordering::Relaxed);
-            })).await;
+            router
+                .subscribe(
+                    "test.event",
+                    Arc::new(move |_| {
+                        c.fetch_add(1, Ordering::Relaxed);
+                    }),
+                )
+                .await;
         }
 
         router.dispatch(&Event::new("test.event", "{}")).await;
@@ -249,9 +278,14 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
         let c = count.clone();
 
-        let sub_id = router.subscribe("test.event", Arc::new(move |_| {
-            c.fetch_add(1, Ordering::Relaxed);
-        })).await;
+        let sub_id = router
+            .subscribe(
+                "test.event",
+                Arc::new(move |_| {
+                    c.fetch_add(1, Ordering::Relaxed);
+                }),
+            )
+            .await;
 
         router.dispatch(&Event::new("test.event", "{}")).await;
         assert_eq!(count.load(Ordering::Relaxed), 1);

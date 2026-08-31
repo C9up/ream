@@ -117,9 +117,6 @@ mod tests {
     fn duplicate_task_error_carries_task_name() {
         let err = duplicate_task_error("job");
         assert_eq!(err.code, "DUPLICATE_TASK");
-        assert_eq!(
-            err.context.get("task").map(|s| s.as_str()),
-            Some("job")
-        );
+        assert_eq!(err.context.get("task").map(|s| s.as_str()), Some("job"));
     }
 }

@@ -159,7 +159,11 @@ fn dispatch_due_tasks(
     }
 
     if poisoned_recovered {
-        notify_hook(hook, "__registry__", "registry mutex poisoned during dispatch — recovered via into_inner");
+        notify_hook(
+            hook,
+            "__registry__",
+            "registry mutex poisoned during dispatch — recovered via into_inner",
+        );
     }
 
     for (name, invoker, payload) in due {

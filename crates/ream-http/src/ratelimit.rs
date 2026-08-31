@@ -26,7 +26,10 @@ pub struct RateLimitConfig {
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
-        Self { max: 100, window: Duration::from_secs(60) }
+        Self {
+            max: 100,
+            window: Duration::from_secs(60),
+        }
     }
 }
 

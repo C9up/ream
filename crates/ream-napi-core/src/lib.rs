@@ -62,7 +62,11 @@ mod tests {
         // literal, so a version bump doesn't break the test.
         let v = version();
         let parts: Vec<&str> = v.split('.').collect();
-        assert_eq!(parts.len(), 3, "version must be semver major.minor.patch: {v}");
+        assert_eq!(
+            parts.len(),
+            3,
+            "version must be semver major.minor.patch: {v}"
+        );
         assert!(
             parts.iter().all(|p| p.parse::<u32>().is_ok()),
             "version components must be numeric: {v}"

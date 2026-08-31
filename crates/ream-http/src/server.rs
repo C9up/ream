@@ -9,10 +9,10 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
-use hyper_util::server::conn::auto::Builder as AutoBuilder;
-use hyper_util::rt::TokioExecutor;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
+use hyper_util::rt::TokioExecutor;
+use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::Future;
@@ -29,7 +29,11 @@ use tokio_stream::wrappers::ReceiverStream;
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
 
 /// Handler function type — receives a ReamRequest, returns a ReamResponse.
-pub type RequestHandler = Arc<dyn Fn(ReamRequest) -> std::pin::Pin<Box<dyn Future<Output = ReamResponse> + Send>> + Send + Sync>;
+pub type RequestHandler = Arc<
+    dyn Fn(ReamRequest) -> std::pin::Pin<Box<dyn Future<Output = ReamResponse> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Optional response filter applied after the handler returns, before Hyper sends.
 pub type ResponseFilter = Arc<dyn Fn(ReamResponse) -> ReamResponse + Send + Sync>;
@@ -146,7 +150,10 @@ impl ReamServer {
     ///
     /// Returns a Future that resolves when the server is ready to accept connections.
     pub async fn listen(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let handler = self.handler.clone().ok_or("No request handler registered")?;
+        let handler = self
+            .handler
+            .clone()
+            .ok_or("No request handler registered")?;
         let security_filter = self.security_filter.clone();
         let response_filter = self.response_filter.clone();
         let trusted_proxies = self.trusted_proxies.clone();
@@ -346,10 +353,16 @@ fn rate_limited_response(outcome: crate::RateLimitOutcome) -> ReamResponse {
         r#"{{"error":{{"code":"E_TOO_MANY_REQUESTS","message":"Too many requests","retryAfter":{reset_secs}}}}}"#
     );
     let mut res = ReamResponse::json(429, body);
-    res.headers.insert("retry-after".into(), reset_secs.to_string());
-    res.headers.insert("x-ratelimit-limit".into(), outcome.limit.to_string());
-    res.headers.insert("x-ratelimit-remaining".into(), outcome.remaining.to_string());
-    res.headers.insert("x-ratelimit-reset".into(), reset_secs.to_string());
+    res.headers
+        .insert("retry-after".into(), reset_secs.to_string());
+    res.headers
+        .insert("x-ratelimit-limit".into(), outcome.limit.to_string());
+    res.headers.insert(
+        "x-ratelimit-remaining".into(),
+        outcome.remaining.to_string(),
+    );
+    res.headers
+        .insert("x-ratelimit-reset".into(), reset_secs.to_string());
     res
 }
 
@@ -357,9 +370,16 @@ fn rate_limited_response(outcome: crate::RateLimitOutcome) -> ReamResponse {
 /// how many calls they have left in the current window.
 fn attach_rate_limit_headers(response: &mut ReamResponse, outcome: crate::RateLimitOutcome) {
     let reset_secs = outcome.reset_in.as_secs().max(1);
-    response.headers.insert("x-ratelimit-limit".into(), outcome.limit.to_string());
-    response.headers.insert("x-ratelimit-remaining".into(), outcome.remaining.to_string());
-    response.headers.insert("x-ratelimit-reset".into(), reset_secs.to_string());
+    response
+        .headers
+        .insert("x-ratelimit-limit".into(), outcome.limit.to_string());
+    response.headers.insert(
+        "x-ratelimit-remaining".into(),
+        outcome.remaining.to_string(),
+    );
+    response
+        .headers
+        .insert("x-ratelimit-reset".into(), reset_secs.to_string());
 }
 
 /// Convert a hyper Request to a ReamRequest, including the TCP peer IP and
@@ -394,8 +414,10 @@ async fn hyper_to_ream_request(
     // Reject oversized bodies with a proper 413 — never hand an empty body
     // to the TS layer where it would produce a misleading 400 parse error.
     if oversized {
-        return Err(ReamResponse::json(413,
-            r#"{"error":{"code":"E_PAYLOAD_TOO_LARGE","message":"Request body exceeds the 100 MB server limit"}}"#));
+        return Err(ReamResponse::json(
+            413,
+            r#"{"error":{"code":"E_PAYLOAD_TOO_LARGE","message":"Request body exceeds the 100 MB server limit"}}"#,
+        ));
     }
 
     let resolved_ip = crate::ip::resolve_client_ip(&peer_ip, &headers, trusted_proxies);
@@ -407,19 +429,26 @@ async fn hyper_to_ream_request(
     // to JS instead of the raw boundary-framed bytes. JS no longer parses.
     if content_type.starts_with("multipart/form-data") {
         let payload = match crate::multipart::extract_boundary(&content_type) {
-            Some(boundary) => match crate::multipart::parse_multipart(&boundary, body_bytes).await {
-                Ok(p) => Some(p),
-                Err(_) => {
-                    return Err(ReamResponse::json(400,
-                        r#"{"error":{"code":"E_BAD_MULTIPART","message":"Malformed multipart/form-data body"}}"#));
+            Some(boundary) => {
+                match crate::multipart::parse_multipart(&boundary, body_bytes).await {
+                    Ok(p) => Some(p),
+                    Err(_) => {
+                        return Err(ReamResponse::json(
+                            400,
+                            r#"{"error":{"code":"E_BAD_MULTIPART","message":"Malformed multipart/form-data body"}}"#,
+                        ));
+                    }
                 }
-            },
+            }
             None => {
-                return Err(ReamResponse::json(400,
-                    r#"{"error":{"code":"E_BAD_MULTIPART","message":"multipart/form-data missing boundary parameter"}}"#));
+                return Err(ReamResponse::json(
+                    400,
+                    r#"{"error":{"code":"E_BAD_MULTIPART","message":"multipart/form-data missing boundary parameter"}}"#,
+                ));
             }
         };
-        let mut req = ReamRequest::from_hyper_with_addr(&method, &uri, headers, String::new(), peer_ip);
+        let mut req =
+            ReamRequest::from_hyper_with_addr(&method, &uri, headers, String::new(), peer_ip);
         req.body_encoding = "multipart".to_string();
         req.ip = resolved_ip;
         req.multipart = payload;
@@ -562,9 +591,8 @@ async fn build_streaming_response(
         builder = builder.header("x-accel-buffering", "no");
     }
 
-    let stream = ReceiverStream::new(receiver).map(|chunk| {
-        Ok::<Frame<Bytes>, Infallible>(Frame::data(chunk.bytes))
-    });
+    let stream = ReceiverStream::new(receiver)
+        .map(|chunk| Ok::<Frame<Bytes>, Infallible>(Frame::data(chunk.bytes)));
     let body: ResponseBody = BodyExt::boxed(StreamBody::new(stream));
     builder.body(body).unwrap_or_else(|_| {
         Response::builder()
@@ -663,9 +691,7 @@ mod tests {
     async fn test_server_handles_request() {
         let mut server = ReamServer::new(0);
         server.on_request(Arc::new(|req| {
-            Box::pin(async move {
-                ReamResponse::text(200, format!("Hello from {}", req.path))
-            })
+            Box::pin(async move { ReamResponse::text(200, format!("Hello from {}", req.path)) })
         }));
         server.listen().await.unwrap();
         let port = server.actual_port().await;
@@ -768,11 +794,7 @@ mod tests {
         stream.read_to_string(&mut response).await.unwrap();
 
         // Extract body after the double CRLF
-        response
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("")
-            .to_string()
+        response.split("\r\n\r\n").nth(1).unwrap_or("").to_string()
     }
 
     async fn reqwest_like_post(port: u16, path: &str, body: &str) -> String {
@@ -792,10 +814,6 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).await.unwrap();
 
-        response
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("")
-            .to_string()
+        response.split("\r\n\r\n").nth(1).unwrap_or("").to_string()
     }
 }

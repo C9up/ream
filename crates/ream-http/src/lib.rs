@@ -21,7 +21,7 @@ pub mod websocket;
 pub use cookies::parse_cookie_header;
 pub use ip::{ip_in_cidr, resolve_client_ip};
 pub use multipart::{
-    MultipartField, MultipartFilePayload, MultipartPayload, extract_boundary, parse_multipart,
+    extract_boundary, parse_multipart, MultipartField, MultipartFilePayload, MultipartPayload,
 };
 pub use ratelimit::{RateLimitConfig, RateLimitOutcome, RateLimiter};
 pub use request::ReamRequest;

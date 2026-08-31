@@ -74,7 +74,8 @@ impl MemoryStore {
             return;
         }
         // Remove completed events first (Success, then Failed)
-        let to_remove: Vec<String> = events.iter()
+        let to_remove: Vec<String> = events
+            .iter()
             .filter(|(_, t)| matches!(t.status, EventStatus::Success | EventStatus::Failed { .. }))
             .map(|(id, _)| id.clone())
             .collect();
@@ -146,15 +147,22 @@ impl EventStore for MemoryStore {
 
     fn get_pending(&self) -> Vec<TrackedEvent> {
         let store = self.events.lock().unwrap_or_else(|e| e.into_inner());
-        store.values()
-            .filter(|t| matches!(t.status, EventStatus::Pending | EventStatus::Retrying { .. }))
+        store
+            .values()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    EventStatus::Pending | EventStatus::Retrying { .. }
+                )
+            })
             .cloned()
             .collect()
     }
 
     fn get_failed(&self) -> Vec<TrackedEvent> {
         let store = self.events.lock().unwrap_or_else(|e| e.into_inner());
-        store.values()
+        store
+            .values()
             .filter(|t| matches!(t.status, EventStatus::Failed { .. }))
             .cloned()
             .collect()
@@ -206,10 +214,15 @@ mod tests {
         let id = event.id.clone();
         store.push(event, 3).unwrap();
 
-        store.ack(&id, EventStatus::Failed {
-            error: "DB error".to_string(),
-            severity: "critical".to_string(),
-        }).unwrap();
+        store
+            .ack(
+                &id,
+                EventStatus::Failed {
+                    error: "DB error".to_string(),
+                    severity: "critical".to_string(),
+                },
+            )
+            .unwrap();
 
         let tracked = store.get(&id).unwrap();
         assert!(matches!(tracked.status, EventStatus::Failed { .. }));
@@ -233,10 +246,15 @@ mod tests {
         let id = event.id.clone();
         store.push(event, 3).unwrap();
 
-        store.ack(&id, EventStatus::Failed {
-            error: "max retries".to_string(),
-            severity: "warning".to_string(),
-        }).unwrap();
+        store
+            .ack(
+                &id,
+                EventStatus::Failed {
+                    error: "max retries".to_string(),
+                    severity: "warning".to_string(),
+                },
+            )
+            .unwrap();
 
         let failed = store.get_failed();
         assert_eq!(failed.len(), 1);
@@ -249,7 +267,9 @@ mod tests {
         let id = event.id.clone();
         store.push(event, 3).unwrap();
 
-        store.ack(&id, EventStatus::Retrying { attempt: 1 }).unwrap();
+        store
+            .ack(&id, EventStatus::Retrying { attempt: 1 })
+            .unwrap();
         let tracked = store.get(&id).unwrap();
         assert_eq!(tracked.retry_count, 1);
     }

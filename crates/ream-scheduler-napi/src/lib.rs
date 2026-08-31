@@ -95,12 +95,7 @@ impl RustScheduler {
     /// Throws with `DUPLICATE_TASK` if `name` already exists, or
     /// `INVALID_CRON` if the expression is malformed.
     #[napi]
-    pub fn register(
-        &self,
-        name: String,
-        cron_expr: String,
-        callback: JsFunction,
-    ) -> Result<()> {
+    pub fn register(&self, name: String, cron_expr: String, callback: JsFunction) -> Result<()> {
         // Routed through `ream_napi_core::callback::create_threadsafe_fn`
         // so all Ream NAPI crates share identical ThreadsafeFunction
         // setup (see ream-http-napi, ream-events-napi). Matches the
@@ -134,9 +129,7 @@ impl RustScheduler {
     pub fn start(&self) -> Result<()> {
         let inner = Arc::clone(&self.inner);
         catch_unwind_napi(std::panic::AssertUnwindSafe(move || {
-            inner
-                .start(shared_runtime())
-                .map_err(ream_err_to_napi)?;
+            inner.start(shared_runtime()).map_err(ream_err_to_napi)?;
             Ok(())
         }))
     }
@@ -180,7 +173,11 @@ mod tests {
         let napi_err: napi::Error = ream_err_to_napi(err);
         let reason = napi_err.reason;
         assert!(reason.contains("SCHED_TEST"), "code missing: {}", reason);
-        assert!(reason.contains("test failure"), "message missing: {}", reason);
+        assert!(
+            reason.contains("test failure"),
+            "message missing: {}",
+            reason
+        );
         assert!(reason.contains("test hint"), "hint missing: {}", reason);
         assert!(reason.contains("demo"), "context missing: {}", reason);
     }

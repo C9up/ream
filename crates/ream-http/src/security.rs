@@ -61,7 +61,10 @@ pub struct ShieldConfig {
 
 impl Default for ShieldConfig {
     fn default() -> Self {
-        Self { path_traversal: true, param_pollution: true }
+        Self {
+            path_traversal: true,
+            param_pollution: true,
+        }
     }
 }
 
@@ -86,9 +89,7 @@ impl ShieldFilter {
     fn reject_pollution(key: &str) -> ReamResponse {
         // Quote-escape the key so an attacker-controlled value can't break
         // out of the JSON envelope.
-        let escaped = key
-            .replace('\\', r"\\")
-            .replace('"', r#"\""#);
+        let escaped = key.replace('\\', r"\\").replace('"', r#"\""#);
         ReamResponse::json(
             400,
             format!(
@@ -162,7 +163,11 @@ mod tests {
     fn req(path: &str, query: &str) -> ReamRequest {
         ReamRequest::from_hyper(
             "GET",
-            &if query.is_empty() { path.to_string() } else { format!("{}?{}", path, query) },
+            &if query.is_empty() {
+                path.to_string()
+            } else {
+                format!("{}?{}", path, query)
+            },
             HashMap::new(),
             String::new(),
         )
@@ -237,7 +242,10 @@ mod tests {
 
     #[test]
     fn shield_respects_path_traversal_disabled() {
-        let f = ShieldFilter::new(ShieldConfig { path_traversal: false, param_pollution: true });
+        let f = ShieldFilter::new(ShieldConfig {
+            path_traversal: false,
+            param_pollution: true,
+        });
         match f.check(req("/x/../y", "")) {
             FilterResult::Allow(_) => {}
             _ => panic!("disabled path-traversal check must let `..` through"),
@@ -246,7 +254,10 @@ mod tests {
 
     #[test]
     fn shield_respects_param_pollution_disabled() {
-        let f = ShieldFilter::new(ShieldConfig { path_traversal: true, param_pollution: false });
+        let f = ShieldFilter::new(ShieldConfig {
+            path_traversal: true,
+            param_pollution: false,
+        });
         match f.check(req("/x", "a=1&a=2")) {
             FilterResult::Allow(_) => {}
             _ => panic!("disabled param-pollution check must let duplicates through"),

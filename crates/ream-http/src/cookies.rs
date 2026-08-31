@@ -71,7 +71,10 @@ mod tests {
         // Base64-padded JWT-style values often contain `=`. The split-on-first-=
         // semantics must preserve them.
         let parsed = parse_cookie_header("session=eyJhbGc=.eyJzdWI=.SIGN==");
-        assert_eq!(parsed.get("session"), Some(&"eyJhbGc=.eyJzdWI=.SIGN==".to_string()));
+        assert_eq!(
+            parsed.get("session"),
+            Some(&"eyJhbGc=.eyJzdWI=.SIGN==".to_string())
+        );
     }
 
     #[test]

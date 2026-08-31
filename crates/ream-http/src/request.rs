@@ -70,7 +70,12 @@ fn default_body_encoding() -> String {
 
 impl ReamRequest {
     /// Create a ReamRequest from a hyper Request.
-    pub fn from_hyper(method: &str, uri: &str, headers: HashMap<String, String>, body: String) -> Self {
+    pub fn from_hyper(
+        method: &str,
+        uri: &str,
+        headers: HashMap<String, String>,
+        body: String,
+    ) -> Self {
         Self::from_hyper_with_addr(method, uri, headers, body, String::new())
     }
 
@@ -108,7 +113,12 @@ mod tests {
 
     #[test]
     fn test_request_from_hyper_with_query() {
-        let req = ReamRequest::from_hyper("GET", "/api/orders?page=1&limit=20", HashMap::new(), String::new());
+        let req = ReamRequest::from_hyper(
+            "GET",
+            "/api/orders?page=1&limit=20",
+            HashMap::new(),
+            String::new(),
+        );
         assert_eq!(req.method, "GET");
         assert_eq!(req.path, "/api/orders");
         assert_eq!(req.query, "page=1&limit=20");

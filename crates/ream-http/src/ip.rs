@@ -51,7 +51,9 @@ pub fn resolve_client_ip(
     let any_trusted = trusted_proxies.iter().any(|s| s == "*");
     if !any_trusted {
         let peer_trusted = !remote_addr.is_empty()
-            && trusted_proxies.iter().any(|range| ip_in_cidr(remote_addr, range));
+            && trusted_proxies
+                .iter()
+                .any(|range| ip_in_cidr(remote_addr, range));
         if !peer_trusted {
             return non_empty_or_default(remote_addr);
         }
@@ -69,7 +71,11 @@ pub fn resolve_client_ip(
 }
 
 fn non_empty_or_default(s: &str) -> String {
-    if s.is_empty() { "127.0.0.1".to_string() } else { s.to_string() }
+    if s.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// True when `ip` falls inside the CIDR `range`. A bare IP (`10.0.0.42`)
@@ -108,7 +114,10 @@ mod tests {
     use super::*;
 
     fn h(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]

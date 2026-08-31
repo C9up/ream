@@ -49,7 +49,10 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("upgrade".to_string(), "websocket".to_string());
         headers.insert("connection".to_string(), "Upgrade".to_string());
-        headers.insert("sec-websocket-key".to_string(), "dGhlIHNhbXBsZSBub25jZQ==".to_string());
+        headers.insert(
+            "sec-websocket-key".to_string(),
+            "dGhlIHNhbXBsZSBub25jZQ==".to_string(),
+        );
 
         assert!(is_websocket_upgrade(&headers));
     }

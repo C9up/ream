@@ -13,10 +13,10 @@ use ream_http::{
     RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig,
     ShieldFilter, StreamRegistry,
 };
-use std::time::Duration;
 use ream_napi_core::catch_unwind_napi;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
 
 /// Typed response object crossing the TS→NAPI→Rust boundary.
@@ -95,7 +95,8 @@ impl HyperServer {
                 return Err(ream_napi_core::ream_error!(
                     "INVALID_PORT",
                     format!("Port {} exceeds maximum 65535", port_val)
-                ).into());
+                )
+                .into());
             }
             let port = port_val as u16;
             let host = match host.as_deref() {
@@ -105,8 +106,12 @@ impl HyperServer {
                     Err(_) => {
                         return Err(ream_napi_core::ream_error!(
                             "INVALID_HOST",
-                            format!("Invalid host '{}' — expected an IPv4 address or 'localhost'", h)
-                        ).into());
+                            format!(
+                                "Invalid host '{}' — expected an IPv4 address or 'localhost'",
+                                h
+                            )
+                        )
+                        .into());
                     }
                 },
             };
@@ -128,8 +133,8 @@ impl HyperServer {
     pub fn on_request(&self, callback: JsFunction) -> napi::Result<()> {
         // Pass request as serde_json::Value → JsObject (no string serialization).
         // Response comes back as JSON string (TS side still stringifies for now).
-        let tsfn: ThreadsafeFunction<serde_json::Value, ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<serde_json::Value>| {
+        let tsfn: ThreadsafeFunction<serde_json::Value, ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<serde_json::Value>| {
                 // Convert serde Value directly to JsObject (no JSON string intermediate)
                 let js_value = ctx.env.to_js_value(&ctx.value)?;
                 Ok(vec![js_value])
@@ -159,8 +164,9 @@ impl HyperServer {
         });
 
         // Store handler directly — std::sync::Mutex, no async needed
-        let mut guard = self.handler.lock()
-            .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Handler mutex poisoned"))?;
+        let mut guard = self.handler.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "Handler mutex poisoned")
+        })?;
         *guard = Some(handler);
 
         Ok(())
@@ -171,8 +177,12 @@ impl HyperServer {
     /// (any peer can populate `X-Forwarded-For`).
     #[napi]
     pub fn configure_trusted_proxies(&self, cidrs: Vec<String>) -> napi::Result<()> {
-        let mut guard = self.trusted_proxies.lock()
-            .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Trusted-proxies mutex poisoned"))?;
+        let mut guard = self.trusted_proxies.lock().map_err(|_| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "Trusted-proxies mutex poisoned",
+            )
+        })?;
         *guard = cidrs;
         Ok(())
     }
@@ -181,8 +191,9 @@ impl HyperServer {
     /// disable. Must be called BEFORE `listen()`.
     #[napi]
     pub fn configure_rate_limit(&self, config: Option<NapiRateLimitConfig>) -> napi::Result<()> {
-        let mut guard = self.rate_limiter.lock()
-            .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Rate-limiter mutex poisoned"))?;
+        let mut guard = self.rate_limiter.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "Rate-limiter mutex poisoned")
+        })?;
         *guard = config.map(|c| {
             Arc::new(RateLimiter::new(RateLimitConfig {
                 max: c.max,
@@ -197,7 +208,9 @@ impl HyperServer {
     /// when the server starts. Calling after `listen()` has no effect.
     #[napi]
     pub fn configure_shield(&self, config: NapiShieldConfig) -> napi::Result<()> {
-        let mut guard = self.shield.lock()
+        let mut guard = self
+            .shield
+            .lock()
             .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Shield mutex poisoned"))?;
         *guard = Some(ShieldConfig {
             path_traversal: config.path_traversal,
@@ -210,9 +223,15 @@ impl HyperServer {
     #[napi]
     pub async fn listen(&self) -> napi::Result<()> {
         let handler = {
-            let guard = self.handler.lock()
-                .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Handler mutex poisoned"))?;
-            guard.clone().ok_or_else(|| napi::Error::new(napi::Status::GenericFailure, "No handler registered. Call onRequest() before listen()"))?
+            let guard = self.handler.lock().map_err(|_| {
+                napi::Error::new(napi::Status::GenericFailure, "Handler mutex poisoned")
+            })?;
+            guard.clone().ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::GenericFailure,
+                    "No handler registered. Call onRequest() before listen()",
+                )
+            })?
         };
 
         let port = self.port;
@@ -229,8 +248,9 @@ impl HyperServer {
         // Wire the shield filter if the JS side configured it before boot.
         // No call → no filter installed (server runs with `NoopFilter`).
         let shield = {
-            let guard = self.shield.lock()
-                .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Shield mutex poisoned"))?;
+            let guard = self.shield.lock().map_err(|_| {
+                napi::Error::new(napi::Status::GenericFailure, "Shield mutex poisoned")
+            })?;
             *guard
         };
         if let Some(config) = shield {
@@ -239,16 +259,21 @@ impl HyperServer {
 
         // Wire trusted-proxy CIDR list — drives `request.ip` resolution.
         let trusted = {
-            let guard = self.trusted_proxies.lock()
-                .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Trusted-proxies mutex poisoned"))?;
+            let guard = self.trusted_proxies.lock().map_err(|_| {
+                napi::Error::new(
+                    napi::Status::GenericFailure,
+                    "Trusted-proxies mutex poisoned",
+                )
+            })?;
             guard.clone()
         };
         srv.set_trusted_proxies(trusted);
 
         // Wire rate limiter — pre-NAPI throttle keyed by `request.ip`.
         let limiter = {
-            let guard = self.rate_limiter.lock()
-                .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Rate-limiter mutex poisoned"))?;
+            let guard = self.rate_limiter.lock().map_err(|_| {
+                napi::Error::new(napi::Status::GenericFailure, "Rate-limiter mutex poisoned")
+            })?;
             guard.clone()
         };
         srv.set_rate_limiter(limiter);
@@ -288,8 +313,18 @@ impl HyperServer {
         // Wait for the server to bind (no sleep — proper signal)
         match ready_rx.await {
             Ok(None) => {} // Success
-            Ok(Some(e)) => return Err(napi::Error::new(napi::Status::GenericFailure, format!("Server bind failed: {}", e))),
-            Err(_) => return Err(napi::Error::new(napi::Status::GenericFailure, "Server startup channel closed")),
+            Ok(Some(e)) => {
+                return Err(napi::Error::new(
+                    napi::Status::GenericFailure,
+                    format!("Server bind failed: {}", e),
+                ))
+            }
+            Err(_) => {
+                return Err(napi::Error::new(
+                    napi::Status::GenericFailure,
+                    "Server startup channel closed",
+                ))
+            }
         }
 
         // Shared runtime — no need to store (it's static)
@@ -302,7 +337,10 @@ impl HyperServer {
         let srv = self.server.lock().await;
         match srv.as_ref() {
             Some(s) => Ok(s.actual_port().await as u32),
-            None => Err(napi::Error::new(napi::Status::GenericFailure, "Server not started")),
+            None => Err(napi::Error::new(
+                napi::Status::GenericFailure,
+                "Server not started",
+            )),
         }
     }
 
@@ -428,10 +466,9 @@ impl HyperServer {
         callback: JsFunction,
     ) -> napi::Result<()> {
         let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> = callback
-            .create_threadsafe_function(
-                0,
-                |ctx: ThreadSafeCallContext<()>| Ok(vec![ctx.env.get_undefined()?]),
-            )?;
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
+                Ok(vec![ctx.env.get_undefined()?])
+            })?;
         let registry = self.stream_registry.clone();
         let rt = ream_napi_core::shared_runtime();
         rt.spawn(async move {
@@ -516,9 +553,7 @@ pub fn bcrypt_verify(password: String, hash: String) -> napi::Result<bool> {
 /// Constant-time string comparison.
 #[napi]
 pub fn constant_time_eq(a: String, b: String) -> napi::Result<bool> {
-    catch_unwind_napi(|| {
-        Ok(warden_engine::constant_time_eq(a.as_bytes(), b.as_bytes()))
-    })
+    catch_unwind_napi(|| Ok(warden_engine::constant_time_eq(a.as_bytes(), b.as_bytes())))
 }
 
 /// HMAC-SHA256 sign. Returns base64url signature.

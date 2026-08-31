@@ -151,8 +151,7 @@ fn extract_fields(
             Selection::InlineFragment(inline) => {
                 // Inline fragments (`... on Type { ... }` / `... { ... }`) have no
                 // name to cycle on; expand their selection set in place.
-                let mut expanded =
-                    extract_fields(&inline.selection_set.items, fragments, visiting);
+                let mut expanded = extract_fields(&inline.selection_set.items, fragments, visiting);
                 fields.append(&mut expanded);
             }
         }
@@ -165,14 +164,12 @@ fn extract_fields(
 fn graphql_value_to_json(value: &Value<String>) -> serde_json::Value {
     match value {
         Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Int(n) => serde_json::Value::Number(
-            serde_json::Number::from(n.as_i64().unwrap_or(0)),
-        ),
-        Value::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
+        Value::Int(n) => {
+            serde_json::Value::Number(serde_json::Number::from(n.as_i64().unwrap_or(0)))
         }
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         Value::Boolean(b) => serde_json::Value::Bool(*b),
         Value::Null => serde_json::Value::Null,
         Value::Enum(e) => serde_json::Value::String(e.clone()),
@@ -257,14 +254,16 @@ mod tests {
 
     #[test]
     fn test_parse_mutation_with_args() {
-        let result = parse_graphql_query(r#"
+        let result = parse_graphql_query(
+            r#"
             mutation {
                 createTask(title: "Fix bug", urgency: "high") {
                     id
                     title
                 }
             }
-        "#);
+        "#,
+        );
         assert_eq!(result.operation_type, "mutation");
         assert_eq!(result.fields[0].name, "createTask");
         assert_eq!(result.fields[0].args.get("title").unwrap(), "Fix bug");
@@ -273,7 +272,8 @@ mod tests {
 
     #[test]
     fn test_parse_query_with_variables() {
-        let result = parse_graphql_query(r#"
+        let result = parse_graphql_query(
+            r#"
             query GetTask($id: ID!) {
                 task(id: $id) {
                     id
@@ -281,7 +281,8 @@ mod tests {
                     status
                 }
             }
-        "#);
+        "#,
+        );
         assert_eq!(result.operation_type, "query");
         assert_eq!(result.operation_name, Some("GetTask".to_string()));
         assert_eq!(result.fields[0].name, "task");
@@ -299,8 +300,14 @@ mod tests {
         let result = parse_graphql_query("{ users { posts { comments { text } } } }");
         assert_eq!(result.fields[0].name, "users");
         assert_eq!(result.fields[0].sub_fields[0].name, "posts");
-        assert_eq!(result.fields[0].sub_fields[0].sub_fields[0].name, "comments");
-        assert_eq!(result.fields[0].sub_fields[0].sub_fields[0].sub_fields[0].name, "text");
+        assert_eq!(
+            result.fields[0].sub_fields[0].sub_fields[0].name,
+            "comments"
+        );
+        assert_eq!(
+            result.fields[0].sub_fields[0].sub_fields[0].sub_fields[0].name,
+            "text"
+        );
     }
 
     #[test]
@@ -345,9 +352,7 @@ mod tests {
     fn test_cyclic_fragment_does_not_loop() {
         // A self-referential fragment must not recurse forever; the cycle guard
         // skips the re-entry and the parse simply terminates.
-        let result = parse_graphql_query(
-            "query { task { ...A } } fragment A on Task { id ...A }",
-        );
+        let result = parse_graphql_query("query { task { ...A } } fragment A on Task { id ...A }");
         assert!(result.errors.is_empty());
         let names: Vec<&str> = result.fields[0]
             .sub_fields

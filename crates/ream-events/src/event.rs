@@ -87,7 +87,10 @@ fn chrono_now() -> String {
     // Days since epoch to year/month/day (simplified civil calendar)
     let (year, month, day) = days_to_date(days);
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 /// Convert days since Unix epoch to (year, month, day).

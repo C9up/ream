@@ -67,11 +67,10 @@ where
     // JS receive only the payload, matching the TS signature naturally.
     // HTTP-NAPI uses `ErrorStrategy::Fatal` directly (not via this
     // helper), so no cross-crate surface changes.
-    js_fn
-        .create_threadsafe_function(config.max_queue_size, |ctx: ThreadSafeCallContext<T>| {
-            let value = ctx.env.to_js_value(&ctx.value)?;
-            Ok(vec![value])
-        })
+    js_fn.create_threadsafe_function(config.max_queue_size, |ctx: ThreadSafeCallContext<T>| {
+        let value = ctx.env.to_js_value(&ctx.value)?;
+        Ok(vec![value])
+    })
 }
 
 /// Call a ThreadsafeFunction with the given data, non-blocking.
@@ -100,7 +99,10 @@ pub fn call_threadsafe_fn_blocking<T: 'static + Send + serde::Serialize>(
     if status == napi::Status::Ok {
         Ok(())
     } else {
-        Err(napi::Error::new(status, "ThreadsafeFunction blocking call failed"))
+        Err(napi::Error::new(
+            status,
+            "ThreadsafeFunction blocking call failed",
+        ))
     }
 }
 

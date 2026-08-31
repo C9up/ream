@@ -8,8 +8,8 @@ use crate::router::{EventHandler, EventRouter, SubscriptionId};
 use crate::store::EventStore;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 
 /// Request handler — receives event, returns response data string.
@@ -125,12 +125,16 @@ impl Bus {
         let result = tokio::time::timeout(
             Duration::from_millis(timeout_ms),
             tokio::task::spawn_blocking(move || handler(event)),
-        ).await;
+        )
+        .await;
 
         match result {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(e)) => Err(format!("Handler panicked: {:?}", e)),
-            Err(_) => Err(format!("Request '{}' timed out after {}ms", name, timeout_ms)),
+            Err(_) => Err(format!(
+                "Request '{}' timed out after {}ms",
+                name, timeout_ms
+            )),
         }
     }
 
@@ -166,27 +170,31 @@ impl Bus {
                 let permit = match retry_semaphore.acquire_owned().await {
                     Ok(permit) => permit,
                     Err(_) => {
-                        eprintln!("[events] retry semaphore closed, dropping event '{}'", event.name);
+                        eprintln!(
+                            "[events] retry semaphore closed, dropping event '{}'",
+                            event.name
+                        );
                         return;
                     }
                 };
 
                 let _permit = permit;
-                let result = retry::execute_with_retry(
-                    &handler,
-                    &event,
-                    &config,
-                    store.as_ref(),
-                ).await;
+                let result =
+                    retry::execute_with_retry(&handler, &event, &config, store.as_ref()).await;
 
                 // On final failure: persist and emit service.error event
                 if let Err(ref error_msg) = result {
                     let error_event = retry::create_error_event(&event, error_msg, "error");
                     if let Some(ref store) = store {
                         if let Err(e) = store.push(error_event.clone(), 0) {
-                            eprintln!("[events] store push failed for '{}': {}", error_event.name, e);
+                            eprintln!(
+                                "[events] store push failed for '{}': {}",
+                                error_event.name, e
+                            );
                         }
-                        if let Err(e) = store.ack(&error_event.id, crate::store::EventStatus::Success) {
+                        if let Err(e) =
+                            store.ack(&error_event.id, crate::store::EventStatus::Success)
+                        {
                             eprintln!("[events] store ack failed for '{}': {}", error_event.id, e);
                         }
                     }
@@ -222,10 +230,14 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
         let c = count.clone();
 
-        bus.subscribe("order.created", Arc::new(move |event| {
-            assert_eq!(event.name, "order.created");
-            c.fetch_add(1, Ordering::Relaxed);
-        })).await;
+        bus.subscribe(
+            "order.created",
+            Arc::new(move |event| {
+                assert_eq!(event.name, "order.created");
+                c.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .await;
 
         let event = bus.emit("order.created", r#"{"orderId":"123"}"#).await;
         assert_eq!(event.name, "order.created");
@@ -241,10 +253,22 @@ mod tests {
         let count2 = Arc::new(AtomicUsize::new(0));
 
         let c1 = count1.clone();
-        bus1.subscribe("test", Arc::new(move |_| { c1.fetch_add(1, Ordering::Relaxed); })).await;
+        bus1.subscribe(
+            "test",
+            Arc::new(move |_| {
+                c1.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .await;
 
         let c2 = count2.clone();
-        bus2.subscribe("test", Arc::new(move |_| { c2.fetch_add(1, Ordering::Relaxed); })).await;
+        bus2.subscribe(
+            "test",
+            Arc::new(move |_| {
+                c2.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .await;
 
         bus1.emit("test", "{}").await;
 
@@ -267,16 +291,21 @@ mod tests {
     #[tokio::test]
     async fn test_bus_request_reply() {
         let bus = Bus::new();
-        bus.on_request("order.validate", Arc::new(|event| {
-            let data: serde_json::Value = serde_json::from_str(&event.data).unwrap();
-            if data["amount"].as_f64().unwrap_or(0.0) > 0.0 {
-                r#"{"valid":true}"#.to_string()
-            } else {
-                r#"{"valid":false,"error":"Amount must be positive"}"#.to_string()
-            }
-        }));
+        bus.on_request(
+            "order.validate",
+            Arc::new(|event| {
+                let data: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+                if data["amount"].as_f64().unwrap_or(0.0) > 0.0 {
+                    r#"{"valid":true}"#.to_string()
+                } else {
+                    r#"{"valid":false,"error":"Amount must be positive"}"#.to_string()
+                }
+            }),
+        );
 
-        let response = bus.request("order.validate", r#"{"amount":42.50}"#, 5000).await;
+        let response = bus
+            .request("order.validate", r#"{"amount":42.50}"#, 5000)
+            .await;
         assert!(response.is_ok());
         let data: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
         assert_eq!(data["valid"], true);
@@ -293,10 +322,13 @@ mod tests {
     #[tokio::test]
     async fn test_bus_request_timeout() {
         let bus = Bus::new();
-        bus.on_request("slow", Arc::new(|_| {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            "response".to_string()
-        }));
+        bus.on_request(
+            "slow",
+            Arc::new(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                "response".to_string()
+            }),
+        );
 
         let result = bus.request("slow", "{}", 50).await; // 50ms timeout
         assert!(result.is_err());
@@ -309,9 +341,13 @@ mod tests {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let e = events.clone();
 
-        bus.subscribe("order.*", Arc::new(move |event| {
-            e.lock().unwrap().push(event.name.clone());
-        })).await;
+        bus.subscribe(
+            "order.*",
+            Arc::new(move |event| {
+                e.lock().unwrap().push(event.name.clone());
+            }),
+        )
+        .await;
 
         bus.emit("order.created", "{}").await;
         bus.emit("order.paid", "{}").await;
@@ -382,9 +418,17 @@ mod tests {
 
         bus.subscribe_with_retry(
             "order.created",
-            Arc::new(move |_| { c.fetch_add(1, Ordering::Relaxed); Ok(()) }),
-            RetryConfig { max_retries: 3, base_delay_ms: 1, max_delay_ms: 10 },
-        ).await;
+            Arc::new(move |_| {
+                c.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }),
+            RetryConfig {
+                max_retries: 3,
+                base_delay_ms: 1,
+                max_delay_ms: 10,
+            },
+        )
+        .await;
 
         bus.emit("order.created", "{}").await;
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -403,10 +447,19 @@ mod tests {
             "order.process",
             Arc::new(move |_| {
                 let n = a.fetch_add(1, Ordering::Relaxed);
-                if n < 2 { Err("transient".to_string()) } else { Ok(()) }
+                if n < 2 {
+                    Err("transient".to_string())
+                } else {
+                    Ok(())
+                }
             }),
-            RetryConfig { max_retries: 3, base_delay_ms: 1, max_delay_ms: 10 },
-        ).await;
+            RetryConfig {
+                max_retries: 3,
+                base_delay_ms: 1,
+                max_delay_ms: 10,
+            },
+        )
+        .await;
 
         bus.emit("order.process", "{}").await;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -423,15 +476,24 @@ mod tests {
         bus.subscribe_with_retry(
             "order.fail",
             Arc::new(|_| Err("permanent failure".to_string())),
-            RetryConfig { max_retries: 1, base_delay_ms: 1, max_delay_ms: 10 },
-        ).await;
+            RetryConfig {
+                max_retries: 1,
+                base_delay_ms: 1,
+                max_delay_ms: 10,
+            },
+        )
+        .await;
 
         // Capture service.error events
         let errors = Arc::new(std::sync::Mutex::new(Vec::new()));
         let e = errors.clone();
-        bus.subscribe("service.error", Arc::new(move |event| {
-            e.lock().unwrap().push(event);
-        })).await;
+        bus.subscribe(
+            "service.error",
+            Arc::new(move |event| {
+                e.lock().unwrap().push(event);
+            }),
+        )
+        .await;
 
         bus.emit("order.fail", "{}").await;
         tokio::time::sleep(Duration::from_millis(100)).await;
