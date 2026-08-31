@@ -41,7 +41,12 @@ export function isReamError(error: unknown, ...codes: string[]): boolean {
 }
 
 export class ReamError extends Error {
-  /** Error code (e.g., "ATLAS_QUERY_ERROR", "CONTAINER_NOT_FOUND") */
+  /**
+   * Error code, `E_`-prefixed as every framework code is — an application
+   * matching on one should never have to remember which convention a
+   * particular package followed (e.g. "E_ATLAS_QUERY_ERROR",
+   * "E_CONTAINER_NOT_FOUND").
+   */
   readonly code: string
 
   /** Additional context key-value pairs */

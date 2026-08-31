@@ -465,8 +465,14 @@ describe('Response body ceiling', () => {
 
     // Without a ceiling a large file did not fail — it grew until the process
     // died, with nothing naming the cause.
-    expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(/E_RESPONSE_TOO_LARGE/)
-    expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(/@c9up\/archive/)
+    // The code is on the error, not spelled into its message: an application
+    // deciding what to do with this matches on `code`.
+    expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(
+      expect.objectContaining({ code: 'E_RESPONSE_TOO_LARGE' }),
+    )
+    expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(
+      expect.objectContaining({ hint: expect.stringContaining('@c9up/archive') }),
+    )
   })
 
   it('covers download too, since it goes through the same door', async () => {
@@ -477,7 +483,9 @@ describe('Response body ceiling', () => {
       res.setMaxBodyBytes(1024)
       res.download(file)
 
-      await expect(res.finish()).rejects.toThrow(/E_RESPONSE_TOO_LARGE/)
+      await expect(res.finish()).rejects.toThrow(
+        expect.objectContaining({ code: 'E_RESPONSE_TOO_LARGE' }),
+      )
     } finally {
       rmSync(file)
     }

@@ -13,6 +13,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import etag from 'etag'
 import { contentType } from 'mime-types'
+import { ReamError } from '../errors/ReamError.js'
 import { durationToSeconds } from '../helpers/duration.js'
 
 /**
@@ -400,10 +401,18 @@ export class Response extends Macroable {
 
   #assertBodyFits(bytes: number): void {
     if (bytes <= this.#maxBodyBytes) return
-    throw new Error(
-      `[E_RESPONSE_TOO_LARGE] Response body is ${Math.round(bytes / 1_048_576)}MB, over the ${Math.round(this.#maxBodyBytes / 1_048_576)}MB ceiling. ` +
-        'The body is held whole in memory (and base64-encoded, ~2.3x) because responses are not streamed yet. ' +
-        'Raise `maxResponseBytes` in the kernel config, or serve large files with a signed URL from @c9up/archive.',
+    throw new ReamError(
+      'E_RESPONSE_TOO_LARGE',
+      `Response body is ${Math.round(bytes / 1_048_576)}MB, over the ${Math.round(this.#maxBodyBytes / 1_048_576)}MB ceiling.`,
+      {
+        context: {
+          bytes: String(bytes),
+          ceiling: String(this.#maxBodyBytes),
+        },
+        hint:
+          'The body is held whole in memory (and base64-encoded, ~2.3x) because responses are not streamed yet. ' +
+          'Raise `maxResponseBytes` in the kernel config, or serve large files with a signed URL from @c9up/archive.',
+      },
     )
   }
 
