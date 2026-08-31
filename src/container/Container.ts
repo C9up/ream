@@ -445,17 +445,27 @@ export class Container {
    * class is discovered when it is resolved, and nothing registers it before
    * that, so no complete list of those exists to return.
    */
-  get bindings(): ReadonlyArray<{ token: string; scope: string }> {
-    const seen = new Map<string, string>()
-    for (const [key, binding] of this.#bindings) seen.set(key, binding.scope)
+  get bindings(): ReadonlyArray<{ token: string; scope: string; target?: string }> {
+    const seen = new Map<string, { scope: string; target?: string }>()
+    for (const [key, binding] of this.#bindings) seen.set(key, { scope: binding.scope })
     for (const key of this.#singletons.keys()) {
-      if (!seen.has(key)) seen.set(key, 'value')
+      if (!seen.has(key)) seen.set(key, { scope: 'value' })
     }
-    for (const key of this.#aliases.keys()) {
-      if (!seen.has(key)) seen.set(key, 'alias')
+    // Aliases LAST and overwriting, because that is the order `resolve()` uses:
+    // it follows an alias before it ever looks at a binding. Reporting the
+    // binding for a token that also has an alias showed a definition nobody
+    // gets — `service` listed as transient while resolving it hands back
+    // `target`. Where both exist the alias is what runs, and the binding it
+    // shadows is named beside it rather than dropped.
+    for (const [key, target] of this.#aliases) {
+      const shadowed = seen.get(key)
+      seen.set(key, {
+        scope: shadowed === undefined ? 'alias' : `alias (shadows ${shadowed.scope})`,
+        target: this.#tokenToKey(target),
+      })
     }
     return [...seen.entries()]
-      .map(([token, scope]) => ({ token, scope }))
+      .map(([token, entry]) => ({ token, ...entry }))
       .sort((a, b) => a.token.localeCompare(b.token))
   }
 

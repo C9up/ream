@@ -10,12 +10,11 @@
  * A top-level type outside this list is malformed: an unregistered format
  * belongs under one of these trees, `application/x-…` rather than `x-foo/bar`.
  *
- * NAMED DEVIATION: AdonisJS types this `type?: string`. Closing it is the whole
- * point — a `string` is what let the wrong comparison compile — and it costs
- * one thing, stated plainly: a malformed top-level type reports `undefined`
- * here where upstream hands back the raw segment. {@link MultipartFile.mime}
- * still carries it, so nothing is lost, and the trade buys a compiler error in
- * place of a filter that silently matches nothing.
+ * Additive, not a replacement: {@link MultipartFile.type} keeps upstream's
+ * `string` and its raw segment, and {@link MultipartFile.registeredType}
+ * narrows it here for callers who want `=== 'image/png'` refused at compile
+ * time. Nothing a valid AdonisJS call site does stops compiling, and no type
+ * outside this set is swallowed — closing `type` itself would have done both.
  */
 export type MimeType =
   | 'application'
@@ -77,15 +76,28 @@ export class MultipartFile {
    * `image/png` would otherwise sail through a mime allowlist. A renamed file
    * reports what it actually is.
    *
-   * BREAKING as of 0.2.0: it used to hold the whole `image/png`. Typed as a
-   * closed union so `file.type === 'image/png'` is now a compile error rather
-   * than a comparison that always fails — use {@link mime} for a full mime.
+   * BREAKING as of 0.2.0: it used to hold the whole `image/png`. A comparison
+   * against a full mime — `file.type === 'image/png'` — compiles and never
+   * matches, which is what {@link mime} exists for, and what
+   * {@link registeredType} refuses at compile time for callers who want that.
    *
-   * `undefined` covers both "no mime could be determined" and a top-level type
-   * outside the registered set, which is malformed; {@link mime} still carries
-   * whatever was read.
+   * `string` and the raw segment, as upstream: a type outside the registered
+   * set is still reported rather than swallowed.
    */
-  get type(): MimeType | undefined {
+  get type(): string | undefined {
+    return this.#mimeParts()[0]
+  }
+
+  /**
+   * The same primary type, narrowed to what IANA registers.
+   *
+   * Additive, and the point of it: against a closed union
+   * `file.registeredType === 'image/png'` is a compile error instead of a
+   * comparison that always fails. `undefined` where {@link type} holds
+   * something outside the set — a malformed or unregistered tree — so the two
+   * disagree exactly there and nowhere else.
+   */
+  get registeredType(): MimeType | undefined {
     const type = this.#mimeParts()[0]
     return type !== undefined && isMimeType(type) ? type : undefined
   }

@@ -487,9 +487,26 @@ describe('Container > what it holds can be listed', () => {
       // bindValue records a singleton binding, so it reads as one.
       { token: 'config', scope: 'singleton' },
       { token: 'mailer', scope: 'transient' },
-      { token: 'r', scope: 'alias' },
+      { token: 'r', scope: 'alias', target: 'router' },
       { token: 'router', scope: 'singleton' },
     ])
+  })
+
+  it('reports the alias when a token has both, because that is what resolves', async () => {
+    const container = new Container()
+    container.bindValue('target', 'from-target')
+    container.bind('service', () => 'from-binding')
+    container.alias('service', 'target')
+
+    // `resolve()` follows an alias before it looks at a binding, so listing
+    // the binding showed a definition nobody gets: `service` reported as
+    // transient while resolving it hands back `target`.
+    expect(await container.resolve('service')).toBe('from-target')
+    expect(container.bindings).toContainEqual({
+      token: 'service',
+      scope: 'alias (shadows transient)',
+      target: 'target',
+    })
   })
 
   it('is empty on a fresh container', () => {
