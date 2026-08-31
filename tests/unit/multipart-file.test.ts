@@ -258,8 +258,20 @@ describe('MultipartFile > AdonisJS surface', () => {
 
   it('survives a content-type with no slash rather than inventing a subtype', () => {
     const f = upload('a.bin', 'garbage')
-    expect(f.type).toBe('garbage')
+
+    // `type` is the registered top-level set and `garbage` is not in it, so
+    // there is no primary type to report — but nothing is lost: `mime` still
+    // carries exactly what was read.
+    expect(f.type).toBeUndefined()
     expect(f.subtype).toBeUndefined()
+    expect(f.mime).toBe('garbage')
+  })
+
+  it('reports no primary type for an unregistered tree, keeping the mime', () => {
+    const f = upload('a.bin', 'x-foo/bar')
+
+    expect(f.type).toBeUndefined()
+    expect(f.mime).toBe('x-foo/bar')
   })
 
   it('move() writes the file and records where it went', async () => {

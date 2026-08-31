@@ -1,4 +1,46 @@
 /**
+ * The top-level mime types IANA registers.
+ *
+ * Closed on purpose. Typing {@link MultipartFile.type} as a bare `string` let
+ * `file.type === 'image/png'` compile and quietly never match — a mime filter
+ * that passes everything, which is the shape a comment used to warn about and
+ * a compiler can simply refuse. Against this union that comparison is an
+ * error, and {@link MultipartFile.mime} is what a full-mime check wants.
+ *
+ * A top-level type outside this list is malformed: an unregistered format
+ * belongs under one of these trees, `application/x-…` rather than `x-foo/bar`.
+ */
+export type MimeType =
+  | 'application'
+  | 'audio'
+  | 'example'
+  | 'font'
+  | 'image'
+  | 'message'
+  | 'model'
+  | 'multipart'
+  | 'text'
+  | 'video'
+
+const MIME_TYPES = new Set<string>([
+  'application',
+  'audio',
+  'example',
+  'font',
+  'image',
+  'message',
+  'model',
+  'multipart',
+  'text',
+  'video',
+])
+
+/** Whether a parsed top-level type is one IANA registers. */
+function isMimeType(value: string): value is MimeType {
+  return MIME_TYPES.has(value)
+}
+
+/**
  * MultipartFile — represents an uploaded file.
  *
  * Like AdonisJS MultipartFile:
@@ -28,12 +70,17 @@ export class MultipartFile {
    * `image/png` would otherwise sail through a mime allowlist. A renamed file
    * reports what it actually is.
    *
-   * BREAKING as of 0.2.0: it used to hold the whole `image/png`. TypeScript
-   * cannot catch a comparison against a full mime string — `file.type ===
-   * 'image/png'` still compiles and simply never matches. Use {@link mime}.
+   * BREAKING as of 0.2.0: it used to hold the whole `image/png`. Typed as a
+   * closed union so `file.type === 'image/png'` is now a compile error rather
+   * than a comparison that always fails — use {@link mime} for a full mime.
+   *
+   * `undefined` covers both "no mime could be determined" and a top-level type
+   * outside the registered set, which is malformed; {@link mime} still carries
+   * whatever was read.
    */
-  get type(): string | undefined {
-    return this.#mimeParts()[0]
+  get type(): MimeType | undefined {
+    const type = this.#mimeParts()[0]
+    return type !== undefined && isMimeType(type) ? type : undefined
   }
 
   /** The mime SUBTYPE — `png` for `image/png`. Same source as {@link type}. */

@@ -434,6 +434,31 @@ export class Container {
 
   // ─── Introspection ────────────────────────────────────────
 
+  /**
+   * Every token the container holds, sorted, with the kind beside it.
+   *
+   * `ream inspect` advertised a section for these and rendered none, because
+   * nothing could enumerate them — `has()` answers about one token you already
+   * know the name of, which is no help when the question is what is in there.
+   *
+   * These are bindings, not every `@inject()`-decorated class: a decorated
+   * class is discovered when it is resolved, and nothing registers it before
+   * that, so no complete list of those exists to return.
+   */
+  get bindings(): ReadonlyArray<{ token: string; scope: string }> {
+    const seen = new Map<string, string>()
+    for (const [key, binding] of this.#bindings) seen.set(key, binding.scope)
+    for (const key of this.#singletons.keys()) {
+      if (!seen.has(key)) seen.set(key, 'value')
+    }
+    for (const key of this.#aliases.keys()) {
+      if (!seen.has(key)) seen.set(key, 'alias')
+    }
+    return [...seen.entries()]
+      .map(([token, scope]) => ({ token, scope }))
+      .sort((a, b) => a.token.localeCompare(b.token))
+  }
+
   /** Check if a token is registered or resolvable. */
   has(token: ServiceToken): boolean {
     const key = this.#tokenToKey(token)

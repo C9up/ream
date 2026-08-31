@@ -471,3 +471,28 @@ describe('container > resolving() hooks', () => {
     expect(seen).toEqual(['resolved'])
   })
 })
+
+describe('Container > what it holds can be listed', () => {
+  it('names every binding with its kind, sorted', async () => {
+    const container = new Container()
+    container.singleton('router', () => ({}))
+    container.bind('mailer', () => ({}))
+    container.bindValue('config', { a: 1 })
+    container.alias('r', 'router')
+
+    // `inspect` advertised a section for these and rendered none: `has()`
+    // answers about a token you already know the name of, which is no help
+    // when the question is what is in there.
+    expect(container.bindings).toEqual([
+      // bindValue records a singleton binding, so it reads as one.
+      { token: 'config', scope: 'singleton' },
+      { token: 'mailer', scope: 'transient' },
+      { token: 'r', scope: 'alias' },
+      { token: 'router', scope: 'singleton' },
+    ])
+  })
+
+  it('is empty on a fresh container', () => {
+    expect(new Container().bindings).toEqual([])
+  })
+})

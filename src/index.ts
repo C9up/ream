@@ -101,7 +101,7 @@ export { default as SessionMiddleware } from './session/SessionMiddleware.js'
 
 export type { BodyParserConfig } from './bodyparser/BodyParserMiddleware.js'
 export { default as BodyParserMiddleware } from './bodyparser/BodyParserMiddleware.js'
-export type { FileValidationOptions } from './bodyparser/MultipartFile.js'
+export type { FileValidationOptions, MimeType } from './bodyparser/MultipartFile.js'
 export { MultipartFile } from './bodyparser/MultipartFile.js'
 
 // ─── JSON-RPC ───────────────────────────────────────────────
