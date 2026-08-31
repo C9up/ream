@@ -9,6 +9,13 @@
  *
  * A top-level type outside this list is malformed: an unregistered format
  * belongs under one of these trees, `application/x-…` rather than `x-foo/bar`.
+ *
+ * NAMED DEVIATION: AdonisJS types this `type?: string`. Closing it is the whole
+ * point — a `string` is what let the wrong comparison compile — and it costs
+ * one thing, stated plainly: a malformed top-level type reports `undefined`
+ * here where upstream hands back the raw segment. {@link MultipartFile.mime}
+ * still carries it, so nothing is lost, and the trade buys a compiler error in
+ * place of a filter that silently matches nothing.
  */
 export type MimeType =
   | 'application'
