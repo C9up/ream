@@ -286,7 +286,7 @@ export {
 export type { PipelineStageName } from './errors/PipelineStageError.js'
 export {
   createPipelineError,
-  E_PIPELINE_STAGES,
+  PIPELINE_STAGES,
   validatePipelineConfig,
 } from './errors/PipelineStageError.js'
 export { isReamError, ReamError } from './errors/ReamError.js'

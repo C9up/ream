@@ -58,23 +58,23 @@ describe('Env.schema optionalWhen', () => {
 describe('Env.get / set (AdonisJS parity)', () => {
   const saved = { ...process.env }
   afterEach(() => {
-    for (const k of ['E_PORT', 'E_UNVALIDATED']) delete process.env[k]
-    if (saved.E_PORT !== undefined) process.env.E_PORT = saved.E_PORT
+    for (const k of ['PORT', 'UNVALIDATED']) delete process.env[k]
+    if (saved.PORT !== undefined) process.env.PORT = saved.PORT
   })
 
   it('reads a validated key, sets it, and falls back to process.env for unknown keys', async () => {
-    process.env.E_PORT = '3000'
-    const env = await Env.create(NOWHERE, { E_PORT: Env.schema.number() })
-    expect(env.get('E_PORT')).toBe(3000)
+    process.env.PORT = '3000'
+    const env = await Env.create(NOWHERE, { PORT: Env.schema.number() })
+    expect(env.get('PORT')).toBe(3000)
 
-    env.set('E_PORT', 4000)
-    expect(env.get('E_PORT')).toBe(4000)
-    expect(process.env.E_PORT).toBe('4000')
+    env.set('PORT', 4000)
+    expect(env.get('PORT')).toBe(4000)
+    expect(process.env.PORT).toBe('4000')
 
     // Unknown key → raw process.env fallback + default.
-    process.env.E_UNVALIDATED = 'xyz'
-    expect(env.get('E_UNVALIDATED')).toBe('xyz')
-    expect(env.get('E_ABSENT', 'fallback')).toBe('fallback')
+    process.env.UNVALIDATED = 'xyz'
+    expect(env.get('UNVALIDATED')).toBe('xyz')
+    expect(env.get('ABSENT', 'fallback')).toBe('fallback')
   })
 })
 

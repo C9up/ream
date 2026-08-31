@@ -6,8 +6,14 @@
 
 import { ReamError } from './ReamError.js'
 
-/** Pipeline stage names in execution order. */
-export const E_PIPELINE_STAGES = [
+/**
+ * Pipeline stage names in execution order.
+ *
+ * NOT an error code, despite living beside them — it is the list of stages, and
+ * an application imports it by this name. The `E_` prefix belongs to codes
+ * alone; a rename here breaks a public import for nothing.
+ */
+export const PIPELINE_STAGES = [
   'Security (Blackhole)',
   'Logging',
   'Global Middleware',
@@ -20,12 +26,12 @@ export const E_PIPELINE_STAGES = [
   'Response Logging',
 ] as const
 
-export type PipelineStageName = (typeof E_PIPELINE_STAGES)[number]
+export type PipelineStageName = (typeof PIPELINE_STAGES)[number]
 
 /**
  * Create a pipeline stage error with position context.
  *
- * @param stageIndex - Zero-based index in E_PIPELINE_STAGES (clamped to valid range)
+ * @param stageIndex - Zero-based index in PIPELINE_STAGES (clamped to valid range)
  * @param originalError - The error that occurred
  * @param context - Additional context
  */
@@ -34,11 +40,11 @@ export function createPipelineError(
   originalError: Error,
   context?: Record<string, string>,
 ): ReamError {
-  const total = E_PIPELINE_STAGES.length
+  const total = PIPELINE_STAGES.length
   const clampedIndex = Math.max(0, Math.min(stageIndex, total - 1))
-  const stageName = E_PIPELINE_STAGES[clampedIndex]
+  const stageName = PIPELINE_STAGES[clampedIndex]
   const position = `${clampedIndex + 1}/${total}`
-  const nextStage = clampedIndex + 1 < total ? E_PIPELINE_STAGES[clampedIndex + 1] : '(end)'
+  const nextStage = clampedIndex + 1 < total ? PIPELINE_STAGES[clampedIndex + 1] : '(end)'
 
   const errorCode = originalError instanceof ReamError ? originalError.code : 'E_PIPELINE_ERROR'
 
