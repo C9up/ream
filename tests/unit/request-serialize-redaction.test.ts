@@ -8,14 +8,14 @@ import { Request } from '../../src/http/Request.js'
 const request = (headers: Record<string, string>) =>
   new Request({ method: 'GET', path: '/orders', query: 'q=1', headers, body: '' }, {})
 
-describe('Request.serialize > credentials do not reach the log', () => {
+describe('Request.serializeSafe > credentials do not reach the log', () => {
   it('lists a credential header but not its value', () => {
     const serialized = request({
       authorization: 'Bearer sk_live_supersecret',
       cookie: 'session=abc',
       'x-api-key': 'k-live-1234',
       'user-agent': 'curl/8',
-    }).serialize()
+    }).serializeSafe()
     const headers = serialized.headers as Record<string, string>
 
     // Knowing the request carried an `authorization` header is most of what a
@@ -28,7 +28,7 @@ describe('Request.serialize > credentials do not reach the log', () => {
   })
 
   it('leaves every other header alone', () => {
-    const headers = request({ 'user-agent': 'curl/8', accept: 'application/json' }).serialize()
+    const headers = request({ 'user-agent': 'curl/8', accept: 'application/json' }).serializeSafe()
       .headers as Record<string, string>
 
     expect(headers['user-agent']).toBe('curl/8')
@@ -36,7 +36,7 @@ describe('Request.serialize > credentials do not reach the log', () => {
   })
 
   it('redacts whatever case the header arrived in', () => {
-    const headers = request({ Authorization: 'Bearer x' }).serialize().headers as Record<
+    const headers = request({ Authorization: 'Bearer x' }).serializeSafe().headers as Record<
       string,
       string
     >
@@ -45,7 +45,7 @@ describe('Request.serialize > credentials do not reach the log', () => {
   })
 
   it('still carries what a report is for', () => {
-    const serialized = request({ host: 'acme.test' }).serialize()
+    const serialized = request({ host: 'acme.test' }).serializeSafe()
 
     expect(serialized.method).toBe('GET')
     expect(serialized.qs).toEqual({ q: '1' })
@@ -55,7 +55,7 @@ describe('Request.serialize > credentials do not reach the log', () => {
   it('carries no body — the real values are still on headers()', () => {
     const req = request({ authorization: 'Bearer x' })
 
-    expect(req.serialize()).not.toHaveProperty('body')
+    expect(req.serializeSafe()).not.toHaveProperty('body')
     expect(req.headers().authorization).toBe('Bearer x')
   })
 })
@@ -89,5 +89,46 @@ describe('CookieSigner > a key anyone can read is not a key', () => {
     const { randomBytes } = await import('node:crypto')
 
     expect(() => new CookieSigner(randomBytes(32).toString('base64url'))).not.toThrow()
+  })
+})
+
+describe('Request.serialize > the dump upstream reports', () => {
+  it('carries the body, the cookies and the headers verbatim', () => {
+    const req = new Request(
+      {
+        method: 'POST',
+        path: '/login',
+        query: 'next=/home',
+        headers: { authorization: 'Bearer sk_live_x', cookie: 'session=abc' },
+        body: '',
+      },
+      {},
+    )
+
+    const json = req.serialize()
+
+    // Upstream's serialize() is a debugging dump, not a log-safe view. It is
+    // the caller's job not to put it in a log line.
+    expect(json.headers).toMatchObject({ authorization: 'Bearer sk_live_x' })
+    expect(json).toHaveProperty('body')
+    expect(json).toHaveProperty('cookies')
+    expect(json.query).toBe('next=/home')
+    expect(json.method).toBe('POST')
+  })
+
+  it('is what serializeSafe deliberately is not', () => {
+    const req = new Request(
+      {
+        method: 'GET',
+        path: '/x',
+        query: '',
+        headers: { authorization: 'Bearer sk_live_x' },
+        body: '',
+      },
+      {},
+    )
+
+    expect(JSON.stringify(req.serialize())).toContain('sk_live_x')
+    expect(JSON.stringify(req.serializeSafe())).not.toContain('sk_live_x')
   })
 })

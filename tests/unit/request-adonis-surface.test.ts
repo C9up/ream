@@ -98,13 +98,31 @@ describe('ream > content negotiation lists', () => {
 })
 
 describe('ream > serialization', () => {
-  it('carries no body — a log line is the last place credentials belong', () => {
+  it('reports the whole request, as upstream does', () => {
     const req = request({ 'x-request-id': 'abc' }, 'page=2')
+
     const json = req.serialize()
-    expect(json).toMatchObject({ id: 'abc', method: 'GET', host: 'app.test' })
-    expect(json).not.toHaveProperty('body')
+
+    // A debugging dump: every field upstream carries, including the ones that
+    // hold credentials. `serializeSafe()` is the one built for a log line.
+    expect(json).toMatchObject({
+      id: 'abc',
+      method: 'GET',
+      query: 'page=2',
+      protocol: 'http',
+      hostname: 'app.test',
+    })
+    for (const key of ['body', 'cookies', 'headers', 'params', 'ip', 'subdomains']) {
+      expect(json, key).toHaveProperty(key)
+    }
+  })
+
+  it('toJSON is the same view, under the name JSON.stringify reaches for', () => {
+    const req = request({ 'x-request-id': 'abc' }, 'page=2')
+
     expect(JSON.parse(JSON.stringify(req.toJSON()))).toMatchObject({
       url: '/posts?page=2',
     })
+    expect(req.toJSON()).toEqual(req.serialize())
   })
 })

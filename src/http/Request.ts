@@ -682,20 +682,47 @@ export class Request extends Macroable {
   }
 
   /**
-   * A JSON-safe view of the request, for logs and error reports.
+   * A JSON view of the request (AdonisJS `serialize`).
    *
-   * NAMED DEVIATION — upstream's `serialize()` is a full debugging dump: body,
-   * cookies and every header verbatim. This one is built for the place it
-   * actually gets used, which is a log line or an error report, and a log line
-   * is somewhere credentials must not land. So the body and the cookies stay
-   * out, and the headers that carry a credential come back as `[redacted]`
-   * rather than as their value — the header is still LISTED, because knowing
-   * that a request arrived with an `authorization` header is most of what a
-   * reader wants, and its contents are none of it.
+   * The whole request, as upstream reports it: body, cookies and every header
+   * verbatim. It is a debugging dump, and it carries credentials — an
+   * `authorization` header, a session cookie, a password field in the body.
    *
-   * Reach for `headers()` when the real values are what you need.
+   * Do not put it in a log line. {@link serializeSafe} is the one built for
+   * that.
    */
   serialize(): Record<string, unknown> {
+    return {
+      id: this.id(),
+      url: this.url(true),
+      query: this.parsedUrl().search?.slice(1) ?? '',
+      body: this.body(),
+      params: this.params(),
+      headers: this.headers(),
+      method: this.method(),
+      protocol: this.protocol(),
+      cookies: this.cookies(),
+      hostname: this.hostname(),
+      ip: this.ip(),
+      subdomains: this.subdomains(),
+    }
+  }
+
+  /** Same as {@link serialize} — what `JSON.stringify(request)` uses. */
+  toJSON(): Record<string, unknown> {
+    return this.serialize()
+  }
+
+  /**
+   * A view fit for a log line or an error report.
+   *
+   * Not upstream's — it has no such method, and its `serialize()` is a full
+   * dump. This one carries no body and no cookies, and the headers that hold a
+   * credential come back as `[redacted]` rather than as their value: the header
+   * is still LISTED, because knowing a request arrived with an `authorization`
+   * header is most of what a reader wants, and its contents are none of it.
+   */
+  serializeSafe(): Record<string, unknown> {
     return {
       id: this.id(),
       url: this.url(true),
@@ -706,11 +733,6 @@ export class Request extends Macroable {
       qs: this.qs(),
       params: this.params(),
     }
-  }
-
-  /** Same as {@link serialize} — what `JSON.stringify(request)` uses. */
-  toJSON(): Record<string, unknown> {
-    return this.serialize()
   }
 
   // ─── Query string ─────────────────────────────────────────
