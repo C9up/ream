@@ -283,7 +283,7 @@ export class Response extends Macroable {
   /** Send a JSON response. Sets content-type and stringifies. */
   json(data: unknown): void {
     this.#headers['content-type'] = 'application/json'
-    this.#body = safeStringify(data)
+    this.#setBody(safeStringify(data))
     this.#finished = true
   }
 
@@ -313,7 +313,7 @@ export class Response extends Macroable {
       c === '\u2028' ? '\\u2028' : '\\u2029',
     )
     this.#headers['content-type'] = 'text/javascript; charset=utf-8'
-    this.#body = `/**/ typeof ${safeCallback} === 'function' && ${safeCallback}(${json});`
+    this.#setBody(`/**/ typeof ${safeCallback} === 'function' && ${safeCallback}(${json});`)
     this.#finished = true
   }
 
@@ -328,7 +328,7 @@ export class Response extends Macroable {
           ? 'text/html; charset=utf-8'
           : 'text/plain; charset=utf-8'
       }
-      this.#body = data
+      this.#setBody(data)
     } else if (Buffer.isBuffer(data)) {
       // Without this branch a Buffer would hit the `typeof === 'object'`
       // path and be JSON-stringified into `{"type":"Buffer","data":[...]}`
@@ -337,12 +337,12 @@ export class Response extends Macroable {
       return
     } else if (typeof data === 'object' && data !== null) {
       this.#headers['content-type'] = 'application/json'
-      this.#body = safeStringify(data)
+      this.#setBody(safeStringify(data))
     } else if (data !== undefined && data !== null) {
       if (!this.#headers['content-type']) {
         this.#headers['content-type'] = 'text/plain'
       }
-      this.#body = String(data)
+      this.#setBody(String(data))
     }
     this.#finished = true
   }
@@ -381,6 +381,23 @@ export class Response extends Macroable {
    * `@c9up/archive` instead and let the client fetch it from storage — the
    * bytes then never pass through the server at all.
    */
+  /**
+   * Assign the body, refusing one too large to hold.
+   *
+   * Every textual path goes through here — `json()`, `send()`, `jsonp()`, a
+   * middleware rewriting the body. The ceiling used to live only in
+   * `sendBuffer()`, so `json(hugeObject)` and `send(hugeString)` walked past
+   * it and the process grew until it died, which is the failure the ceiling
+   * exists to name.
+   *
+   * Measured in UTF-8 BYTES, not characters: a string of accented or CJK text
+   * is one and a half to three times its length on the wire.
+   */
+  #setBody(body: string): void {
+    this.#assertBodyFits(Buffer.byteLength(body, 'utf8'))
+    this.#body = body
+  }
+
   #assertBodyFits(bytes: number): void {
     if (bytes <= this.#maxBodyBytes) return
     throw new Error(
@@ -1275,7 +1292,7 @@ export class Response extends Macroable {
 
   /** @internal Set body directly (used by redirect, exception handler). */
   setBody(body: string): void {
-    this.#body = body
+    this.#setBody(body)
     this.#finished = true
   }
 
