@@ -114,7 +114,7 @@ pub fn create_error_event(original_event: &Event, error: &str, severity: &str) -
         "severity": severity,
     });
 
-    let mut error_event = Event::new("service.error", &error_data.to_string());
+    let mut error_event = Event::new("service.error", error_data.to_string());
     error_event.correlation_id = original_event.correlation_id.clone();
     error_event.causation_id = Some(original_event.id.clone());
     error_event

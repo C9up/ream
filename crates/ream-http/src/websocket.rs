@@ -17,7 +17,7 @@ pub fn is_websocket_upgrade(headers: &std::collections::HashMap<String, String>)
     let connection = headers.get("connection").map(|v| v.to_lowercase());
 
     upgrade.as_deref() == Some("websocket")
-        && connection.map_or(false, |c| c.contains("upgrade"))
+        && connection.is_some_and(|c| c.contains("upgrade"))
         && headers.contains_key("sec-websocket-key")
 }
 
