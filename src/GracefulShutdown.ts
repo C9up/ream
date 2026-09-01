@@ -65,6 +65,9 @@ export function installGracefulShutdown(options: ShutdownOptions): ShutdownHandl
       // Second signal while draining — escalate immediately.
       logger.error('Forced exit: second signal received during shutdown')
       process.exit(1)
+      // Unreachable in production, load-bearing in a test: the suite replaces
+      // `process.exit` so it does not kill the runner, and without this the
+      // second signal would fall through and start a second shutdown.
       return
     }
     shutdown().catch((err) => {
