@@ -363,7 +363,7 @@ export class MultipartFile {
    * passing `file.clientName` straight through.
    */
   async move(location: string, options?: { name?: string; overwrite?: boolean }): Promise<void> {
-    const { mkdir, writeFile, access } = await import('node:fs/promises')
+    const { mkdir, writeFile } = await import('node:fs/promises')
     const { join } = await import('node:path')
 
     const name = options?.name ?? `${randomBytes(16).toString('hex')}.${this.extname || 'unknown'}`
@@ -374,20 +374,28 @@ export class MultipartFile {
     }
 
     const filePath = join(location, name)
-    if (options?.overwrite === false) {
-      const exists = await access(filePath).then(
-        () => true,
-        () => false,
-      )
-      if (exists) {
+    await mkdir(location, { recursive: true })
+
+    // NAMED DEVIATION — the refusal is ATOMIC where upstream's is not.
+    //
+    // Upstream checks `pathExists` and then renames, so two uploads landing on
+    // the same name both see nothing and both succeed: the second silently
+    // replaces the first, which is the one thing `overwrite: false` exists to
+    // prevent. `wx` is O_EXCL — the kernel decides, and exactly one of the two
+    // writes wins.
+    //
+    // The message is upstream's, word for word: a caller matching on it keeps
+    // working, and only the race is gone.
+    try {
+      await writeFile(filePath, this.content, options?.overwrite === false ? { flag: 'wx' } : {})
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         throw new Error(
           `"${name}" already exists at "${location}". Set "overwrite = true" to overwrite it`,
         )
       }
+      throw error
     }
-
-    await mkdir(location, { recursive: true })
-    await writeFile(filePath, this.content)
     this.markAsMoved(name, filePath)
   }
 

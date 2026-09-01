@@ -13,7 +13,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { ReamError } from '../errors/ReamError.js'
 import { durationToSeconds } from '../helpers/duration.js'
-import { etag } from './etag.js'
+import { etag, matchesIfNoneMatch } from './etag.js'
 import { contentType } from './mime.js'
 
 /**
@@ -738,12 +738,8 @@ export class Response extends Macroable {
     if (!((status >= 200 && status < 300) || status === 304)) return false
     const noneMatch = this.#request?.header('if-none-match')
     const currentEtag = this.getHeader('etag')
-    if (!noneMatch || !currentEtag) return false
-    if (noneMatch.trim() === '*') return true
-    return noneMatch.split(',').some((tag) => {
-      const t = tag.trim()
-      return t === currentEtag || t === `W/${currentEtag}` || `W/${t}` === currentEtag
-    })
+    if (!currentEtag) return false
+    return matchesIfNoneMatch(noneMatch, currentEtag)
   }
 
   /**

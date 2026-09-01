@@ -20,7 +20,7 @@ import type { ServiceToken } from './types.js'
 export class ContainerResolver {
   readonly #container: Container
   /** Values bound here, keyed the way the container keys its tokens. */
-  readonly #values = new Map<string, unknown>()
+  readonly #values = new Map<ServiceToken, unknown>()
 
   constructor(container: Container) {
     this.#container = container

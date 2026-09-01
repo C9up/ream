@@ -32,8 +32,8 @@ const RESERVED_TOKEN_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
 
 /** One resolution chain: the tokens on it, and a set for O(1) membership. */
 interface ResolutionChain {
-  stack: string[]
-  set: Set<string>
+  stack: ServiceToken[]
+  set: Set<ServiceToken>
   /**
    * Values bound on the {@link ContainerResolver} that opened this chain.
    *
@@ -42,7 +42,7 @@ interface ResolutionChain {
    * a controller's constructor dependency sees the same `HttpContext` the
    * middleware bound — and to nothing outside it.
    */
-  values?: ReadonlyMap<string, unknown>
+  values?: ReadonlyMap<ServiceToken, unknown>
   /**
    * How many scoped values this chain has handed out so far.
    *
@@ -69,17 +69,8 @@ interface ResolutionChain {
 }
 
 export class Container {
-  /**
-   * Class → key, shared by every container in the process.
-   *
-   * Per-container numbering would give the same class two different keys in a
-   * parent and its child, so a child would never find what the parent bound.
-   */
-  static #classKeys = new WeakMap<Function, string>()
-  static #classKeyCount = 0
-
-  #bindings: Map<string, Binding> = new Map()
-  #singletons: Map<string, unknown> = new Map()
+  #bindings: Map<ServiceToken, Binding> = new Map()
+  #singletons: Map<ServiceToken, unknown> = new Map()
   /**
    * Singletons currently being built, by key.
    *
@@ -88,22 +79,22 @@ export class Container {
    * point is one, and silently discarding the first (a second connection
    * pool, a second scheduler). Concurrent callers await the same promise.
    */
-  #pendingSingletons: Map<string, Promise<unknown>> = new Map()
-  #overrides: Map<string, ServiceFactory> = new Map()
+  #pendingSingletons: Map<ServiceToken, Promise<unknown>> = new Map()
+  #overrides: Map<ServiceToken, ServiceFactory> = new Map()
   /**
    * Snapshot of singletons taken when `swap`/`override` shadows a previously
    * resolved instance. `restore()` re-seats them without re-invoking the
    * original factory, so callers that captured the live reference keep
    * pointing at the same object after the test ends.
    */
-  #singletonBackup: Map<string, unknown> = new Map()
+  #singletonBackup: Map<ServiceToken, unknown> = new Map()
   /** Alias key → the token it forwards to (AdonisJS `container.alias`). */
-  #aliases: Map<string, ServiceToken> = new Map()
+  #aliases: Map<ServiceToken, ServiceToken> = new Map()
   /** parent class → (binding key → the factory that class gets instead). */
-  #contextualBindings: Map<new (...args: never[]) => unknown, Map<string, ServiceFactory>> =
+  #contextualBindings: Map<new (...args: never[]) => unknown, Map<ServiceToken, ServiceFactory>> =
     new Map()
   /** token key → post-resolution callbacks (AdonisJS `container.resolving`). */
-  #resolvingHooks: Map<string, Array<(value: unknown) => void | Promise<void>>> = new Map()
+  #resolvingHooks: Map<ServiceToken, Array<(value: unknown) => void | Promise<void>>> = new Map()
   /**
    * The resolution chain currently being walked, for cycle detection.
    *
@@ -185,7 +176,7 @@ export class Container {
     else this.#resolvingHooks.set(key, [callback])
   }
 
-  async #runResolvingHooks(key: string, value: unknown): Promise<void> {
+  async #runResolvingHooks(key: ServiceToken, value: unknown): Promise<void> {
     const hooks = this.#resolvingHooks.get(key)
     if (hooks) for (const hook of hooks) await hook(value)
   }
@@ -244,7 +235,7 @@ export class Container {
     }
   }
 
-  #restoreOne(key: string): void {
+  #restoreOne(key: ServiceToken): void {
     this.#overrides.delete(key)
     this.#singletons.delete(key)
     if (this.#singletonBackup.has(key)) {
@@ -281,7 +272,7 @@ export class Container {
     // `alias('b','a')` overflowed the stack instead of naming the cycle.
     let resolvedToken = token
     let key = this.#tokenToKey(resolvedToken)
-    const seenAliases = new Set<string>([key])
+    const seenAliases = new Set<ServiceToken>([key])
     for (
       let target = this.#aliases.get(key);
       target !== undefined;
@@ -290,7 +281,7 @@ export class Container {
       resolvedToken = target
       key = this.#tokenToKey(target)
       if (seenAliases.has(key)) {
-        const cycle = [...seenAliases, key].join(' → ')
+        const cycle = [...seenAliases, key].map(describeToken).join(' → ')
         throw new ReamError('E_CIRCULAR_DEPENDENCY', `Circular alias detected: ${cycle}`, {
           hint: 'An alias chain must end at a real binding — remove one of the aliases.',
           context: { chain: cycle },
@@ -310,7 +301,7 @@ export class Container {
     }
 
     if (chain.set.has(key)) {
-      const cycle = [...chain.stack, key].join(' → ')
+      const cycle = [...chain.stack, key].map(describeToken).join(' → ')
       throw new ReamError('E_CIRCULAR_DEPENDENCY', `Circular dependency detected: ${cycle}`, {
         hint: 'Break the cycle by resolving one dependency lazily inside a method (`await container.make(Dep)`) instead of injecting it in the constructor.',
         context: { chain: cycle },
@@ -410,7 +401,10 @@ export class Container {
    * Reuses an open chain rather than starting a second one, so cycle detection
    * still spans the whole resolution when a resolver is used inside a factory.
    */
-  runWithScopedValues<T>(values: ReadonlyMap<string, unknown>, fn: () => Promise<T>): Promise<T> {
+  runWithScopedValues<T>(
+    values: ReadonlyMap<ServiceToken, unknown>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const chain = this.#chain.getStore()
     return this.#chain.run(
       chain === undefined ? { stack: [], set: new Set(), values } : { ...chain, values },
@@ -418,8 +412,8 @@ export class Container {
     )
   }
 
-  /** @internal Normalise a token the way the container keys it. */
-  keyFor(token: ServiceToken): string {
+  /** @internal Validate a token and hand back the value the container keys on. */
+  keyFor(token: ServiceToken): ServiceToken {
     return this.#tokenToKey(token)
   }
 
@@ -455,7 +449,7 @@ export class Container {
    * that, so no complete list of those exists to return.
    */
   get bindings(): ReadonlyArray<{ token: string; scope: string; target?: string }> {
-    const seen = new Map<string, { scope: string; target?: string }>()
+    const seen = new Map<ServiceToken, { scope: string; target?: string }>()
     for (const [key, binding] of this.#bindings) seen.set(key, { scope: binding.scope })
     for (const key of this.#singletons.keys()) {
       if (!seen.has(key)) seen.set(key, { scope: 'value' })
@@ -470,11 +464,11 @@ export class Container {
       const shadowed = seen.get(key)
       seen.set(key, {
         scope: shadowed === undefined ? 'alias' : `alias (shadows ${shadowed.scope})`,
-        target: this.#tokenToKey(target),
+        target: describeToken(target),
       })
     }
     return [...seen.entries()]
-      .map(([token, entry]) => ({ token, ...entry }))
+      .map(([token, entry]) => ({ token: describeToken(token), ...entry }))
       .sort((a, b) => a.token.localeCompare(b.token))
   }
 
@@ -516,7 +510,7 @@ export class Container {
   /** Auto-register all @Service() decorated classes from the global registry. */
   autoRegister(): void {
     for (const [target, metadata] of getServiceRegistry()) {
-      const key = metadata.as ?? target.name
+      const key = metadata.as ?? target
       if (!this.#bindings.has(key)) {
         const targetClass = target
         this.#bindings.set(key, {
@@ -531,7 +525,11 @@ export class Container {
 
   // ─── Internal resolution ──────────────────────────────────
 
-  async #resolveInner<T>(key: string, token: ServiceToken, runtimeValues?: unknown[]): Promise<T> {
+  async #resolveInner<T>(
+    key: ServiceToken,
+    token: ServiceToken,
+    runtimeValues?: unknown[],
+  ): Promise<T> {
     // 1. Check swaps (test overrides) — a swap factory may be async.
     if (this.#overrides.has(key)) {
       const swapped = await this.#overrides.get(key)?.(this)
@@ -606,11 +604,12 @@ export class Container {
     }
 
     // 7. Not found
-    const allKeys = [...this.#bindings.keys(), ...this.#overrides.keys()]
-    const suggestion = didYouMean(key, allKeys)
+    const name = describeToken(key)
+    const allKeys = [...this.#bindings.keys(), ...this.#overrides.keys()].map(describeToken)
+    const suggestion = didYouMean(name, allKeys)
     throw new ReamError(
       'E_CONTAINER_NOT_FOUND',
-      `No binding found for '${key}'.${suggestion ? ` ${suggestion}` : ''}`,
+      `No binding found for '${name}'.${suggestion ? ` ${suggestion}` : ''}`,
       {
         hint: 'Register it with container.singleton() or decorate with @inject().',
       },
@@ -648,7 +647,9 @@ export class Container {
   ): Promise<unknown> {
     const metadata = getServiceMetadata(target)
     const scope = metadata?.scope ?? 'transient'
-    const key = metadata?.as ?? target.name
+    // The class itself, not `target.name`: two classes called `Service` share a
+    // name and must not share a singleton cache entry.
+    const key = metadata?.as ?? target
 
     if (scope === 'singleton' && this.#singletons.has(key)) {
       return this.#singletons.get(key)
@@ -756,7 +757,7 @@ export class Container {
    */
   #cacheIfAppWide(
     scope: string,
-    key: string,
+    key: ServiceToken,
     instance: unknown,
     store: ResolutionChain | undefined,
     readsBefore: number,
@@ -766,63 +767,36 @@ export class Container {
     this.#singletons.set(key, instance)
   }
 
-  #tokenToKey(token: ServiceToken): string {
-    if (typeof token === 'string') {
-      this.#assertNotReserved(token, 'string')
-      return token
-    }
-    if (typeof token === 'symbol') {
-      // Reject unique `Symbol(x)` — two `Symbol("foo")` calls create distinct
-      // symbols, so an override registered with one would be invisible to a
-      // resolver holding the other. Force callers onto `Symbol.for(x)` which
-      // is the global registry and round-trips across modules.
-      if (Symbol.keyFor(token) === undefined) {
-        throw new ReamError(
-          'E_CONTAINER_INVALID_TOKEN',
-          `Unique Symbol() tokens are not supported — use Symbol.for("${token.description ?? 'name'}") so different modules see the same symbol.`,
-        )
-      }
-      const desc = token.description
-      if (desc === undefined) {
-        throw new ReamError('E_CONTAINER_INVALID_TOKEN', 'Symbol tokens must have a description.')
-      }
-      this.#assertNotReserved(desc, 'symbol description')
-      return `Symbol(${desc})`
-    }
-    return this.#classKey(token)
+  /**
+   * Validate a token and hand back the value every map keys on: the token.
+   *
+   * Fold's stores are `Map<string | symbol | AbstractConstructor, …>`, so a
+   * token IS its own key and identity is preserved. Deriving a string key
+   * instead cost exactly what identity buys: `Symbol.for('cache')` became
+   * `"Symbol(cache)"` and collided with the plain string `"Symbol(cache)"`,
+   * and a unique `Symbol()` had to be refused because its description is all a
+   * string key can carry. Both go away when the token is the key.
+   */
+  #tokenToKey(token: ServiceToken): ServiceToken {
+    if (typeof token === 'string') this.#assertNotReserved(token)
+    return token
   }
 
   /**
-   * A key that follows the class itself, not its name.
+   * NAMED DEVIATION from Fold, kept deliberately.
    *
-   * `token.name` made two different classes called `Service` the same binding —
-   * the second registration silently replaced the first — and made the class
-   * `Service` indistinguishable from the string `"Service"`. AdonisJS keys on
-   * the constructor, so a class, a string and a symbol are three tokens even
-   * when they read alike.
-   *
-   * The suffix keeps the name visible in an error message and in `inspect`,
-   * where a bare identity would say nothing, while the counter is what makes
-   * two same-named classes distinct. The map is weak: a class that goes out of
-   * scope takes its key with it.
+   * These three read as prototype keys, and a token named after one is far
+   * likelier to be a mistake than a deliberate binding. Nothing indexes tokens
+   * on a plain object any more — every store above is a `Map` — so this is a
+   * tripwire for a caller error, not a pollution guard.
    */
-  #classKey(token: Function): string {
-    const existing = Container.#classKeys.get(token)
-    if (existing !== undefined) return existing
-    const name = token.name === '' ? 'AnonymousClass' : token.name
-    Container.#classKeyCount += 1
-    const key = `class ${name}#${Container.#classKeyCount}`
-    Container.#classKeys.set(token, key)
-    return key
-  }
-
-  #assertNotReserved(name: string, kind: 'string' | 'symbol description'): void {
+  #assertNotReserved(name: string): void {
     if (RESERVED_TOKEN_NAMES.has(name)) {
       throw new ReamError(
         'E_CONTAINER_RESERVED_TOKEN',
         `Reserved container token name '${name}'.`,
         {
-          hint: `'${name}' would collide with an Object.prototype key. Pick a different ${kind}.`,
+          hint: `'${name}' reads as an Object.prototype key. Pick a different token name.`,
         },
       )
     }
@@ -848,6 +822,18 @@ const NON_INJECTABLE_CONSTRUCTORS = new Set<unknown>([
   Promise,
   Error,
 ])
+
+/**
+ * A token as it reads in an error message or in `ream inspect`.
+ *
+ * Display only — the container keys on the token itself, so two distinct
+ * classes that share a name are two bindings that happen to print alike.
+ */
+function describeToken(token: ServiceToken): string {
+  if (typeof token === 'string') return token
+  if (typeof token === 'symbol') return token.toString()
+  return token.name === '' ? 'AnonymousClass' : token.name
+}
 
 /** True for a real, injectable class token (excludes native primitive constructors). */
 function isInjectableClass(value: unknown): value is new (...args: never[]) => unknown {

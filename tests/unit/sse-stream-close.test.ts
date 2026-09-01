@@ -204,3 +204,40 @@ describe('SseStream > ping self-heals on missed disconnect', () => {
     expect(closed).toBe(1)
   })
 })
+
+describe('SseStream > a keepalive that rejects', () => {
+  it('closes the stream instead of raising an unhandled rejection', async () => {
+    // The keepalive runs on a detached timer, so a rejected write had nobody
+    // to reject to: on a default Node that is an unhandled rejection and the
+    // process exits — one client's dead socket ending every other client's
+    // stream. A rejection now means what `false` means.
+    const rejections: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const backend = {
+        registerStream: async () => true,
+        writeStream: async () => {
+          throw new Error('socket is gone')
+        },
+        closeStream: async () => true,
+        onStreamDisconnect: () => {},
+      }
+      const stream = new SseStream('s-reject', backend, { pingInterval: 5 })
+      let closes = 0
+      stream.onClose(() => {
+        closes += 1
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 40))
+
+      expect(closes).toBe(1)
+      expect(stream.isOpen()).toBe(false)
+      expect(rejections).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+})

@@ -32,3 +32,37 @@ function entityTag(body: string | Buffer): string {
   const length = typeof body === 'string' ? Buffer.byteLength(body, 'utf8') : body.length
   return `"${length.toString(16)}-${hash}"`
 }
+
+/**
+ * The tag for a file, from its metadata rather than its bytes.
+ *
+ * `W/"<size hex>-<mtime hex>"`, which is what the `etag` package produces for
+ * a `Stats` and therefore what Express's `send` — and so every static file
+ * server people have cached against — puts on a static asset. Weak because it
+ * is derived from metadata: two files with the same size and mtime are
+ * equivalent for caching, not provably byte-identical.
+ *
+ * The quotes are not decoration. RFC 9110 §8.8.3 defines an entity-tag as a
+ * quoted string, and a bare hex digest is not one: a strict cache is entitled
+ * to ignore it, which turns every conditional request back into a full
+ * transfer.
+ */
+export function statTag(stat: { size: number; mtimeMs: number }): string {
+  return `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`
+}
+
+/**
+ * Whether `If-None-Match` covers `tag` (RFC 9110 §13.1.2).
+ *
+ * The header is a LIST, and it is compared with the WEAK comparison function —
+ * `W/"x"` and `"x"` match. Raw string equality against the whole header value
+ * failed a client that sent two tags, and failed every client that sent back
+ * the weak form of a strong tag, so both re-downloaded a file they already had.
+ */
+export function matchesIfNoneMatch(header: string | undefined, tag: string): boolean {
+  if (!header || tag === '') return false
+  if (header.trim() === '*') return true
+  const bare = (value: string): string => (value.startsWith('W/') ? value.slice(2) : value)
+  const current = bare(tag)
+  return header.split(',').some((candidate) => bare(candidate.trim()) === current)
+}

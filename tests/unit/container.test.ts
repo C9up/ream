@@ -224,16 +224,52 @@ describe('container > override', () => {
     await expect(container.resolve('orphan')).rejects.toThrow(/No binding found/)
   })
 
-  it('rejects Symbol.for with a reserved description (M9)', async () => {
-    expect(() => container.override(Symbol.for('__proto__'), 'v')).toThrow(
-      /Reserved container token name/,
-    )
-    expect(() => container.singleton(Symbol.for('constructor'), () => 'v')).toThrow(
-      /Reserved container token name/,
-    )
-    expect(() => container.bind(Symbol.for('prototype'), () => 'v')).toThrow(
-      /Reserved container token name/,
-    )
+  it('keeps a symbol distinct from the string that spells it', async () => {
+    // The container used to key `Symbol.for('cache')` as the string
+    // `"Symbol(cache)"`, which is a string a caller can also register — so the
+    // two tokens shared one binding and the last one registered won.
+    container.bindValue(Symbol.for('cache'), 'from-symbol')
+    container.bindValue('Symbol(cache)', 'from-string')
+
+    expect(await container.resolve(Symbol.for('cache'))).toBe('from-symbol')
+    expect(await container.resolve('Symbol(cache)')).toBe('from-string')
+  })
+
+  it('accepts a unique Symbol(), which is its own identity', async () => {
+    // Fold keys on the token, so a unique symbol is a perfectly good token:
+    // whoever holds it resolves it, and nobody else can name it. Refusing it
+    // was an artifact of deriving a string key from the description.
+    const token = Symbol('cache')
+    const other = Symbol('cache')
+    container.bindValue(token, 'mine')
+
+    expect(await container.resolve(token)).toBe('mine')
+    await expect(container.resolve(other)).rejects.toThrow(/No binding found/)
+  })
+
+  it('keeps a symbol whose description reads as a prototype key', async () => {
+    // Only string tokens meet the denylist: a symbol carries no string key
+    // any more, so there is nothing to guard against.
+    container.bindValue(Symbol.for('__proto__'), 'v')
+    expect(await container.resolve(Symbol.for('__proto__'))).toBe('v')
+    expect(() => container.override('__proto__', 'v')).toThrow(/Reserved container token name/)
+  })
+
+  it('keeps two same-named classes apart', async () => {
+    const First = (() => {
+      return class Service {}
+    })()
+    const Second = (() => {
+      return class Service {}
+    })()
+    container.bindValue(First, 'first')
+    container.bindValue(Second, 'second')
+
+    expect(await container.resolve(First)).toBe('first')
+    expect(await container.resolve(Second)).toBe('second')
+    // …and neither is the string that spells their shared name.
+    container.bindValue('Service', 'string')
+    expect(await container.resolve('Service')).toBe('string')
   })
 })
 

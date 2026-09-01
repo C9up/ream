@@ -363,3 +363,42 @@ describe('MultipartFile > AdonisJS surface', () => {
     expect(f.fileName).toBe('legacy.txt')
   })
 })
+
+describe('MultipartFile > move is atomic', () => {
+  const makeFile = (content: Buffer): MultipartFile =>
+    new MultipartFile({ fieldName: 'doc', clientName: 'up.txt', type: 'text/plain', content })
+
+  it('lets exactly one of two concurrent moves win with overwrite: false', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ream-move-race-'))
+    try {
+      const first = makeFile(Buffer.from('first'))
+      const second = makeFile(Buffer.from('second'))
+
+      // Upstream checks existence and then writes, so both of these see
+      // nothing and both succeed — the second silently replacing the first.
+      const results = await Promise.allSettled([
+        first.move(dir, { name: 'same.txt', overwrite: false }),
+        second.move(dir, { name: 'same.txt', overwrite: false }),
+      ])
+
+      expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+      const rejected = results.find((r) => r.status === 'rejected')
+      expect((rejected as PromiseRejectedResult).reason.message).toContain('already exists at')
+      // The winner's bytes are intact — not half of one and half of the other.
+      expect(['first', 'second']).toContain(readFileSync(join(dir, 'same.txt'), 'utf8'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('still overwrites by default', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ream-move-over-'))
+    try {
+      await makeFile(Buffer.from('first')).move(dir, { name: 'same.txt' })
+      await makeFile(Buffer.from('second')).move(dir, { name: 'same.txt' })
+      expect(readFileSync(join(dir, 'same.txt'), 'utf8')).toBe('second')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

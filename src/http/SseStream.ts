@@ -106,13 +106,22 @@ export class SseStream {
         // stop the timer and run close listeners once, so a dropped-
         // at-open stream can't leave an orphaned keepalive ticking
         // against a dead registry slot.
-        void this.#backend.writeStream(this.id, ':keepalive\n\n').then((ok) => {
-          if (!ok && this.#open) {
-            this.#open = false
-            this.#stopPing()
-            this.#fireClose()
-          }
-        })
+        //
+        // A REJECTION means the same thing as `false` and is treated the same
+        // way. It was unhandled before, and an unhandled rejection from a
+        // detached timer takes the whole process down on a default Node —
+        // one client's socket dying would have ended every other client's.
+        void this.#backend
+          .writeStream(this.id, ':keepalive\n\n')
+          .then((ok) => ok)
+          .catch(() => false)
+          .then((ok) => {
+            if (!ok && this.#open) {
+              this.#open = false
+              this.#stopPing()
+              this.#fireClose()
+            }
+          })
       }, ping)
       // The keepalive must not pin the Node event loop — letting the
       // process exit on its own when nothing else is keeping it busy
