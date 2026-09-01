@@ -63,6 +63,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -74,7 +80,7 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b1866ecef4f2d06a0bb77880015fdf2b89e25a1c2e5addacb87e459c86dc67e"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "blowfish",
  "getrandom 0.2.17",
  "subtle",
@@ -93,7 +99,7 @@ version = "0.1.4"
 source = "git+https://github.com/C9up/blackhole?tag=v0.1.4#6d45674e2156e8291ec0210df1e594a5148b96e2"
 dependencies = [
  "ammonia",
- "base64",
+ "base64 0.22.1",
  "getrandom 0.2.17",
  "hex",
  "hmac",
@@ -1246,7 +1252,7 @@ dependencies = [
 name = "ream-http"
 version = "0.1.12"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
  "cookie",
  "futures-core",
@@ -1887,7 +1893,7 @@ name = "warden-engine"
 version = "0.1.4"
 source = "git+https://github.com/C9up/warden?tag=v0.1.4#fc885aad6cf1a5b624d7154c6b8875350e099113"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "hex",
  "hmac",
  "rand 0.8.8",
