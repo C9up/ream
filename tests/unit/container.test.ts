@@ -513,3 +513,49 @@ describe('Container > what it holds can be listed', () => {
     expect(new Container().bindings).toEqual([])
   })
 })
+
+describe('Container > two tokens that read alike are two tokens', () => {
+  it('keeps two classes of the same name apart', async () => {
+    const container = new Container()
+    // Two modules can each export a `Service`; nothing stops them.
+    const A = class Service {}
+    const B = class Service {}
+    container.bindValue(A, 'from-A')
+    container.bindValue(B, 'from-B')
+
+    // Keyed by `token.name`, the second registration silently replaced the
+    // first and both resolved to 'from-B'.
+    expect(await container.resolve(A)).toBe('from-A')
+    expect(await container.resolve(B)).toBe('from-B')
+  })
+
+  it('keeps a class apart from the string that spells its name', async () => {
+    const container = new Container()
+    const Service = class Service {}
+    container.bindValue(Service, 'the-class')
+    container.bindValue('Service', 'the-string')
+
+    expect(await container.resolve(Service)).toBe('the-class')
+    expect(await container.resolve('Service')).toBe('the-string')
+  })
+
+  it('gives one class the same key in a parent and a child', async () => {
+    const parent = new Container()
+    const Service = class Service {}
+    parent.bindValue(Service, 'from-parent')
+    const child = parent.createChild ? parent.createChild() : parent
+
+    // Numbering per container would hand the child a different key, and it
+    // would never find what the parent bound.
+    expect(await child.resolve(Service)).toBe('from-parent')
+  })
+
+  it('still names the class in what it reports', () => {
+    const container = new Container()
+    const Service = class Service {}
+    container.bindValue(Service, 1)
+
+    // A bare identity would say nothing to whoever runs `inspect`.
+    expect(container.bindings.map((b) => b.token).join()).toContain('Service')
+  })
+})

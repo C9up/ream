@@ -69,6 +69,15 @@ interface ResolutionChain {
 }
 
 export class Container {
+  /**
+   * Class → key, shared by every container in the process.
+   *
+   * Per-container numbering would give the same class two different keys in a
+   * parent and its child, so a child would never find what the parent bound.
+   */
+  static #classKeys = new WeakMap<Function, string>()
+  static #classKeyCount = 0
+
   #bindings: Map<string, Binding> = new Map()
   #singletons: Map<string, unknown> = new Map()
   /**
@@ -780,7 +789,31 @@ export class Container {
       this.#assertNotReserved(desc, 'symbol description')
       return `Symbol(${desc})`
     }
-    return token.name
+    return this.#classKey(token)
+  }
+
+  /**
+   * A key that follows the class itself, not its name.
+   *
+   * `token.name` made two different classes called `Service` the same binding —
+   * the second registration silently replaced the first — and made the class
+   * `Service` indistinguishable from the string `"Service"`. AdonisJS keys on
+   * the constructor, so a class, a string and a symbol are three tokens even
+   * when they read alike.
+   *
+   * The suffix keeps the name visible in an error message and in `inspect`,
+   * where a bare identity would say nothing, while the counter is what makes
+   * two same-named classes distinct. The map is weak: a class that goes out of
+   * scope takes its key with it.
+   */
+  #classKey(token: Function): string {
+    const existing = Container.#classKeys.get(token)
+    if (existing !== undefined) return existing
+    const name = token.name === '' ? 'AnonymousClass' : token.name
+    Container.#classKeyCount += 1
+    const key = `class ${name}#${Container.#classKeyCount}`
+    Container.#classKeys.set(token, key)
+    return key
   }
 
   #assertNotReserved(name: string, kind: 'string' | 'symbol description'): void {
