@@ -25,13 +25,19 @@ class RecordingBackend implements StreamBackend {
   async registerStream(): Promise<boolean> {
     return true
   }
+  async writeStream(): Promise<boolean> {
+    // Text frames: the static path never uses this, only writeStreamBytes.
+    return true
+  }
   async writeStreamBytes(_id: string, chunk: Uint8Array): Promise<boolean> {
     this.chunks.push(Buffer.from(chunk))
     return true
   }
-  async closeStream(): Promise<void> {
+  async closeStream(): Promise<boolean> {
     this.closed = true
+    return true
   }
+  onStreamDisconnect(): void {}
   get body(): Buffer {
     return Buffer.concat(this.chunks)
   }
@@ -40,9 +46,9 @@ class RecordingBackend implements StreamBackend {
 function makeCtx(path: string, headers: Record<string, string> = {}, method = 'GET') {
   const ctx = new HttpContext(
     'test',
-    { method, path, url: path, headers, query: {}, body: undefined },
+    { method, path, query: '', headers, body: '' },
     {},
-    { pattern: path, method },
+    { pattern: path, middleware: [] },
   )
   const backend = new RecordingBackend()
   ctx.response.setStreamBackend(backend)
