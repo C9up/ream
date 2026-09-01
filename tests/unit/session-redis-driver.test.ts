@@ -87,3 +87,29 @@ describe('session RedisDriver', () => {
     expect(resolved).toBe(1)
   })
 })
+
+describe('session RedisDriver > a transient connection failure', () => {
+  it('retries instead of caching the rejection forever', async () => {
+    // The in-flight slot was cleared inside `.then`, so a REJECTED promise
+    // stayed in it and every later call handed back that same rejection. One
+    // refused connection at boot — Redis still starting, a network blip — and
+    // the driver never tried again for the life of the process.
+    let attempts = 0
+    const resolver = vi.fn(async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('ECONNREFUSED')
+      return fakeClient()
+    })
+    const driver = new RedisDriver(resolver)
+
+    await expect(driver.read('sid')).rejects.toThrow('ECONNREFUSED')
+    // The second call must reach the resolver again rather than replay the first.
+    await expect(driver.read('sid')).resolves.toBeNull()
+    expect(attempts).toBe(2)
+
+    // …and once connected, the client is memoised as before.
+    await driver.write('sid', { a: 1 })
+    expect(await driver.read('sid')).toEqual({ a: 1 })
+    expect(attempts).toBe(2)
+  })
+})

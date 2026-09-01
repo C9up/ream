@@ -67,11 +67,19 @@ export class RedisDriver implements SessionDriverWithTagging {
     }
     if (!this.#pending) {
       const resolver = this.#source
-      this.#pending = Promise.resolve(resolver()).then((client) => {
-        this.#resolved = client
-        this.#pending = undefined
-        return client
-      })
+      // `finally`, not the success path: clearing it only on success left a
+      // REJECTED promise in the slot, and every later call returned that same
+      // rejection. One refused connection at boot — Redis still starting, a
+      // network blip — and the driver never tried again for the life of the
+      // process. Bay and echo already clear it this way.
+      this.#pending = Promise.resolve(resolver())
+        .then((client) => {
+          this.#resolved = client
+          return client
+        })
+        .finally(() => {
+          this.#pending = undefined
+        })
     }
     return this.#pending
   }
