@@ -225,9 +225,7 @@
     "typecheck:console-tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
-    "etag": "^1.8.1",
     "file-type": "^22.0.1",
-    "mime-types": "^3.0.1",
     "reflect-metadata": "^0.2"
   },
   "peerDependencies": {
@@ -245,8 +243,6 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
     "@c9up/comet": "^0.1.0",
-    "@types/etag": "^1.8.4",
-    "@types/mime-types": "^3.0.1",
     "@types/node": "^22.19.15",
     "typescript": "^6.0.2",
     "vitest": "^4.1.6"

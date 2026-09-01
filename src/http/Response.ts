@@ -11,10 +11,10 @@ import { randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import etag from 'etag'
-import { contentType } from 'mime-types'
 import { ReamError } from '../errors/ReamError.js'
 import { durationToSeconds } from '../helpers/duration.js'
+import { etag } from './etag.js'
+import { contentType } from './mime.js'
 
 /**
  * Default ceiling on a buffered response body — the same 100MB the Rust layer
