@@ -26,7 +26,7 @@ function postJson(kernel: ReturnType<typeof createHttpKernel>, path: string, bod
     method: 'POST',
     path,
     query: '',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),
   })
 }

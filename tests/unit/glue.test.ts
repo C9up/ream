@@ -203,7 +203,8 @@ describe('HttpKernel > integration', () => {
       method: 'GET',
       path: '/error',
       query: '',
-      headers: {},
+      // An API client says so; without it the handler renders the error page.
+      headers: { accept: 'application/json' },
       body: '',
     })
 

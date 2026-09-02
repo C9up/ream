@@ -440,13 +440,17 @@ export class ExceptionHandler extends Macroable {
   /**
    * Pick a renderer by content negotiation.
    *
-   * DEVIATION (named): ream lists `json` FIRST, so a request with no or `*` /`*`
-   * Accept defaults to JSON (API-first). AdonisJS lists `html` first
-   * (full-stack default). Explicit `text/html` / `vnd.api+json` are honoured
-   * identically.
+   * `html` is listed first, as AdonisJS does, so a request that states no
+   * preference — no `Accept` at all, or `*` /`*` — gets the error page rather
+   * than a JSON body. A browser always sends `text/html` and an API client
+   * always asks for JSON, so the order only decides for the clients in
+   * between: curl, a health probe, a proxy that stripped the header. For a
+   * framework that ships a view layer, a page is the better answer there.
+   *
+   * The fallback stays JSON, for a client that accepts none of the three.
    */
   async renderError(error: HttpError, ctx: HttpContext): Promise<void> {
-    switch (ctx.request.accepts(['json', 'html', 'application/vnd.api+json'])) {
+    switch (ctx.request.accepts(['html', 'json', 'application/vnd.api+json'])) {
       case 'application/vnd.api+json':
         return this.renderErrorAsJSONAPI(error, ctx)
       case 'html':
@@ -458,7 +462,7 @@ export class ExceptionHandler extends Macroable {
 
   /** Pick a validation renderer by content negotiation. */
   async renderValidationError(error: HttpError, ctx: HttpContext): Promise<void> {
-    switch (ctx.request.accepts(['json', 'html', 'application/vnd.api+json'])) {
+    switch (ctx.request.accepts(['html', 'json', 'application/vnd.api+json'])) {
       case 'application/vnd.api+json':
         return this.renderValidationErrorAsJSONAPI(error, ctx)
       case 'html':

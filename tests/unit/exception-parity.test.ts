@@ -48,10 +48,19 @@ describe('Exception.help', () => {
 })
 
 describe('ExceptionHandler > content negotiation', () => {
-  it('defaults to JSON with no Accept header (ream API-first deviation)', async () => {
+  // A client stating no preference gets the error page, as AdonisJS does. Only
+  // the clients between a browser and an API client are decided by this: curl,
+  // a health probe, a proxy that dropped the header.
+  it('defaults to HTML with no Accept header (AdonisJS parity)', async () => {
     const ctx = ctxWith()
     await new ExceptionHandler().handle(new Exception('boom', { status: 500 }), ctx)
     expect(ctx.response.getStatus()).toBe(500)
+    expect(ctx.response.getBody()).toContain('<!DOCTYPE')
+  })
+
+  it('still answers JSON when the client asks for it', async () => {
+    const ctx = ctxWith('application/json')
+    await new ExceptionHandler().handle(new Exception('boom', { status: 500 }), ctx)
     expect(JSON.parse(ctx.response.getBody()).error.code).toBe('E_UNKNOWN')
   })
 
