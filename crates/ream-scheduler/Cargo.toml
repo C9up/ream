@@ -10,7 +10,7 @@ description = "Cron parser + task ticker core for the Ream scheduler"
 crate-type = ["lib"]
 
 [dependencies]
-cron = "0.12"
+cron = "0.17"
 chrono = { version = "0.4", features = ["clock"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 ream-napi-core = { path = "../ream-napi-core" }
