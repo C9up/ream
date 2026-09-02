@@ -5,10 +5,31 @@
 //!
 //! @implements AR2
 
+use napi::bindgen_prelude::{Function, Unknown};
 use napi::threadsafe_function::{
-    ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
+    ThreadsafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
 };
-use napi::{Env, JsFunction, JsUnknown};
+use napi::{Env, Status};
+
+/// The threadsafe function this crate hands out.
+///
+/// `CalleeHandled = false` is napi 3's spelling of napi 2's
+/// `ErrorStrategy::Fatal`, and it is NOT napi 3's default — the default is
+/// `true`, which PREPENDS a `null` so JavaScript is called as
+/// `(err, payload)`. Every TypeScript wrapper on this surface takes the
+/// payload FIRST, so accepting the default hands them `null` and reproduces
+/// the failure recorded below exactly. It is spelled once, here, rather than
+/// at each call site, because the wrong value compiles and passes every test
+/// that does not actually invoke the callback.
+///
+/// `Args` is what the callback hands to JavaScript, which is not the same as
+/// `T`: a callback that converts its payload with `to_js_value` produces one
+/// JS value, one with nothing to pass produces `()`, and one that also passes
+/// a `reply` function produces a pair. `Return` is what JavaScript hands
+/// back — napi 3 carries it on the type where napi 2 named it at the
+/// `call_async` call site.
+pub type FatalThreadsafeFunction<T, Args = Unknown<'static>, Return = Unknown<'static>> =
+    ThreadsafeFunction<T, Return, Args, Status, false, false, 0>;
 
 /// Configuration for ThreadsafeFunction creation.
 #[derive(Default)]
@@ -45,12 +66,22 @@ pub struct CallbackConfig {
 /// }
 /// ```
 pub fn create_threadsafe_fn<T>(
-    js_fn: &JsFunction,
+    js_fn: &Function<'static, Unknown<'static>, Unknown<'static>>,
     config: CallbackConfig,
-) -> napi::Result<ThreadsafeFunction<T, ErrorStrategy::Fatal>>
+) -> napi::Result<FatalThreadsafeFunction<T>>
 where
     T: 'static + Send + serde::Serialize,
 {
+    // napi 3 made the queue size a CONST generic, so a bound chosen at runtime
+    // can no longer be honoured. The one caller asks for the default, and 0
+    // means unlimited — but a caller asking for a bound must be told it cannot
+    // have one rather than silently getting none.
+    if config.max_queue_size != 0 {
+        return Err(napi::Error::new(
+            Status::InvalidArg,
+            "max_queue_size is a compile-time constant in napi 3; only 0 (unlimited) is supported",
+        ));
+    }
     // Audit 2026-05-22: switched from `ErrorStrategy::CalleeHandled` to
     // `ErrorStrategy::Fatal`. The Ream NAPI surface never sends `Err` via
     // these threadsafe functions — every call site wraps its payload in
@@ -67,17 +98,17 @@ where
     // JS receive only the payload, matching the TS signature naturally.
     // HTTP-NAPI uses `ErrorStrategy::Fatal` directly (not via this
     // helper), so no cross-crate surface changes.
-    js_fn.create_threadsafe_function(config.max_queue_size, |ctx: ThreadSafeCallContext<T>| {
-        let value = ctx.env.to_js_value(&ctx.value)?;
-        Ok(vec![value])
-    })
+    js_fn
+        .build_threadsafe_function::<T>()
+        .callee_handled::<false>()
+        .build_callback(|ctx: ThreadsafeCallContext<T>| ctx.env.to_js_value(&ctx.value))
 }
 
 /// Call a ThreadsafeFunction with the given data, non-blocking.
 ///
 /// Returns immediately. The JS callback will be invoked on the Node.js event loop.
 pub fn call_threadsafe_fn<T: 'static + Send + serde::Serialize>(
-    tsfn: &ThreadsafeFunction<T, ErrorStrategy::Fatal>,
+    tsfn: &FatalThreadsafeFunction<T>,
     data: T,
 ) -> napi::Result<()> {
     let status = tsfn.call(data, ThreadsafeFunctionCallMode::NonBlocking);
@@ -92,7 +123,7 @@ pub fn call_threadsafe_fn<T: 'static + Send + serde::Serialize>(
 ///
 /// Use sparingly — this blocks the calling Rust thread.
 pub fn call_threadsafe_fn_blocking<T: 'static + Send + serde::Serialize>(
-    tsfn: &ThreadsafeFunction<T, ErrorStrategy::Fatal>,
+    tsfn: &FatalThreadsafeFunction<T>,
     data: T,
 ) -> napi::Result<()> {
     let status = tsfn.call(data, ThreadsafeFunctionCallMode::Blocking);
@@ -110,7 +141,7 @@ pub fn call_threadsafe_fn_blocking<T: 'static + Send + serde::Serialize>(
 ///
 /// Used to extract the response from a JS callback back into Rust
 /// (e.g., the HTTP response from a Hyper onRequest handler).
-pub fn extract_callback_result<T>(env: &Env, value: JsUnknown) -> napi::Result<T>
+pub fn extract_callback_result<T>(env: &Env, value: Unknown<'_>) -> napi::Result<T>
 where
     T: serde::de::DeserializeOwned,
 {

@@ -29,27 +29,33 @@ import { readFileSync, writeFileSync } from 'node:fs'
  * entry must match, or the script fails: a stale refinement is how a hand
  * annotation quietly stops describing the Rust.
  */
+/**
+ * napi-derive 3 emits `callback: (arg: unknown) => unknown` where 2 emitted
+ * `(...args: any[]) => any` — better, since it no longer reaches for `any`,
+ * but a different string to match on. These refinements exist because the
+ * generated shape says nothing about what the callback actually receives.
+ */
 const CALLBACK_REFINEMENTS = {
   'EventBus.subscribe': {
-    from: 'callback: (...args: any[]) => any',
+    from: 'callback: (arg: unknown) => unknown',
     to: 'callback: (eventJson: string) => void',
   },
   'EventBus.onRequest': {
-    from: 'callback: (...args: any[]) => any',
+    from: 'callback: (arg: unknown) => unknown',
     to: 'callback: (eventJson: string, reply: (response: string) => void) => void',
   },
   'HyperServer.onRequest': {
-    from: 'callback: (...args: any[]) => any',
+    from: 'callback: (arg: unknown) => Promise<NapiResponse>',
     to: 'callback: (request: string) => Promise<string> | string',
   },
   'HyperServer.onStreamDisconnect': {
-    from: 'callback: (...args: any[]) => any',
+    from: 'callback: (arg: unknown) => unknown',
     to: 'callback: (streamId: string) => void',
   },
   // The Rust hands over a serialised JsTaskPayload — `{ task_name,
   // scheduled_for_ms }` renamed to camelCase by serde.
   'RustScheduler.register': {
-    from: 'callback: (...args: any[]) => any',
+    from: 'callback: (arg: unknown) => unknown',
     to: 'callback: (invocation: { taskName: string; scheduledForMs: number }) => void',
   },
 }
@@ -150,12 +156,15 @@ for (const fn of fns) {
   // napi-derive emits the whole declaration for a function, unlike a struct
   // where `def` holds only the members.
   const declaration = fn.def.trim()
-  out.push(
-    declaration.startsWith('export declare function')
-      ? `${declaration};`
-      : `export declare function ${fn.name}${declaration};`,
-    '',
-  )
+  // napi-derive 3 emits a bare `function name(...)` where 2 emitted the
+  // signature after the name; concatenating onto the former produced
+  // `function xfunction x(...)`.
+  const rendered = declaration.startsWith('export declare function')
+    ? declaration
+    : declaration.startsWith('function ')
+      ? `export declare ${declaration}`
+      : `export declare function ${fn.name}${declaration}`
+  out.push(`${rendered};`, '')
 }
 
 const stale = Object.keys(CALLBACK_REFINEMENTS).filter((k) => !used.has(k))

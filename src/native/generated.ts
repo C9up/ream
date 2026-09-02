@@ -155,12 +155,10 @@ export declare class HyperServer {
    */
   writeStreamBytes(streamId: string, chunk: Uint8Array): Promise<boolean>
   /**
-  * Close a stream from the server side. The matching response body
-  * finishes cleanly (hyper writes the final chunk + `0
-  
-  ` for
-  * HTTP/1.1 chunked encoding). Idempotent.
-  */
+   * Close a stream from the server side. The matching response body
+   * finishes cleanly (hyper writes the final chunk + `0\r\n\r\n` for
+   * HTTP/1.1 chunked encoding). Idempotent.
+   */
   closeStream(streamId: string): Promise<boolean>
   /**
    * Install a one-shot callback fired the moment the matching stream

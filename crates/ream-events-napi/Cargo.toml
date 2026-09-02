@@ -12,8 +12,8 @@ crate-type = ["cdylib"]
 [dependencies]
 ream-events = { path = "../ream-events" }
 ream-napi-core = { path = "../ream-napi-core" }
-napi = { version = "2", default-features = false, features = ["napi8", "serde-json"] }
-napi-derive = { version = "2", features = ["type-def"] }
+napi = { version = "3", default-features = false, features = ["napi8", "serde-json"] }
+napi-derive = { version = "3", features = ["type-def"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 

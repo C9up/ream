@@ -8,10 +8,10 @@
 //! @implements Story 28.1
 
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
-use napi::JsFunction;
+use napi::bindgen_prelude::{Function, Unknown};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
-use ream_napi_core::callback::{create_threadsafe_fn, CallbackConfig};
+use ream_napi_core::callback::{create_threadsafe_fn, CallbackConfig, FatalThreadsafeFunction};
 use ream_napi_core::{catch_unwind_napi, shared_runtime, ReamError};
 use ream_scheduler::{RustScheduler as CoreScheduler, TaskInvoker, TaskPayload};
 use serde::Serialize;
@@ -37,7 +37,7 @@ impl From<TaskPayload> for JsTaskPayload {
 /// Bridges a registered task invocation to a JS `ThreadsafeFunction`.
 /// Non-blocking call — the ticker thread does not wait on the JS event loop.
 struct JsTaskInvoker {
-    tsfn: ThreadsafeFunction<JsTaskPayload, ErrorStrategy::Fatal>,
+    tsfn: FatalThreadsafeFunction<JsTaskPayload>,
 }
 
 impl TaskInvoker for JsTaskInvoker {
@@ -95,13 +95,18 @@ impl RustScheduler {
     /// Throws with `DUPLICATE_TASK` if `name` already exists, or
     /// `INVALID_CRON` if the expression is malformed.
     #[napi]
-    pub fn register(&self, name: String, cron_expr: String, callback: JsFunction) -> Result<()> {
+    pub fn register(
+        &self,
+        name: String,
+        cron_expr: String,
+        callback: Function<'static, Unknown<'static>, Unknown<'static>>,
+    ) -> Result<()> {
         // Routed through `ream_napi_core::callback::create_threadsafe_fn`
         // so all Ream NAPI crates share identical ThreadsafeFunction
         // setup (see ream-http-napi, ream-events-napi). Matches the
         // `CallbackConfig::default()` convention: unlimited queue,
         // non-blocking calls.
-        let tsfn: ThreadsafeFunction<JsTaskPayload, ErrorStrategy::Fatal> =
+        let tsfn: FatalThreadsafeFunction<JsTaskPayload> =
             create_threadsafe_fn::<JsTaskPayload>(&callback, CallbackConfig::default())?;
 
         let inner = Arc::clone(&self.inner);

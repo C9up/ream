@@ -12,8 +12,8 @@ crate-type = ["cdylib"]
 [dependencies]
 ream-scheduler = { path = "../ream-scheduler" }
 ream-napi-core = { path = "../ream-napi-core" }
-napi = { version = "2", default-features = false, features = ["napi8", "serde-json", "async"] }
-napi-derive = { version = "2", features = ["type-def"] }
+napi = { version = "3", default-features = false, features = ["napi8", "serde-json", "async"] }
+napi-derive = { version = "3", features = ["type-def"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 serde = { version = "1", features = ["derive"] }
 

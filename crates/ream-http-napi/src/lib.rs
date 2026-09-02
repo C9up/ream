@@ -4,15 +4,15 @@
 //!
 //! @implements FR23, FR52
 
-use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{
-    ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
-};
+use napi::bindgen_prelude::{Function, Promise, Unknown};
+use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMode};
+use napi::JsValue;
 use napi_derive::napi;
 use ream_http::{
     RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig,
     ShieldFilter, StreamRegistry,
 };
+use ream_napi_core::callback::FatalThreadsafeFunction;
 use ream_napi_core::catch_unwind_napi;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -129,15 +129,37 @@ impl HyperServer {
     }
 
     /// Register the request handler. Callback receives JSON request string, must return JSON response string.
+    ///
     #[napi]
-    pub fn on_request(&self, callback: JsFunction) -> napi::Result<()> {
+    pub fn on_request(
+        &self,
+        // The promise the handler returns is part of the FUNCTION's type in
+        // napi 3, where napi 2 named it at the `call_async` call site.
+        callback: Function<'static, Unknown<'static>, Promise<NapiResponse>>,
+    ) -> napi::Result<()> {
         // Pass request as serde_json::Value → JsObject (no string serialization).
         // Response comes back as JSON string (TS side still stringifies for now).
-        let tsfn: ThreadsafeFunction<serde_json::Value, ErrorStrategy::Fatal> = callback
-            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<serde_json::Value>| {
+        // `CalleeHandled = false`, like every other threadsafe function here:
+        // napi 3 implements `call_async` for BOTH modes — the `false` variant
+        // takes the value directly where the `true` one takes a `Result` — so
+        // awaiting the handler's promise costs nothing here. Taking `true`
+        // would have prepended a `null` and changed `onRequest(request => …)`
+        // into `(err, request) => …` for every caller.
+        //
+        // The argument type is the RAW `napi_value`: a `Unknown<'a>` produced
+        // from the callback's own `Env` cannot satisfy the `'static` bound the
+        // argument type carries. It is a pointer, and napi converts it back
+        // before the scope ends.
+        let tsfn: FatalThreadsafeFunction<
+            serde_json::Value,
+            napi::sys::napi_value,
+            Promise<NapiResponse>,
+        > = callback
+            .build_threadsafe_function::<serde_json::Value>()
+            .callee_handled::<false>()
+            .build_callback(|ctx: ThreadsafeCallContext<serde_json::Value>| {
                 // Convert serde Value directly to JsObject (no JSON string intermediate)
-                let js_value = ctx.env.to_js_value(&ctx.value)?;
-                Ok(vec![js_value])
+                Ok(ctx.env.to_js_value(&ctx.value)?.value().value)
             })?;
 
         let tsfn = Arc::new(tsfn);
@@ -153,7 +175,9 @@ impl HyperServer {
                 // Outbound: typed NapiResponse — napi-rs walks the JS object tree
                 // straight into the Rust struct, no JSON.stringify on JS side
                 // and no serde_json::from_str on Rust side. Zero JSON ops per request.
-                match tsfn.call_async::<Promise<NapiResponse>>(req_value).await {
+                // The return type is on the ThreadsafeFunction now, where
+                // napi 2 named it at this call site.
+                match tsfn.call_async(req_value).await {
                     Ok(promise) => match promise.await {
                         Ok(napi_res) => napi_res.into(),
                         Err(_) => ReamResponse::text(500, "Handler rejected"),
@@ -463,12 +487,14 @@ impl HyperServer {
     pub fn on_stream_disconnect(
         &self,
         stream_id: String,
-        callback: JsFunction,
+        callback: Function<'static, Unknown<'static>, Unknown<'static>>,
     ) -> napi::Result<()> {
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> = callback
-            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
-                Ok(vec![ctx.env.get_undefined()?])
-            })?;
+        // No payload: napi 3 maps the unit type to `undefined`, so the
+        // hand-built `get_undefined()` this needed is gone.
+        let tsfn: FatalThreadsafeFunction<(), ()> = callback
+            .build_threadsafe_function::<()>()
+            .callee_handled::<false>()
+            .build_callback(|_ctx: ThreadsafeCallContext<()>| Ok(()))?;
         let registry = self.stream_registry.clone();
         let rt = ream_napi_core::shared_runtime();
         rt.spawn(async move {

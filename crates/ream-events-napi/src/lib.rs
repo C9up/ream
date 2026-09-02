@@ -5,8 +5,27 @@
 //!
 //! @implements FR1, FR2, FR3, FR9
 
-use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction};
+use napi::bindgen_prelude::{FnArgs, Function, Unknown};
+use napi::sys;
+use napi::threadsafe_function::ThreadsafeCallContext;
+use napi::JsValue;
+use napi::Status;
+
+/// napi 2's `ErrorStrategy::Fatal`, which napi 3 spells as a const generic —
+/// and does NOT default to. The default prepends a `null` so JavaScript is
+/// called as `(err, payload)`; every listener registered through here takes
+/// the payload first.
+/// `Args` is what the callback hands to JavaScript: one value for a plain
+/// event, a pair for a request that also passes a `reply` function.
+type FatalTsfn<T, Args = Unknown<'static>> = napi::threadsafe_function::ThreadsafeFunction<
+    T,
+    Unknown<'static>,
+    Args,
+    Status,
+    false,
+    false,
+    0,
+>;
 use napi_derive::napi;
 use ream_events::{Bus, Event};
 use ream_napi_core::catch_unwind_napi;
@@ -64,14 +83,18 @@ impl EventBus {
     /// `JsFunction` because JsFunction isn't Send. The block_on here runs on the
     /// JS thread (no async context above), so it doesn't deadlock the runtime.
     #[napi]
-    pub fn subscribe(&self, pattern: String, callback: JsFunction) -> napi::Result<f64> {
-        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> = callback
-            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
-                Ok(vec![ctx
-                    .env
-                    .create_string_from_std(ctx.value)?
-                    .into_unknown()])
-            })?;
+    pub fn subscribe(
+        &self,
+        pattern: String,
+        callback: Function<'static, Unknown<'static>, Unknown<'static>>,
+    ) -> napi::Result<f64> {
+        // The payload IS the argument: napi 3 converts a `String` on its own,
+        // so the hand-rolled `create_string_from_std(...).into_unknown()` the
+        // napi 2 version needed is gone.
+        let tsfn: FatalTsfn<String, String> = callback
+            .build_threadsafe_function::<String>()
+            .callee_handled::<false>()
+            .build_callback(|ctx: ThreadsafeCallContext<String>| Ok(ctx.value))?;
 
         let tsfn = Arc::new(tsfn);
         let bus = self.bus.clone();
@@ -110,27 +133,45 @@ impl EventBus {
 
     /// Register a request handler.
     #[napi]
-    pub fn on_request(&self, name: String, callback: JsFunction) -> napi::Result<()> {
-        let tsfn: ThreadsafeFunction<RequestContext, ErrorStrategy::Fatal> = callback
-            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<RequestContext>| {
-                let event_str = ctx.env.create_string_from_std(ctx.value.event_json)?;
+    pub fn on_request(
+        &self,
+        name: String,
+        callback: Function<'static, Unknown<'static>, Unknown<'static>>,
+    ) -> napi::Result<()> {
+        let tsfn: FatalTsfn<RequestContext, FnArgs<(String, sys::napi_value)>> = callback
+            .build_threadsafe_function::<RequestContext>()
+            .callee_handled::<false>()
+            .build_callback(|ctx: ThreadsafeCallContext<RequestContext>| {
+                let event_json = ctx.value.event_json;
                 let reply_tx = ctx.value.reply_tx;
 
-                let reply_fn = ctx.env.create_function_from_closure("reply", move |ctx| {
-                    let response: String = ctx
-                        .get::<napi::JsString>(0)?
-                        .into_utf8()?
-                        .as_str()?
-                        .to_string();
-                    if let Ok(mut guard) = reply_tx.lock() {
-                        if let Some(tx) = guard.take() {
-                            let _ = tx.send(response);
+                // The argument type has to be spelled now: napi 3 infers the
+                // closure's parameters from it, and `reply(response: string)`
+                // is the JS signature this hands back.
+                let reply_fn: Function<'_, String, ()> =
+                    ctx.env.create_function_from_closure("reply", move |ctx| {
+                        let response: String = ctx
+                            .get::<napi::JsString>(0)?
+                            .into_utf8()?
+                            .as_str()?
+                            .to_string();
+                        if let Ok(mut guard) = reply_tx.lock() {
+                            if let Some(tx) = guard.take() {
+                                let _ = tx.send(response);
+                            }
                         }
-                    }
-                    ctx.env.get_undefined()
-                })?;
+                        // napi 3 maps the unit type to `undefined`; `Env::get_undefined`
+                        // is gone.
+                        Ok(())
+                    })?;
 
-                Ok(vec![event_str.into_unknown(), reply_fn.into_unknown()])
+                // The RAW value, not the typed `Function`: napi 3 requires a
+                // callback's arguments to be `'static`, and a `Function<'a>`
+                // built from this callback's own `Env` is not. `napi_value` is
+                // a pointer, so it satisfies that — and it is valid exactly as
+                // long as it needs to be, since napi converts it back and hands
+                // it to JavaScript before this scope ends.
+                Ok(FnArgs::from((event_json, reply_fn.value().value)))
             })?;
 
         let tsfn = Arc::new(tsfn);
