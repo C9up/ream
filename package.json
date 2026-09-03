@@ -241,7 +241,7 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.10",
+    "@biomejs/biome": "2.5.12",
     "@c9up/comet": "^0.1.0",
     "@types/node": "^22.19.15",
     "mime-db": "^1.54.0",
