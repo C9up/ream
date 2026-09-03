@@ -125,7 +125,10 @@ export class MultipartFile {
   #mimeParts(): [string | undefined, string | undefined] {
     const source = this.#detected?.mime ?? this.#headerMime
     if (!source) return [undefined, undefined]
-    const [type, subtype] = source.split(';')[0].trim().split('/')
+    // `split` always yields a first element; naming it is how that stops
+    // being something the compiler has to be told.
+    const [head = ''] = source.split(';')
+    const [type, subtype] = head.trim().split('/')
     return [type || undefined, subtype || undefined]
   }
 
@@ -432,8 +435,9 @@ function isSafeFilename(name: string): boolean {
 function parseFileSize(size: string): number {
   const match = size.match(/^(\d+)(kb|mb|gb)?$/i)
   if (!match) return 1024 * 1024
-  const num = parseInt(match[1], 10)
-  switch (match[2]?.toLowerCase()) {
+  const [, digits, unit] = match
+  const num = parseInt(digits ?? '0', 10)
+  switch (unit?.toLowerCase()) {
     case 'kb':
       return num * 1024
     case 'mb':

@@ -181,7 +181,12 @@ export class Application implements AppContext {
 
   /** Resolve inside one of the conventional directories. */
   #inDirectory(key: keyof DirectoriesNode, paths: string[]): string {
-    return this.makePath(this.#directories[key], ...paths)
+    // `DirectoriesNode` is an index signature, so a key nobody registered
+    // reads as undefined rather than failing to compile. Falling back to the
+    // key itself keeps the convention: `configPath()` under a node with no
+    // `config` entry resolves to `<root>/config`, which is where it would
+    // have been anyway.
+    return this.makePath(this.#directories[key] ?? String(key), ...paths)
   }
 
   /** Absolute path inside the `config/` directory. */

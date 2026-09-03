@@ -315,8 +315,10 @@ export class ExceptionHandler extends Macroable {
   #expandStatusPages(): Record<number, StatusPageRenderer> {
     if (!this.#expandedStatusPages) {
       const expanded: Record<number, StatusPageRenderer> = {}
-      for (const range of Object.keys(this.statusPages)) {
-        Object.assign(expanded, parseStatusRange(range, this.statusPages[range]))
+      // `entries` rather than `keys` plus a lookup: the value comes back
+      // already known to be there, instead of read again as maybe-missing.
+      for (const [range, renderer] of Object.entries(this.statusPages)) {
+        Object.assign(expanded, parseStatusRange(range, renderer))
       }
       this.#expandedStatusPages = expanded
     }

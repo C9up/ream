@@ -55,8 +55,9 @@ function parseExpiry(value: string | number): number {
   if (typeof value === 'number') return value
   const match = value.match(/^(\d+)(s|m|h|d)$/)
   if (!match) return 3600
-  const num = parseInt(match[1], 10)
-  switch (match[2]) {
+  const [, digits, unit] = match
+  const num = parseInt(digits ?? '0', 10)
+  switch (unit) {
     case 's':
       return num
     case 'm':

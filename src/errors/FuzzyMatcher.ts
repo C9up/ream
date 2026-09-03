@@ -14,23 +14,43 @@ export function levenshtein(a: string, b: string): number {
   if (m === 0) return n
   if (n === 0) return m
 
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array<number>(n + 1).fill(0))
-
-  for (let i = 0; i <= m; i++) dp[i][0] = i
-  for (let j = 0; j <= n; j++) dp[0][j] = j
+  // Two rows rather than the whole matrix: the recurrence only ever reads the
+  // row above and the cell to the left, so the rest was allocated and never
+  // looked at again.
+  let previous: number[] = Array.from({ length: n + 1 }, (_, j) => j)
 
   for (let i = 1; i <= m; i++) {
+    const current: number[] = [i]
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1, // deletion
-        dp[i][j - 1] + 1, // insertion
-        dp[i - 1][j - 1] + cost, // substitution
+      current.push(
+        Math.min(
+          cell(previous, j) + 1, // deletion
+          cell(current, j - 1) + 1, // insertion
+          cell(previous, j - 1) + cost, // substitution
+        ),
       )
     }
+    previous = current
   }
 
-  return dp[m][n]
+  return cell(previous, n)
+}
+
+/**
+ * One cell of a row that has already been filled.
+ *
+ * Each row is built left to right and every column is written before it is
+ * read, so a miss cannot happen — and this is where that invariant is stated
+ * rather than asserted past it. Reading the row directly would have every
+ * access typed "a number, or nothing", which is not what the algorithm knows.
+ */
+function cell(row: number[], index: number): number {
+  const value = row[index]
+  if (value === undefined) {
+    throw new RangeError(`levenshtein: column ${index} was read before it was written`)
+  }
+  return value
 }
 
 /**
@@ -81,12 +101,13 @@ export function findClosestMatches(
  * @returns Formatted suggestion string, or empty string if no matches
  */
 export function didYouMean(input: string, candidates: string[]): string {
-  const matches = findClosestMatches(input, candidates)
-  if (matches.length === 0) return ''
+  const [best, ...rest] = findClosestMatches(input, candidates)
+  if (best === undefined) return ''
 
-  if (matches.length === 1) {
-    return `Did you mean '${matches[0].candidate}'?`
+  if (rest.length === 0) {
+    return `Did you mean '${best.candidate}'?`
   }
+  const matches = [best, ...rest]
 
   const suggestions = matches.map((m) => `'${m.candidate}'`).join(', ')
   return `Did you mean one of: ${suggestions}?`

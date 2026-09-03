@@ -18,6 +18,11 @@ const UNITS = {
 
 type Unit = keyof typeof UNITS
 
+/** A suffix the table knows. Checked, so nothing has to be asserted. */
+function isUnit(value: string): value is Unit {
+  return value in UNITS
+}
+
 const PARSE = /^((?:-|\+)?(?:\d+(?:\.\d+)?)) *(kb|mb|gb|tb|pb)$/i
 /** Trailing `.00`, or the zeros trailing a real decimal. */
 const TRAILING_ZEROS = /(?:\.0*|(\.[^0]+)0+)$/
@@ -33,10 +38,17 @@ export function parse(value: string | number): number | null {
   if (typeof value !== 'string') return null
 
   const matched = PARSE.exec(value)
-  const amount = matched ? Number.parseFloat(matched[1]) : Number.parseInt(value, 10)
+  // Both groups are required by the pattern, so a match carries both — but
+  // read as `matched[2]` the second was typed "a string, or nothing", and the
+  // `as Unit` that followed asserted past exactly that. Named, with the
+  // suffix checked against the table it indexes, nothing is asserted.
+  const [, digits, suffix] = matched ?? []
+  const amount =
+    digits !== undefined ? Number.parseFloat(digits) : Number.parseInt(value, 10)
   if (Number.isNaN(amount)) return null
 
-  const unit = (matched ? matched[2].toLowerCase() : 'b') as Unit
+  const unit = suffix === undefined ? 'b' : suffix.toLowerCase()
+  if (!isUnit(unit)) return null
   return Math.floor(UNITS[unit] * amount)
 }
 

@@ -225,12 +225,22 @@ export class CookieSigner {
   }
 
   decrypt<T = string>(encrypted: string, purpose?: string): T | null {
-    const parts = encrypted.split('.')
-    if (parts.length !== 3) return null
+    // Destructured rather than indexed, and `extra` is what keeps the old
+    // length check honest: three names bind on a four-part string too, so the
+    // fourth has to be looked at to reject it.
+    const [ivPart, dataPart, tagPart, extra] = encrypted.split('.')
+    if (
+      ivPart === undefined ||
+      dataPart === undefined ||
+      tagPart === undefined ||
+      extra !== undefined
+    ) {
+      return null
+    }
     try {
-      const iv = Buffer.from(parts[0], 'base64url')
-      const data = Buffer.from(parts[1], 'base64url')
-      const tag = Buffer.from(parts[2], 'base64url')
+      const iv = Buffer.from(ivPart, 'base64url')
+      const data = Buffer.from(dataPart, 'base64url')
+      const tag = Buffer.from(tagPart, 'base64url')
       const decipher = createDecipheriv('aes-256-gcm', this.#keyBuffer, iv)
       decipher.setAuthTag(tag)
       const raw = Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')

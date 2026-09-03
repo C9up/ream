@@ -272,7 +272,10 @@ export class Request extends Macroable {
   host(): string | null {
     if (this.#trustProxy) {
       const forwarded = this.#raw.headers['x-forwarded-host']
-      if (forwarded) return forwarded.split(',')[0].trim()
+      // The first hop in the list, named rather than indexed: `split` always
+      // yields one element, and saying so beats being told it might not.
+      const [first] = forwarded?.split(',') ?? []
+      if (first !== undefined) return first.trim()
     }
     return this.#raw.headers.host ?? null
   }
@@ -285,7 +288,8 @@ export class Request extends Macroable {
   protocol(): string {
     if (this.#trustProxy) {
       const forwarded = this.#raw.headers['x-forwarded-proto']
-      if (forwarded) return forwarded.split(',')[0].trim().toLowerCase()
+      const [first] = forwarded?.split(',') ?? []
+      if (first !== undefined) return first.trim().toLowerCase()
     }
     return this.#raw.scheme ?? 'http'
   }
@@ -900,9 +904,8 @@ export class Request extends Macroable {
     fieldName: string,
     options?: import('../bodyparser/MultipartFile.js').FileValidationOptions,
   ): import('../bodyparser/MultipartFile.js').MultipartFile | null {
-    const files = this.#files.get(fieldName)
-    if (!files || files.length === 0) return null
-    const file = files[0]
+    const [file] = this.#files.get(fieldName) ?? []
+    if (file === undefined) return null
     if (options) file.validate(options)
     return file
   }

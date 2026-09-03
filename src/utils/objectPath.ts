@@ -77,9 +77,13 @@ export function hasPath(source: unknown, path: string): boolean {
  */
 export function setPath(target: UnknownRecord, path: string, value: unknown): UnknownRecord {
   const segments = toSegments(path)
+  // The last segment is the one written; everything before it is walked. Split
+  // off by name rather than by index, so neither has to be read back out of
+  // the array afterwards and re-checked for existence.
+  const last = segments.pop()
+  if (last === undefined) return target
   let current: UnknownRecord = target
-  for (let i = 0; i < segments.length - 1; i += 1) {
-    const key = segments[i]
+  for (const key of segments) {
     const next = current[key]
     if (!isIndexable(next)) {
       const created: UnknownRecord = {}
@@ -89,7 +93,7 @@ export function setPath(target: UnknownRecord, path: string, value: unknown): Un
       current = next
     }
   }
-  current[segments[segments.length - 1]] = value
+  current[last] = value
   return target
 }
 
@@ -115,12 +119,14 @@ export function omitPaths(source: UnknownRecord, paths: string[]): UnknownRecord
   const result = structuredClone(source)
   for (const path of paths) {
     const segments = toSegments(path)
+    const last = segments.pop()
+    if (last === undefined) continue
     let current: unknown = result
-    for (let i = 0; i < segments.length - 1; i += 1) {
+    for (const key of segments) {
       if (!isIndexable(current)) break
-      current = current[segments[i]]
+      current = current[key]
     }
-    if (isIndexable(current)) delete current[segments[segments.length - 1]]
+    if (isIndexable(current)) delete current[last]
   }
   return result
 }

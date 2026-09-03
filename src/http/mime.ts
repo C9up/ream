@@ -1317,7 +1317,8 @@ const CHARSETS: Record<string, string> = {
 
 /** The charset for a type, or `undefined` when it carries none. */
 function charsetFor(type: string): string | undefined {
-  const base = type.split(';')[0].trim().toLowerCase()
+  const [head = ''] = type.split(';')
+  const base = head.trim().toLowerCase()
   const declared = CHARSETS[base]
   if (declared !== undefined) return declared
   return base.startsWith('text/') ? 'utf-8' : undefined

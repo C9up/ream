@@ -214,9 +214,9 @@ export function pluralize(word: string, count?: number): string {
  * @example humanize('user_name') // 'User name'
  */
 export function humanize(s: string): string {
-  const words = splitWords(s)
-  if (words.length === 0) return ''
-  return [words[0]?.charAt(0).toUpperCase() + words[0]?.slice(1), ...words.slice(1)].join(' ')
+  const [first, ...rest] = splitWords(s)
+  if (first === undefined) return ''
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ')
 }
 
 // ---------------------------------------------------------------------------

@@ -267,7 +267,13 @@ export class RouteBuilder extends Macroable {
 
   /** The primary definition — accessors read from it (all verbs share pattern/name). */
   #primary(): RouteDefinition {
-    return this.#routes[0]
+    const [first] = this.#routes
+    if (first === undefined) {
+      // A route is constructed with at least one verb, so this cannot happen —
+      // and this is where that is stated rather than asserted past.
+      throw new Error('Route has no definitions')
+    }
+    return first
   }
 
   /** Name this route (for URL generation and redirects). */
@@ -1557,9 +1563,13 @@ function matchPath(pattern: string, actual: string): MatchedParams | null {
     const params: MatchedParams = {}
     for (let i = 0; i < wildcardIdx; i++) {
       const part = patternParts[i]
+      const actual = actualParts[i]
+      // Both are read out of arrays whose length was checked above; naming
+      // them is what turns that check into something the compiler shares.
+      if (part === undefined || actual === undefined) return null
       if (part.startsWith(':')) {
-        params[part.substring(1)] = safeDecodeURIComponent(actualParts[i])
-      } else if (part !== actualParts[i]) {
+        params[part.substring(1)] = safeDecodeURIComponent(actual)
+      } else if (part !== actual) {
         return null
       }
     }
@@ -1579,22 +1589,22 @@ function matchPath(pattern: string, actual: string): MatchedParams | null {
 
   const params: MatchedParams = {}
 
-  for (let i = 0; i < patternParts.length; i++) {
-    const part = patternParts[i]
+  for (const [i, part] of patternParts.entries()) {
     const isOptional = part.endsWith('?')
+    const actual = actualParts[i]
 
     if (part.startsWith(':')) {
       const paramName = isOptional ? part.slice(1, -1) : part.substring(1)
-      if (i < actualParts.length) {
+      if (actual !== undefined) {
         // Percent-decode the captured segment (query strings already are) so
         // `/users/Jos%C3%A9` yields `José` and matchers test the real value.
         // safeDecode falls back to the raw segment on malformed input.
-        params[paramName] = safeDecodeURIComponent(actualParts[i])
+        params[paramName] = safeDecodeURIComponent(actual)
       }
       // Optional param with no actual part — skip (param not set)
-    } else if (i < actualParts.length && part !== actualParts[i]) {
+    } else if (actual !== undefined && part !== actual) {
       return null
-    } else if (i >= actualParts.length && !isOptional) {
+    } else if (actual === undefined && !isOptional) {
       return null
     }
   }
@@ -1612,7 +1622,8 @@ function matchPath(pattern: string, actual: string): MatchedParams | null {
  * Comparing them verbatim sends that request to a fallback, or to a 404.
  */
 function matchDomain(pattern: string, host: string): boolean {
-  const actualHost = host.split(':')[0].toLowerCase() // strip port
+  const [hostname = ''] = host.split(':') // strip port
+  const actualHost = hostname.toLowerCase()
   const wanted = pattern.toLowerCase()
   if (wanted === actualHost) return true
   if (wanted.startsWith('*.')) {
