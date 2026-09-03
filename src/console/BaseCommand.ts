@@ -117,7 +117,7 @@ export abstract class BaseCommand {
   error?: unknown
 
   /** Assigned by the kernel — see {@link terminate}. */
-  declare protected onTerminate?: () => void | Promise<void>
+  protected declare onTerminate?: () => void | Promise<void>
 
   /**
    * Lifecycle hooks, run in this order around `run()`: `prepare`, `interact`,
