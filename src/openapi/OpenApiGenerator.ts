@@ -170,9 +170,9 @@ export class OpenApiGenerator {
     }
 
     if (route.validators.length > 0 && ['post', 'put', 'patch'].includes(method)) {
-      const validatorName = route.validators[0]
-      const schema = this.#runeSchemas.get(validatorName)
-      if (schema) {
+      const [validatorName] = route.validators
+      const schema = validatorName === undefined ? undefined : this.#runeSchemas.get(validatorName)
+      if (schema && validatorName !== undefined) {
         operation.requestBody = {
           required: true,
           content: { 'application/json': { schema: this.#runeToJsonSchema(schema) } },
@@ -197,7 +197,9 @@ export class OpenApiGenerator {
   /** Extract parameter names from path. */
   #extractPathParams(path: string): string[] {
     const matches = path.matchAll(/:(\w+)\??/g)
-    return [...matches].map((m) => m[1])
+    // Group 1 is required by the pattern, so every match carries it; the
+    // filter is how that is stated instead of asserted.
+    return [...matches].map((m) => m[1]).filter((name) => name !== undefined)
   }
 
   /** Generate a summary from route metadata. */

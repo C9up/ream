@@ -165,7 +165,13 @@ export class RpcRouter {
         // Resolve through the container on every call (fresh DI per request,
         // like GraphQLEngine), falling back to a bare `new` when unset.
         const instance = this.#container ? await this.#container.make(controller) : new controller()
-        return instance[methodName](ctx, params)
+        const handler = instance[methodName]
+        if (typeof handler !== 'function') {
+          throw new Error(
+            `RPC method '${prefix}.${methodName}' is not a function on ${controller.name}`,
+          )
+        }
+        return handler.call(instance, ctx, params)
       })
     }
   }

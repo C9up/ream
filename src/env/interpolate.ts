@@ -46,9 +46,11 @@ export function interpolate(value: string, lookup: (name: string) => string | un
   })
 
   const prefixed = /^([A-Za-z_][A-Za-z0-9_]*):([\s\S]*)$/.exec(substituted)
-  if (prefixed) {
-    const resolver = identifiers.get(prefixed[1])
-    if (resolver) return resolver(prefixed[2])
+  // Both groups are required by the pattern, so a match carries both.
+  const [, identifier, rest] = prefixed ?? []
+  if (identifier !== undefined && rest !== undefined) {
+    const resolver = identifiers.get(identifier)
+    if (resolver) return resolver(rest)
   }
   return substituted
 }

@@ -108,9 +108,11 @@ export class Env<Values extends Record<string, unknown>> {
       validate(values: Record<string, string | undefined>): EnvRecord<S> {
         const failures: string[] = []
         const collected: Record<string, unknown> = {}
-        for (const key of Object.keys(schema)) {
+        // `entries` rather than `keys` plus a lookup: the validator comes back
+        // already known to be there instead of read again as maybe-missing.
+        for (const [key, node] of Object.entries(schema)) {
           try {
-            collected[key] = schema[key].validate(key, values[key])
+            collected[key] = node.validate(key, values[key])
           } catch (err) {
             failures.push(err instanceof Error ? err.message : String(err))
           }

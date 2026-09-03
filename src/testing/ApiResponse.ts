@@ -149,15 +149,14 @@ function parseMultipartResponse(
     // Trim the trailing CRLF before the next boundary.
     let content = part.subarray(headerEnd + 4)
     if (content.subarray(-2).toString('binary') === '\r\n') content = content.subarray(0, -2)
-    const nameMatch = headerText.match(/name="([^"]*)"/i)
-    if (!nameMatch) continue
-    const name = nameMatch[1]
-    const fileMatch = headerText.match(/filename="([^"]*)"/i)
-    if (fileMatch) {
+    const [, name] = headerText.match(/name="([^"]*)"/i) ?? []
+    if (name === undefined) continue
+    const [, filename] = headerText.match(/filename="([^"]*)"/i) ?? []
+    if (filename !== undefined) {
       const typeMatch = headerText.match(/content-type:\s*([^\r\n]+)/i)
       files[name] = {
         fieldName: name,
-        filename: fileMatch[1],
+        filename,
         type: typeMatch?.[1]?.trim() ?? 'application/octet-stream',
         size: content.length,
         content,
@@ -355,8 +354,8 @@ export class ApiResponse {
   /** Charset from `Content-Type`, if any — helix `charset()`. */
   charset(): string | undefined {
     const ct = this.#raw.headers['content-type'] ?? ''
-    const m = ct.match(/charset=([^;]+)/i)
-    return m ? m[1].trim() : undefined
+    const [, charset] = ct.match(/charset=([^;]+)/i) ?? []
+    return charset?.trim()
   }
 
   /** All response cookies, parsed from `Set-Cookie` — helix `cookies()`. */
@@ -380,8 +379,8 @@ export class ApiResponse {
     if (!link) return {}
     const out: Record<string, string> = {}
     for (const part of link.split(',')) {
-      const m = part.match(/<([^>]+)>\s*;\s*rel="?([^";]+)"?/)
-      if (m) out[m[2]] = m[1]
+      const [, url, rel] = part.match(/<([^>]+)>\s*;\s*rel="?([^";]+)"?/) ?? []
+      if (url !== undefined && rel !== undefined) out[rel] = url
     }
     return out
   }

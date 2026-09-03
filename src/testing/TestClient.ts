@@ -368,15 +368,15 @@ export function parseHttpResponse(raw: string | Buffer): TestResponse {
 
   const lines = headerSection.split('\r\n')
   const statusLine = lines[0] ?? ''
-  const statusMatch = statusLine.match(/HTTP\/\d+\.\d+ (\d+)/)
-  const status = statusMatch ? Number.parseInt(statusMatch[1], 10) : 0
+  const [, statusDigits] = statusLine.match(/HTTP\/\d+\.\d+ (\d+)/) ?? []
+  const status = statusDigits === undefined ? 0 : Number.parseInt(statusDigits, 10)
 
   const headers: Dict = {}
-  for (let i = 1; i < lines.length; i++) {
-    const colonIdx = lines[i].indexOf(':')
+  for (const line of lines.slice(1)) {
+    const colonIdx = line.indexOf(':')
     if (colonIdx === -1) continue
-    const key = lines[i].slice(0, colonIdx).trim().toLowerCase()
-    const value = lines[i].slice(colonIdx + 1).trim()
+    const key = line.slice(0, colonIdx).trim().toLowerCase()
+    const value = line.slice(colonIdx + 1).trim()
     headers[key] = value
   }
 

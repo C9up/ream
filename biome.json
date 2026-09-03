@@ -19,7 +19,7 @@
 				"noForEach": "off"
 			},
 			"style": {
-				"noNonNullAssertion": "warn",
+				"noNonNullAssertion": "error",
 				"useConst": "error",
 				"useImportType": "error"
 			},

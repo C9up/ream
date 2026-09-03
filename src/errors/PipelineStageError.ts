@@ -42,9 +42,11 @@ export function createPipelineError(
 ): ReamError {
   const total = PIPELINE_STAGES.length
   const clampedIndex = Math.max(0, Math.min(stageIndex, total - 1))
-  const stageName = PIPELINE_STAGES[clampedIndex]
+  // The index is clamped into the list just above, so the lookup lands — the
+  // fallback is what says so without asserting past the read.
+  const stageName = PIPELINE_STAGES[clampedIndex] ?? '(unknown)'
   const position = `${clampedIndex + 1}/${total}`
-  const nextStage = clampedIndex + 1 < total ? PIPELINE_STAGES[clampedIndex + 1] : '(end)'
+  const nextStage = PIPELINE_STAGES[clampedIndex + 1] ?? '(end)'
 
   const errorCode = originalError instanceof ReamError ? originalError.code : 'E_PIPELINE_ERROR'
 

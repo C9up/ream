@@ -6,8 +6,9 @@
 export function parseSize(size: string): number {
   const match = size.match(/^(\d+)(kb|mb|gb)?$/i)
   if (!match) return 1024 * 1024 // default 1mb
-  const num = parseInt(match[1], 10)
-  switch (match[2]?.toLowerCase()) {
+  const [, digits, unit] = match
+  const num = parseInt(digits ?? '0', 10)
+  switch (unit?.toLowerCase()) {
     case 'kb':
       return num * 1024
     case 'mb':
