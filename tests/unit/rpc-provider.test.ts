@@ -261,13 +261,11 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     ])
   })
 
-  it('keeps an aborted operation off the wire instead of reading its code as a domain code', async () => {
+  it('keeps an unrecognised failure off the wire in production', async () => {
     const container = new Container()
     const { provider, posted } = mount(container, (rpc) => {
-      rpc.method('task.slow', async () => {
-        const controller = new AbortController()
-        controller.abort()
-        await fetch('http://127.0.0.1:1/', { signal: controller.signal })
+      rpc.method('task.slow', () => {
+        throw new Error('connect ECONNREFUSED 10.0.0.7:5432')
       })
     })
     await provider.boot()
@@ -280,10 +278,10 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
         params: {},
         id: 7,
       })
-      // A DOMException carries a numeric `code` (20 for AbortError). Read as a
-      // domain error it answered `{ code: 20, message: 'This operation was
-      // aborted' }` — its own code, and its message past the production guard
-      // three lines below the one that let it through.
+      // Everything comet does not recognise as a domain error is an internal
+      // failure, and an internal failure's message is the caller's business
+      // nowhere but in development — it is where the host, the port and the
+      // query end up.
       expect(out).toEqual([
         { jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: 7 },
       ])
