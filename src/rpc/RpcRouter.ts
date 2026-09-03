@@ -205,6 +205,16 @@ export class RpcRouter {
 
     // Batch support (max 50 to prevent DoS)
     if (Array.isArray(body)) {
+      // §6: "If the batch rpc call itself fails to be recognized as an valid
+      // JSON or as an Array with at least one value, the response from the
+      // Server MUST be a single Response object." An empty batch answered with
+      // 204 No Content, which is what this replies when every call in a batch
+      // was a notification — so a client that sent nothing was told its calls
+      // had run.
+      if (body.length === 0) {
+        ctx.response.status(200).json(rpcError(-32600, 'Invalid Request', null))
+        return
+      }
       if (body.length > 50) {
         ctx.response.status(400).json(rpcError(-32600, 'Batch too large (max 50)', null))
         return

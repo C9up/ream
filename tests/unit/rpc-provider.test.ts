@@ -245,7 +245,54 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     ])
   })
 
-  it('honors a handler error carrying a numeric code (domain errors, not -32603)', async () => {
+  it('answers an empty batch with one Invalid Request, not with 204', async () => {
+    const container = new Container()
+    const { provider, posted } = mount(container, (rpc) => {
+      rpc.method('demo.echo', (_ctx, params) => params)
+    })
+    await provider.boot()
+    // Spec §6: a batch that is not "an Array with at least one value" is
+    // answered with a single Response object. 204 No Content is what this
+    // replies when every call in a batch was a notification, so a client that
+    // sent nothing was told its calls had run.
+    const out = await call(posted[0], { _body: [] })
+    expect(out).toEqual([
+      { jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' }, id: null },
+    ])
+  })
+
+  it('keeps an aborted operation off the wire instead of reading its code as a domain code', async () => {
+    const container = new Container()
+    const { provider, posted } = mount(container, (rpc) => {
+      rpc.method('task.slow', async () => {
+        const controller = new AbortController()
+        controller.abort()
+        await fetch('http://127.0.0.1:1/', { signal: controller.signal })
+      })
+    })
+    await provider.boot()
+    const previous = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      const out = await call(posted[0], {
+        jsonrpc: '2.0',
+        method: 'task.slow',
+        params: {},
+        id: 7,
+      })
+      // A DOMException carries a numeric `code` (20 for AbortError). Read as a
+      // domain error it answered `{ code: 20, message: 'This operation was
+      // aborted' }` — its own code, and its message past the production guard
+      // three lines below the one that let it through.
+      expect(out).toEqual([
+        { jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: 7 },
+      ])
+    } finally {
+      process.env.NODE_ENV = previous
+    }
+  })
+
+  it('honors a handler error carrying a negative numeric code (domain errors, not -32603)', async () => {
     const container = new Container()
     const { provider, posted } = mount(container, (rpc) => {
       rpc.method('task.find', () => {
