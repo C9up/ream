@@ -43,8 +43,7 @@ export function parse(value: string | number): number | null {
   // `as Unit` that followed asserted past exactly that. Named, with the
   // suffix checked against the table it indexes, nothing is asserted.
   const [, digits, suffix] = matched ?? []
-  const amount =
-    digits !== undefined ? Number.parseFloat(digits) : Number.parseInt(value, 10)
+  const amount = digits !== undefined ? Number.parseFloat(digits) : Number.parseInt(value, 10)
   if (Number.isNaN(amount)) return null
 
   const unit = suffix === undefined ? 'b' : suffix.toLowerCase()
