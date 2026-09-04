@@ -196,6 +196,15 @@ describe('ream > migrate commands', () => {
     return { output: kernel.ui.getLogs().join('\n'), exitCode: command.exitCode }
   }
 
+  it('tells the boot not to migrate, in all three', () => {
+    // Without it the boot applies everything before the command runs, so
+    // `migrate` reports nothing to do after the work is done, and
+    // `migrate:status` — asked only to look — changes what it reports on.
+    for (const Command of [Migrate, MigrateRollback, MigrateStatus]) {
+      expect(Command.options).toMatchObject({ startApp: true, drivesMigrations: true })
+    }
+  })
+
   it('drives every registered source, prefixed by its name', async () => {
     const order: string[] = []
     const application = registryWith([

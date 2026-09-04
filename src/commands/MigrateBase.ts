@@ -19,7 +19,10 @@ import type { MigrationRegistry } from '../migrations/MigrationRegistry.js'
 import type { RegisteredMigrationSource } from '../migrations/types.js'
 
 export abstract class MigrateBase extends BaseCommand {
-  static override options: CommandOptions = { startApp: true }
+  // `drivesMigrations` because these three ARE the migration run: without it the
+  // boot applies everything first, so `migrate` says "nothing to migrate" after
+  // the work is done, and `migrate:status` mutates the schema it reports on.
+  static override options: CommandOptions = { startApp: true, drivesMigrations: true }
 
   @flags.string({
     description: 'Only this migration source, by the name its package registered',

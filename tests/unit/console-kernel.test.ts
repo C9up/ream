@@ -459,6 +459,58 @@ describe('Kernel', () => {
     expect(ran).toEqual(['booted'])
   })
 
+  it('tells the boot not to migrate before starting a command that migrates', async () => {
+    // atlas migrates on boot outside production, for the convenience of `dev`.
+    // For the commands that exist to migrate, that convenience is the bug: the
+    // boot applies everything, so `migrate` reports nothing to do and
+    // `migrate:status` has changed the schema it was asked to look at. The flag
+    // has to be set BEFORE the application starts, which is the only reason it
+    // lives in the kernel rather than in the command.
+    const previous = process.env.REAM_SKIP_BOOT_MIGRATE
+    delete process.env.REAM_SKIP_BOOT_MIGRATE
+    const seen: Array<string | undefined> = []
+    const startApp = vi.fn(async () => {
+      seen.push(process.env.REAM_SKIP_BOOT_MIGRATE)
+      return new Application()
+    })
+
+    class Migrates extends BaseCommand {
+      static override commandName = 'migrates'
+      static override description = 'Drives the migrations itself'
+      static override options = { startApp: true, drivesMigrations: true }
+      run(): void {}
+    }
+
+    await new Kernel({ startApp }).register(Migrates).handle(['migrates'])
+    expect(seen).toEqual(['1'])
+
+    if (previous === undefined) delete process.env.REAM_SKIP_BOOT_MIGRATE
+    else process.env.REAM_SKIP_BOOT_MIGRATE = previous
+  })
+
+  it('leaves the boot migration alone for a command that does not drive it', async () => {
+    const previous = process.env.REAM_SKIP_BOOT_MIGRATE
+    delete process.env.REAM_SKIP_BOOT_MIGRATE
+    const seen: Array<string | undefined> = []
+    const startApp = vi.fn(async () => {
+      seen.push(process.env.REAM_SKIP_BOOT_MIGRATE)
+      return new Application()
+    })
+
+    class Seeds extends BaseCommand {
+      static override commandName = 'seeds'
+      static override description = 'Wants a migrated schema'
+      static override options = { startApp: true }
+      run(): void {}
+    }
+
+    await new Kernel({ startApp }).register(Seeds).handle(['seeds'])
+    expect(seen).toEqual([undefined])
+
+    if (previous === undefined) delete process.env.REAM_SKIP_BOOT_MIGRATE
+    else process.env.REAM_SKIP_BOOT_MIGRATE = previous
+  })
+
   it('reports when a command needs an app the kernel cannot provide', async () => {
     class Needs extends BaseCommand {
       static override commandName = 'needs'

@@ -999,6 +999,14 @@ export class Kernel {
       )
     }
 
+    // Before the boot, not after: a data package that migrates on boot for the
+    // convenience of `dev` would otherwise apply everything a moment before the
+    // command that exists to apply it runs — leaving `migrate` with nothing to
+    // report and `migrate:status` having changed what it was asked to look at.
+    if (Command.options?.drivesMigrations === true) {
+      process.env.REAM_SKIP_BOOT_MIGRATE = '1'
+    }
+
     return this.#startApp()
   }
 

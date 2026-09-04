@@ -37,6 +37,21 @@ export interface CommandOptions {
    * default so a typo (`--warm` for `--warn`) is reported, not swallowed.
    */
   allowUnknownFlags?: boolean
+
+  /**
+   * This command drives migrations itself, so booting must not run them.
+   *
+   * A data package may migrate on boot for the convenience of `dev` — atlas
+   * does, outside production. For the commands that exist to migrate, that
+   * convenience is the bug: the boot applies everything, and then `migrate`
+   * reports "nothing to migrate" while `migrate:status`, asked only to look,
+   * has changed the schema it is reporting on.
+   *
+   * Declaring this sets `REAM_SKIP_BOOT_MIGRATE=1` before the application
+   * starts, which is the flag a data package watches for. Any package's own
+   * migration command opts in the same way; the framework names none of them.
+   */
+  drivesMigrations?: boolean
 }
 
 /** Metadata recorded by an `@args.*` decorator. */
