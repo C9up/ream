@@ -244,6 +244,7 @@
     "@biomejs/biome": "2.5.12",
     "@c9up/comet": "^0.1.0",
     "@types/node": "^22.19.15",
+    "@vitest/coverage-v8": "^4.1.6",
     "mime-db": "^1.54.0",
     "mime-types": "^3.0.2",
     "typescript": "^6.0.2",
