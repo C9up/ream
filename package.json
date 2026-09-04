@@ -219,7 +219,7 @@
     "build:napi": "pnpm build:rust && pnpm build:napi-types && node scripts/copy-napi.mjs",
     "test": "vitest run",
     "test:rust": "cargo test --all",
-    "lint": "biome check src/",
+    "lint": "biome check src/ tests/",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"

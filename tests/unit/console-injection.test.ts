@@ -30,7 +30,7 @@ describe('command dependency injection (Console parity)', () => {
     class Notify extends BaseCommand {
       static override commandName = 'notify'
       static override description = 'Injects a service in its constructor'
-      static override options = { startApp: true };
+      static override options = { startApp: true }
 
       constructor(@Inject('mailer') private mailer: Mailer) {
         super()

@@ -178,7 +178,7 @@ jobs:
           cp target/release/libream_napi_test.so tests/integration/napi/index.linux-x64-gnu.node
       - name: Build TS (tsc -> dist/)
         run: pnpm build
-      - run: pnpm exec vitest run
+      - run: pnpm exec vitest run --coverage
 
   publish:
     name: Publish to npm

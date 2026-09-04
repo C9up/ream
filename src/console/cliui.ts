@@ -750,7 +750,8 @@ function pad(text: string, width: number): string {
   return text + ' '.repeat(Math.max(0, width - visibleWidth(text)))
 }
 
-function stripAnsi(text: string): string {
+/** Removes the SGR escape sequences `colors` writes, leaving the visible text. */
+export function stripAnsi(text: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
   return text.replace(/\u001B\[[0-9;]*m/g, '')
 }

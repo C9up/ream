@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BaseCommand } from '../../src/console/BaseCommand.js'
-import { Ui } from '../../src/console/cliui.js'
+import { stripAnsi, Ui } from '../../src/console/cliui.js'
 import { args, flags } from '../../src/console/decorators.js'
 import { Kernel } from '../../src/console/Kernel.js'
 
@@ -219,7 +219,7 @@ describe('Ui — column alignment with real ANSI colours', () => {
       // The coloured cell carries escape codes; padded on visible width, its
       // column stays 6 wide ("Status"), so "a.ts" starts at the same offset as
       // "File" on the header line.
-      const stripped = lines.map((line) => line.replace(/\u001B\[[0-9;]*m/g, ''))
+      const stripped = lines.map(stripAnsi)
       expect(stripped[0]?.indexOf('File')).toBe(stripped[2]?.indexOf('a.ts'))
     } finally {
       if (previous === undefined) delete process.env.FORCE_COLOR

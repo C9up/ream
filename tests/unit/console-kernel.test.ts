@@ -1330,7 +1330,7 @@ describe('Kernel — remaining Console contracts', () => {
 
   it('keeps the value of an undeclared flag when they are allowed', async () => {
     let flags: Record<string, unknown> | undefined
-    class Proxy extends BaseCommand {
+    class ProxyCommand extends BaseCommand {
       static override commandName = 'proxy'
       static override description = 'Forwards whatever it is given'
       static override options = { allowUnknownFlags: true }
@@ -1339,7 +1339,7 @@ describe('Kernel — remaining Console contracts', () => {
       }
     }
 
-    await new Kernel().register(Proxy).handle(['proxy', '--foo', 'bar', '--verbose'])
+    await new Kernel().register(ProxyCommand).handle(['proxy', '--foo', 'bar', '--verbose'])
     // `--foo bar` must not degrade to `foo: true` with `bar` dropped.
     expect(flags).toEqual({ foo: 'bar', verbose: true })
   })
@@ -1352,7 +1352,7 @@ describe('Kernel — proxy mode and alias visibility', () => {
 
   it('keeps extra positionals for a proxy command instead of dropping them', async () => {
     let parsed: { flags: unknown; extraArgs: string[]; unknownFlags: string[] } | undefined
-    class Proxy extends BaseCommand {
+    class ProxyCommand extends BaseCommand {
       static override commandName = 'proxy'
       static override description = 'Forwards whatever it is given'
       static override options = { allowUnknownFlags: true }
@@ -1365,7 +1365,7 @@ describe('Kernel — proxy mode and alias visibility', () => {
       }
     }
 
-    await new Kernel().register(Proxy).handle(['proxy', 'run', 'build', '--foo', 'bar'])
+    await new Kernel().register(ProxyCommand).handle(['proxy', 'run', 'build', '--foo', 'bar'])
     expect(parsed?.flags).toEqual({ foo: 'bar' })
     // Console exposes the NAMES of undeclared flags; their values stay in `flags`.
     expect(parsed?.unknownFlags).toEqual(['foo'])

@@ -15,6 +15,16 @@ describe('helpers > compose', () => {
     }
   }
 
+  // Generic over the superclass, and that is what keeps this file out of the
+  // typecheck: `class extends T` where `T` is a type PARAMETER is a mixin class
+  // in TypeScript's eyes, and one must extend a base spelt
+  // `new (...args: any[]) => …` (TS2545). The rule is hard-coded in the
+  // compiler — `never[]` does not satisfy it — and `any` is banned here.
+  //
+  // Written non-generically it compiles and stops testing anything: each mixin
+  // would return a class extending `Base` rather than the one built so far, so
+  // `compose`'s whole reason for existing — threading the accumulated type
+  // through the chain — is lost, and `user.createdAt` becomes a type error.
   const Timestamped = <T extends typeof Base>(superclass: T) =>
     class extends superclass {
       static stamped = true

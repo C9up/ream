@@ -132,6 +132,7 @@ describe('defineStaticProperty', () => {
   it('gives a subclass its own copy instead of the shared one', () => {
     // A static declared on a base class is shared: without this, a subclass
     // pushing into it writes into every sibling's copy.
+    // biome-ignore lint/complexity/noStaticOnlyClass: a static-only class is exactly what defineStaticProperty operates on
     class Base {
       static columns: string[] = ['id']
     }
@@ -143,6 +144,7 @@ describe('defineStaticProperty', () => {
   })
 
   it('define seeds a fresh value instead of copying', () => {
+    // biome-ignore lint/complexity/noStaticOnlyClass: a static-only class is exactly what defineStaticProperty operates on
     class Base {
       static columns: string[] = ['id']
     }
@@ -152,6 +154,7 @@ describe('defineStaticProperty', () => {
   })
 
   it('leaves an own property alone', () => {
+    // biome-ignore lint/complexity/noStaticOnlyClass: a static-only class is exactly what defineStaticProperty operates on
     class Own {
       static columns: string[] = ['mine']
     }
