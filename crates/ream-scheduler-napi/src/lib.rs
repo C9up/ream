@@ -11,7 +11,32 @@ use napi::bindgen_prelude::*;
 use napi::bindgen_prelude::{Function, Unknown};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
-use ream_napi_core::callback::{create_threadsafe_fn, CallbackConfig, FatalThreadsafeFunction};
+use ream_napi_core::callback::CallbackConfig;
+
+/// A task callback that does NOT hold Node's event loop open.
+///
+/// A `ThreadsafeFunction` keeps the loop referenced for as long as it lives, and
+/// one is created per registered task. `stop()` cancels the tick loop but the
+/// callbacks live on in the task registry, so a process that had merely
+/// REGISTERED a task never exited: every console command booting an app with a
+/// `@Schedule` in it ran to completion and then hung until the operator or a
+/// timeout killed it. Nothing in JS showed why —
+/// `process.getActiveResourcesInfo()` reported an empty list, because the
+/// reference is held below it.
+///
+/// Weak is the honest shape: a scheduler is a side concern, not a reason for a
+/// process to exist. A server is held open by its listener; a long-running
+/// scheduler process is held open by the command that runs it, the way
+/// `queue:work` holds its own.
+type WeakTaskCallback<T> = napi::threadsafe_function::ThreadsafeFunction<
+    T,
+    Unknown<'static>,
+    Unknown<'static>,
+    napi::Status,
+    false,
+    true,
+    0,
+>;
 use ream_napi_core::{catch_unwind_napi, shared_runtime, ReamError};
 use ream_scheduler::{RustScheduler as CoreScheduler, TaskInvoker, TaskPayload};
 use serde::Serialize;
@@ -37,7 +62,7 @@ impl From<TaskPayload> for JsTaskPayload {
 /// Bridges a registered task invocation to a JS `ThreadsafeFunction`.
 /// Non-blocking call — the ticker thread does not wait on the JS event loop.
 struct JsTaskInvoker {
-    tsfn: FatalThreadsafeFunction<JsTaskPayload>,
+    tsfn: WeakTaskCallback<JsTaskPayload>,
 }
 
 impl TaskInvoker for JsTaskInvoker {
@@ -106,8 +131,26 @@ impl RustScheduler {
         // setup (see ream-http-napi, ream-events-napi). Matches the
         // `CallbackConfig::default()` convention: unlimited queue,
         // non-blocking calls.
-        let tsfn: FatalThreadsafeFunction<JsTaskPayload> =
-            create_threadsafe_fn::<JsTaskPayload>(&callback, CallbackConfig::default())?;
+        // Built here rather than through `create_threadsafe_fn`: the shared
+        // helper returns a STRONG handle, which is right for the HTTP listener
+        // and the event bus — both of which are a reason for the process to be
+        // running — and wrong for this one.
+        let config = CallbackConfig::default();
+        if config.max_queue_size != 0 {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "max_queue_size is a compile-time constant in napi 3; only 0 (unlimited) is supported",
+            ));
+        }
+        let tsfn: WeakTaskCallback<JsTaskPayload> = callback
+            .build_threadsafe_function::<JsTaskPayload>()
+            .callee_handled::<false>()
+            .weak::<true>()
+            .build_callback(
+                |ctx: napi::threadsafe_function::ThreadsafeCallContext<JsTaskPayload>| {
+                    ctx.env.to_js_value(&ctx.value)
+                },
+            )?;
 
         let inner = Arc::clone(&self.inner);
         catch_unwind_napi(std::panic::AssertUnwindSafe(move || {
