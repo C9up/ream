@@ -128,7 +128,7 @@ universe through the container, never via a static import.
 | [@c9up/spectrum](https://github.com/C9up/spectrum) | Structured logging |
 | [@c9up/station](https://github.com/C9up/station) | Admin scaffolding |
 | [@c9up/transit](https://github.com/C9up/transit) | Federated sign-in (SAML 2.0, LDAP, OpenID Connect, OAuth1, OAuth2) |
-| [@c9up/vellum](https://github.com/C9up/vellum) | PDF (render, read, reshape, stamp) |
+| [@c9up/vellum](https://github.com/C9up/vellum) | PDF (render, read, reshape, stamp, forms) |
 | [@c9up/warden](https://github.com/C9up/warden) | Authentication |
 
 ## License
