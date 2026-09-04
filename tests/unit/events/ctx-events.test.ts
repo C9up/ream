@@ -4,6 +4,7 @@ import { Container } from '../../../src/container/Container.js'
 import { Emitter } from '../../../src/events/Emitter.js'
 import EventsProvider from '../../../src/events/EventsProvider.js'
 import { createHttpKernel, MiddlewareRegistry, Router } from '../../../src/index.js'
+import { defined } from '../../__helpers__/defined.js'
 
 function req(path: string) {
   return { method: 'GET', path, query: '', headers: {}, body: '' }
@@ -51,8 +52,8 @@ describe('events > ctx.events wiring', () => {
 
     expect(res.status).toBe(500)
     expect(errors).toHaveLength(1)
-    expect(errors[0].path).toBe('/boom')
-    expect(errors[0].error).toBe('kaboom')
+    expect(defined(errors[0]).path).toBe('/boom')
+    expect(defined(errors[0]).error).toBe('kaboom')
   })
 
   it('emits "http:request" then "http:response" around a successful request', async () => {

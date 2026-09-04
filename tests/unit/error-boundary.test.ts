@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ErrorEvent } from '../../src/index.js'
 import { ErrorBoundary } from '../../src/index.js'
+import { defined } from '../__helpers__/defined.js'
 
 describe('error boundary > service error', () => {
   it('emits service.error event', () => {
@@ -10,11 +11,11 @@ describe('error boundary > service error', () => {
     boundary.serviceError('OrderService', new Error('DB connection failed'), 'corr-123')
 
     expect(events.length).toBe(1)
-    expect(events[0].type).toBe('service.error')
-    expect(events[0].source).toBe('OrderService')
-    expect(events[0].message).toBe('DB connection failed')
-    expect(events[0].correlationId).toBe('corr-123')
-    expect(events[0].timestamp).toBeDefined()
+    expect(defined(events[0]).type).toBe('service.error')
+    expect(defined(events[0]).source).toBe('OrderService')
+    expect(defined(events[0]).message).toBe('DB connection failed')
+    expect(defined(events[0]).correlationId).toBe('corr-123')
+    expect(defined(events[0]).timestamp).toBeDefined()
   })
 })
 
@@ -26,9 +27,9 @@ describe('error boundary > security rejected', () => {
     boundary.securityRejected('Blackhole', 'Rate limit exceeded', 'corr-456')
 
     expect(events.length).toBe(1)
-    expect(events[0].type).toBe('security.rejected')
-    expect(events[0].severity).toBe('warning')
-    expect(events[0].message).toBe('Rate limit exceeded')
+    expect(defined(events[0]).type).toBe('security.rejected')
+    expect(defined(events[0]).severity).toBe('warning')
+    expect(defined(events[0]).message).toBe('Rate limit exceeded')
   })
 })
 
@@ -40,8 +41,8 @@ describe('error boundary > system error', () => {
     boundary.systemError('NAPI', 'Crossing failed')
 
     expect(events.length).toBe(1)
-    expect(events[0].type).toBe('system.error')
-    expect(events[0].source).toBe('NAPI')
+    expect(defined(events[0]).type).toBe('system.error')
+    expect(defined(events[0]).source).toBe('NAPI')
   })
 })
 
@@ -52,7 +53,7 @@ describe('error boundary > handles non-Error objects', () => {
 
     boundary.serviceError('test', 'string error')
 
-    expect(events[0].message).toBe('string error')
+    expect(defined(events[0]).message).toBe('string error')
   })
 
   it('converts number to error event', () => {
@@ -61,7 +62,7 @@ describe('error boundary > handles non-Error objects', () => {
 
     boundary.serviceError('test', 42)
 
-    expect(events[0].message).toBe('42')
+    expect(defined(events[0]).message).toBe('42')
   })
 })
 
@@ -91,14 +92,14 @@ describe('error boundary > severity + originalError', () => {
     const b = new ErrorBoundary((e) => events.push(e))
     b.systemError('infra', new Error('down'))
     b.serviceError('app', new Error('bug'))
-    expect(events[0].severity).toBe('critical')
-    expect(events[1].severity).toBe('warning')
+    expect(defined(events[0]).severity).toBe('critical')
+    expect(defined(events[1]).severity).toBe('warning')
   })
 
   it('carries the stack trace in originalError', () => {
     const events: ErrorEvent[] = []
     new ErrorBoundary((e) => events.push(e)).serviceError('S', new Error('with-stack'))
-    expect(events[0].originalError).toContain('with-stack')
+    expect(defined(events[0]).originalError).toContain('with-stack')
   })
 })
 

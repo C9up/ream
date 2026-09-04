@@ -15,6 +15,7 @@ import {
   validatePipelineConfig,
   WardenError,
 } from '../../src/index.js'
+import { defined } from '../__helpers__/defined.js'
 
 // === Story 12.1: ReamError structured errors ===
 
@@ -197,14 +198,14 @@ describe('error-dx > findClosestMatches', () => {
 
   it('finds close matches for typo', () => {
     const matches = findClosestMatches('statsu', candidates)
-    expect(matches[0].candidate).toBe('status')
-    expect(matches[0].distance).toBe(2)
+    expect(defined(matches[0]).candidate).toBe('status')
+    expect(defined(matches[0]).distance).toBe(2)
   })
 
   it('finds matches within max distance', () => {
     const matches = findClosestMatches('ttotal', candidates, 2)
     expect(matches.length).toBeGreaterThan(0)
-    expect(matches[0].candidate).toBe('total')
+    expect(defined(matches[0]).candidate).toBe('total')
   })
 
   it('returns empty for no close match', () => {
@@ -220,7 +221,7 @@ describe('error-dx > findClosestMatches', () => {
   it('case-insensitive matching', () => {
     const matches = findClosestMatches('STATSU', candidates)
     expect(matches.length).toBeGreaterThan(0)
-    expect(matches[0].candidate).toBe('status')
+    expect(defined(matches[0]).candidate).toBe('status')
   })
 })
 
@@ -303,9 +304,9 @@ describe('error-dx > validatePipelineConfig', () => {
       routes: [{ middleware: ['auth', 'nonexistent'] }],
     })
     expect(errors).toHaveLength(1)
-    expect(errors[0].code).toBe('E_PIPELINE_UNKNOWN_MIDDLEWARE')
-    expect(errors[0].message).toContain('nonexistent')
-    expect(errors[0].context.registered).toContain('auth')
+    expect(defined(errors[0]).code).toBe('E_PIPELINE_UNKNOWN_MIDDLEWARE')
+    expect(defined(errors[0]).message).toContain('nonexistent')
+    expect(defined(errors[0]).context.registered).toContain('auth')
   })
 
   it('returns empty when no routes', () => {

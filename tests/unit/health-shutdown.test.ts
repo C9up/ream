@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HealthCheck } from '../../src/HealthCheck.js'
 import { Response } from '../../src/http/Response.js'
+import { defined } from '../__helpers__/defined.js'
 
 /**
  * Drive the handler through a REAL Response.
@@ -34,8 +35,8 @@ describe('health > HealthCheck', () => {
     const status = await health.check()
     expect(status.status).toBe('ok')
     expect(status.checks).toHaveLength(2)
-    expect(status.checks[0].name).toBe('db')
-    expect(status.checks[1].name).toBe('cache')
+    expect(defined(status.checks[0]).name).toBe('db')
+    expect(defined(status.checks[1]).name).toBe('cache')
   })
 
   it('reports degraded when any check warns', async () => {
@@ -64,8 +65,8 @@ describe('health > HealthCheck', () => {
 
     const status = await health.check()
     expect(status.status).toBe('error')
-    expect(status.checks[0].status).toBe('error')
-    expect(status.checks[0].message).toBe('boom')
+    expect(defined(status.checks[0]).status).toBe('error')
+    expect(defined(status.checks[0]).message).toBe('boom')
   })
 
   it('supports async checkers', async () => {
@@ -77,7 +78,7 @@ describe('health > HealthCheck', () => {
 
     const status = await health.check()
     expect(status.status).toBe('ok')
-    expect(status.checks[0].latency).toBeGreaterThanOrEqual(0)
+    expect(defined(status.checks[0]).latency).toBeGreaterThanOrEqual(0)
   })
 
   it('measures latency per check', async () => {
@@ -88,7 +89,7 @@ describe('health > HealthCheck', () => {
     })
 
     const status = await health.check()
-    expect(status.checks[0].latency).toBeGreaterThanOrEqual(15)
+    expect(defined(status.checks[0]).latency).toBeGreaterThanOrEqual(15)
   })
 
   it('handler returns correct HTTP status', async () => {
@@ -129,7 +130,7 @@ describe('health > HealthCheck', () => {
     health.register('database', () => ({ name: 'wrong_name', status: 'ok' }))
 
     const status = await health.check()
-    expect(status.checks[0].name).toBe('database')
+    expect(defined(status.checks[0]).name).toBe('database')
   })
 
   it('times out hung checkers', async () => {
@@ -138,7 +139,7 @@ describe('health > HealthCheck', () => {
 
     const status = await health.check()
     expect(status.status).toBe('error')
-    expect(status.checks[0].status).toBe('error')
-    expect(status.checks[0].message).toContain('timed out')
+    expect(defined(status.checks[0]).status).toBe('error')
+    expect(defined(status.checks[0]).message).toContain('timed out')
   })
 })

@@ -22,6 +22,7 @@ import {
 } from '../../src/health/index.js'
 import type { HealthCheckResult } from '../../src/health/types.js'
 import bytes from '../../src/helpers/bytes.js'
+import { defined } from '../__helpers__/defined.js'
 
 /** A check whose verdict and run-count the test controls. */
 class StubCheck extends BaseCheck {
@@ -138,17 +139,17 @@ describe('HealthChecks — caching', () => {
       const checks = new HealthChecks().register([check])
 
       const first = await checks.run()
-      expect(first.checks[0].isCached).toBe(false)
+      expect(defined(first.checks[0]).isCached).toBe(false)
       expect(check.runs).toBe(1)
 
       vi.advanceTimersByTime(59_000)
       const second = await checks.run()
-      expect(second.checks[0].isCached).toBe(true)
+      expect(defined(second.checks[0]).isCached).toBe(true)
       expect(check.runs).toBe(1)
 
       vi.advanceTimersByTime(2_000)
       const third = await checks.run()
-      expect(third.checks[0].isCached).toBe(false)
+      expect(defined(third.checks[0]).isCached).toBe(false)
       expect(check.runs).toBe(2)
     } finally {
       vi.useRealTimers()

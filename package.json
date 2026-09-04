@@ -222,7 +222,7 @@
     "lint": "biome check src/",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "typecheck:console-tests": "tsc --noEmit -p tsconfig.tests.json"
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "file-type": "^22.0.1",

@@ -1,11 +1,53 @@
 {
+  // The tests, typechecked in their own program.
+  //
+  // `tsconfig.json` compiles `src` alone, so no test file was ever read by
+  // `tsc`. That hid four wrong contracts in the framework itself — see the
+  // commit that widened this — and 366 errors in the tests.
+  //
+  // 35 files are still excluded, by name rather than by a blanket `tests/`:
+  // an exclusion that names what it excludes shrinks, and one that names a
+  // directory does not. Each is a drifted hand-written fixture — a mock whose
+  // signature no longer matches the interface it stands for, or an
+  // approximation of a NAPI binding that takes JSON strings.
   "extends": "./tsconfig.json",
-  "include": [
-    "src",
-    "tests/unit/console-*.test.ts",
-    "tests/fixtures/console-app/**/*.ts"
-  ],
+  "include": ["src", "tests"],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "tests/integration/http/hyper-server.test.ts",
+    "tests/integration/http/multipart-upload.test.ts",
+    "tests/integration/http/streamed-download.test.ts",
+    "tests/integration/http/test-client-csrf.test.ts",
+    "tests/unit/api-response.test.ts",
+    "tests/unit/application.test.ts",
+    "tests/unit/auth-use-typing.test.ts",
+    "tests/unit/brisk-render.test.ts",
+    "tests/unit/container.test.ts",
+    "tests/unit/cookie-signer.test.ts",
+    "tests/unit/events/config.test.ts",
+    "tests/unit/events/emitter.test.ts",
+    "tests/unit/events/FakeBus.test.ts",
+    "tests/unit/events/helix-helpers.test.ts",
+    "tests/unit/export-map.test.ts",
+    "tests/unit/framework-commands.test.ts",
+    "tests/unit/graceful-shutdown.test.ts",
+    "tests/unit/graphql-coercion.test.ts",
+    "tests/unit/graphql-fragments.test.ts",
+    "tests/unit/graphql-provider.test.ts",
+    "tests/unit/health.test.ts",
+    "tests/unit/helpers-compose.test.ts",
+    "tests/unit/macroable.test.ts",
+    "tests/unit/middleware-args.test.ts",
+    "tests/unit/openapi-provider.test.ts",
+    "tests/unit/plain-cookie-packing.test.ts",
+    "tests/unit/response-send.test.ts",
+    "tests/unit/rpc-provider.test.ts",
+    "tests/unit/schedule-provider.test.ts",
+    "tests/unit/scheduler-wrapper.test.ts",
+    "tests/unit/session-file-database-drivers.test.ts",
+    "tests/unit/session-redis-driver.test.ts",
+    "tests/unit/session-tagging.test.ts",
+    "tests/unit/signed-url-routing.test.ts",
+    "tests/unit/static-provider.test.ts"
   ]
 }

@@ -41,10 +41,17 @@ export type FakeBusPredicateArg = FakeBusPredicate | ((event: CapturedEmit) => b
 
 interface Subscription {
   pattern: string
-  /** Subscribers may return `void` (sync) or `PromiseLike<void>` (async).
-   *  Async rejections are logged via `console.error` to keep them from
-   *  escaping to `unhandledRejection`. */
-  callback: (eventJson: string) => void | PromiseLike<void>
+  /**
+   * Subscribers may be sync or async; whatever they return is awaited and
+   * dropped, and an async rejection is logged via `console.error` rather than
+   * escaping to `unhandledRejection`.
+   *
+   * `unknown`, not `void | PromiseLike<void>`: a bare `void` return type
+   * accepts a function returning anything, but a UNION containing it does not
+   * — so widening the native bus's `=> void` to that union made it NARROWER in
+   * practice, and `(json) => received.push(json)` stopped compiling.
+   */
+  callback: (eventJson: string) => unknown
 }
 
 /** Request handler may return `void` (sync, fire-and-forget after `reply`)
@@ -106,7 +113,7 @@ export class FakeBus {
     return Promise.resolve('ok')
   }
 
-  subscribe(pattern: string, callback: (eventJson: string) => void | PromiseLike<void>): number {
+  subscribe(pattern: string, callback: (eventJson: string) => unknown): number {
     const id = this.#nextSubId++
     this.#subscribers.set(id, { pattern, callback })
     return id

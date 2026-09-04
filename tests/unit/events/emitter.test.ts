@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BaseEvent, type ContainerResolver, Emitter } from '../../../src/events/Emitter.js'
 import { FakeBus } from '../../../src/events/testing/FakeBus.js'
+import { defined } from '../../__helpers__/defined.js'
 
 // correlationId lives in a module-level AsyncLocalStorage set via `enterWith`,
 // which does not auto-unset — it leaks across sequential tests sharing a worker
@@ -35,8 +36,8 @@ describe('events > Emitter > string-based events', () => {
     await new Promise((r) => setTimeout(r, 0))
     const emitted = bus.getEmitted()
     expect(emitted).toHaveLength(1)
-    expect(emitted[0].name).toBe('order.created')
-    expect(emitted[0].data).toBe('{"id":42}')
+    expect(defined(emitted[0]).name).toBe('order.created')
+    expect(defined(emitted[0]).data).toBe('{"id":42}')
   })
 
   it('surfaces a listener rejection on the `emitter:error` channel', async () => {
@@ -85,14 +86,14 @@ describe('events > Emitter > class-based events', () => {
     })
     await emitter.dispatchEvent(new TaskDeclared({ id: 5 }))
     expect(seen).toHaveLength(1)
-    expect(seen[0].task.id).toBe(5)
+    expect(defined(seen[0]).task.id).toBe(5)
   })
 
   it('derives the bus event name from the class name (PascalCase → dot.lower)', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     await emitter.dispatchEvent(new TaskDeclared({ id: 1 }))
-    expect(bus.getEmitted()[0].name).toBe('task.declared')
+    expect(defined(bus.getEmitted()[0]).name).toBe('task.declared')
   })
 
   it('honours an explicit static eventName on the class', async () => {
@@ -104,7 +105,7 @@ describe('events > Emitter > class-based events', () => {
     const emitter = new Emitter(bus)
     emitter.on(CustomNamed, () => {})
     await emitter.dispatchEvent(new CustomNamed())
-    expect(bus.getEmitted()[0].name).toBe('custom:explicit')
+    expect(defined(bus.getEmitted()[0]).name).toBe('custom:explicit')
   })
 
   it('instantiates listener classes directly when no resolver is provided', async () => {
@@ -122,7 +123,7 @@ describe('events > Emitter > class-based events', () => {
     emitter.on(TaskDeclared, Listener)
     await emitter.dispatchEvent(new TaskDeclared({ id: 1 }))
     expect(Listener.instances).toHaveLength(1)
-    expect(Listener.instances[0].called).toBe(true)
+    expect(defined(Listener.instances[0]).called).toBe(true)
   })
 
   it('resolves listener classes via the container when a resolver is wired', async () => {
@@ -159,8 +160,8 @@ describe('events > Emitter > wildcard subscriptions', () => {
     await bus.emit('order.created', '{"x":1}')
     await new Promise((r) => setTimeout(r, 0))
     expect(received).toHaveLength(1)
-    expect(received[0].name).toBe('order.created')
-    expect(received[0].data).toBe('{"x":1}')
+    expect(defined(received[0]).name).toBe('order.created')
+    expect(defined(received[0]).data).toBe('{"x":1}')
   })
 
   it("falls back to the raw eventJson when it isn't valid JSON", async () => {
@@ -181,7 +182,7 @@ describe('events > Emitter > wildcard subscriptions', () => {
     expect(received).toHaveLength(1)
     // envelope.name === "plain.x" (FakeBus puts it there), data is the raw
     // payload string.
-    expect(received[0].name).toBe('plain.x')
+    expect(defined(received[0]).name).toBe('plain.x')
   })
 
   it('the unsubscribe function onAny returns removes the bus subscription', async () => {
@@ -312,8 +313,8 @@ describe('events > Emitter > introspection', () => {
     // carry a sibling field, so the ID is dropped on the wire (an HTTP
     // header or a separate trace channel would be needed — out of scope
     // for this minimal fix).
-    expect(JSON.parse(emitted[0].data)).toBe(42)
-    expect(JSON.parse(emitted[1].data)).toEqual([1, 2, 3])
+    expect(JSON.parse(defined(emitted[0]).data)).toBe(42)
+    expect(JSON.parse(defined(emitted[1]).data)).toEqual([1, 2, 3])
   })
 
   it('hasListeners reports string listeners', async () => {
@@ -351,8 +352,8 @@ describe('events > BaseEvent', () => {
     emitter.on(Sample, () => {})
     await new Sample(7).emit()
     const emitted = bus.getEmitted()
-    expect(emitted[0].name).toBe('sample')
-    expect(emitted[0].data).toContain('"payload":7')
+    expect(defined(emitted[0]).name).toBe('sample')
+    expect(defined(emitted[0]).data).toContain('"payload":7')
     BaseEvent.resetEmitter()
   })
 

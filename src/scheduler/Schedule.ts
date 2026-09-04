@@ -90,7 +90,14 @@ export function Schedule(cronExpr: string): MethodDecorator {
  * none). Returns a shallow copy so callers cannot mutate the stored
  * metadata by accident.
  */
-export function getScheduleMetadata(target: Constructor): ScheduleMetadata[] {
+/**
+ * `abstract new`, not `Constructor`: reading metadata off a class never
+ * constructs it, and the service registry holds abstract ones too since a
+ * contextual binding binds against an abstract base.
+ */
+export function getScheduleMetadata(
+  target: abstract new (...args: never[]) => unknown,
+): ScheduleMetadata[] {
   const stored: ScheduleMetadata[] = Reflect.getOwnMetadata(SCHEDULE_METADATA_KEY, target) ?? []
   return [...stored]
 }

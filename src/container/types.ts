@@ -16,7 +16,17 @@ export interface ServiceMetadata {
 /** Token used to resolve a service — class constructor, string name, or registered symbol. */
 // `never[]` accepts every constructor shape — parameters are contravariant, so
 // a rest of `never` is assignable from any concrete list.
-export type ServiceToken = (new (...args: never[]) => unknown) | string | symbol
+/**
+ * What the container accepts as a token.
+ *
+ * `abstract new`, not `new`: binding an implementation against an abstract base
+ * is the whole point of a contextual binding — `@Inject(Hash)` where `Hash` is
+ * the abstract class and `Bcrypt` is what the container provides. An abstract
+ * class has no construct signature, so spelt `new (...)` the type rejected
+ * exactly the pattern the feature exists for. `abstract new` admits concrete
+ * classes too.
+ */
+export type ServiceToken = (abstract new (...args: never[]) => unknown) | string | symbol
 
 /**
  * What a binding factory is handed so it can resolve its own dependencies

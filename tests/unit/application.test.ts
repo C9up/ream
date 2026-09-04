@@ -91,13 +91,13 @@ describe('application > provider lifecycle', () => {
     const log: string[] = []
 
     class TestProvider extends Provider {
-      register() {
+      override register() {
         log.push('register')
       }
-      async boot() {
+      override async boot() {
         log.push('boot')
       }
-      async shutdown() {
+      override async shutdown() {
         log.push('shutdown')
       }
     }
@@ -117,12 +117,12 @@ describe('application > provider lifecycle', () => {
     const log: string[] = []
 
     class ProviderA extends Provider {
-      async shutdown() {
+      override async shutdown() {
         log.push('A')
       }
     }
     class ProviderB extends Provider {
-      async shutdown() {
+      override async shutdown() {
         log.push('B')
       }
     }
@@ -139,7 +139,7 @@ describe('application > provider lifecycle', () => {
     const app = new Application()
 
     class DbProvider extends Provider {
-      register() {
+      override register() {
         this.app.container.singleton('db', () => ({ connected: true }))
       }
     }

@@ -25,7 +25,16 @@ export interface SignedUrlOptions {
 
 // ─── Types ──────────────────────────────────────────────────
 
-export type RouteHandlerFunction = (ctx: HttpContext) => Promise<void> | void
+/**
+ * A route handler. Whatever it returns is awaited and dropped — the response
+ * is written through `ctx.response`.
+ *
+ * `unknown`, not `Promise<void> | void`: a bare `void` return type accepts a
+ * function returning anything, but a UNION containing it does not, so
+ * `router.get('/x', () => 'ok')` was a type error for returning a value the
+ * kernel already ignores.
+ */
+export type RouteHandlerFunction = (ctx: HttpContext) => unknown
 
 /**
  * Controller tuple: [ControllerClass, 'methodName'].

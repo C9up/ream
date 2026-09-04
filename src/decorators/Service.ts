@@ -14,7 +14,7 @@ const INJECT_METADATA_KEY = Symbol('ream:inject')
 // `never[]` accepts every constructor shape: parameters are contravariant, so a
 // rest of `never` is assignable from any concrete list. Same spelling as the
 // router's, so a class flows between the two without an assertion.
-type AnyConstructor = new (...args: never[]) => unknown
+type AnyConstructor = abstract new (...args: never[]) => unknown
 
 /** Registry of all decorated services. */
 const serviceRegistry: Map<AnyConstructor, ServiceMetadata> = new Map()

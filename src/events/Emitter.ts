@@ -23,12 +23,20 @@ const correlationStorage = new AsyncLocalStorage<string | undefined>()
  * Listener class interface — must have a handle() method.
  */
 export interface ListenerClass<T = unknown> {
-  handle(event: T): Promise<void> | void
+  handle(event: T): unknown
 }
 
 type EventConstructor<T = unknown> = new (...args: never[]) => T
 
-type ListenerFn<T = unknown> = (event: T) => Promise<void> | void
+/**
+ * A listener. Whatever it returns is awaited and dropped.
+ *
+ * `unknown`, not `Promise<void> | void`: a bare `void` return type accepts a
+ * function returning anything, but a UNION containing it does not — so
+ * `emitter.on('x', (d) => received.push(d))` was a type error for returning
+ * what `push` returns, which nothing reads.
+ */
+type ListenerFn<T = unknown> = (event: T) => unknown
 
 type ListenerConstructor<T = unknown> = new (...args: never[]) => ListenerClass<T>
 

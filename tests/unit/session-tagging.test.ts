@@ -13,6 +13,7 @@ import { DatabaseDriver } from '../../src/session/drivers/DatabaseDriver.js'
 import { MemoryDriver } from '../../src/session/drivers/MemoryDriver.js'
 import { RedisDriver } from '../../src/session/drivers/RedisDriver.js'
 import { Session, supportsTagging } from '../../src/session/Session.js'
+import { defined } from '../__helpers__/defined.js'
 
 const TTL = 3600
 
@@ -182,15 +183,15 @@ describe('session > tagging on the database store', () => {
     const db = fakeDb()
     await new DatabaseDriver({ connection: db.connection }).tag('sess-1', 7)
 
-    expect(db.executed[0].sql).toContain('SET user_id = ?')
-    expect(db.executed[0].params).toEqual(['7', 'sess-1'])
+    expect(defined(db.executed[0]).sql).toContain('SET user_id = ?')
+    expect(defined(db.executed[0]).params).toEqual(['7', 'sess-1'])
   })
 
   it('scopes untag to the user, so it cannot clear another one', async () => {
     const db = fakeDb()
     await new DatabaseDriver({ connection: db.connection }).untag('sess-1', 7)
 
-    expect(db.executed[0].sql).toContain('AND user_id = ?')
+    expect(defined(db.executed[0]).sql).toContain('AND user_id = ?')
   })
 
   it('lists only non-expired sessions', async () => {

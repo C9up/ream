@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeBus } from '../../../src/events/testing/FakeBus.js'
+import { defined } from '../../__helpers__/defined.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -42,7 +43,7 @@ describe('FakeBus > emit / dispatch', () => {
         causationId: 'p-0',
       }),
     )
-    const [entry] = bus.getEmitted()
+    const entry = defined(bus.getEmitted()[0])
     expect(entry.correlationId).toBe('c-1')
     expect(entry.causationId).toBe('p-0')
     expect(entry.parsedData).toEqual({
@@ -55,7 +56,7 @@ describe('FakeBus > emit / dispatch', () => {
   it('leaves correlationId / causationId undefined on non-JSON data', async () => {
     const bus = new FakeBus()
     await bus.emit('raw', 'not-json')
-    const [entry] = bus.getEmitted()
+    const entry = defined(bus.getEmitted()[0])
     expect(entry.correlationId).toBeUndefined()
     expect(entry.causationId).toBeUndefined()
     expect(entry.parsedData).toBeUndefined()
@@ -80,7 +81,7 @@ describe('FakeBus > emit / dispatch', () => {
     // non-JSON → parsedData undefined ; JSON-null → parsedData === null.
     const bus = new FakeBus()
     await bus.emit('nullable', 'null')
-    const [entry] = bus.getEmitted()
+    const entry = defined(bus.getEmitted()[0])
     expect(entry.parsedData).toBeNull()
     expect(entry.data).toBe('null')
     expect(() => bus.assertEmitted('nullable', { dataMatches: (d) => d === null })).not.toThrow()
@@ -185,11 +186,11 @@ describe('FakeBus > getEmitted defensive clone', () => {
     const bus = new FakeBus()
     await bus.emit('a', JSON.stringify({ n: 1 }))
     const first = bus.getEmitted()
-    expect(first[0].parsedData).toEqual({ n: 1 })
-    if (!isObject(first[0].parsedData)) throw new Error('parsedData not object')
-    first[0].parsedData.n = 999
+    expect(defined(first[0]).parsedData).toEqual({ n: 1 })
+    if (!isObject(defined(first[0]).parsedData)) throw new Error('parsedData not object')
+    defined(first[0]).parsedData.n = 999
     const second = bus.getEmitted()
-    expect(second[0].parsedData).toEqual({ n: 1 })
+    expect(defined(second[0]).parsedData).toEqual({ n: 1 })
   })
 })
 
@@ -206,9 +207,9 @@ describe('FakeBus > onRequest / request', () => {
     await bus.request('ping', JSON.stringify({ id: 'R-1' }))
     const captured = bus.getRequests()
     expect(captured).toHaveLength(1)
-    expect(captured[0].kind).toBe('request')
-    expect(captured[0].name).toBe('ping')
-    expect(captured[0].parsedData).toEqual({ id: 'R-1' })
+    expect(defined(captured[0]).kind).toBe('request')
+    expect(defined(captured[0]).name).toBe('ping')
+    expect(defined(captured[0]).parsedData).toEqual({ id: 'R-1' })
   })
 
   it('rejects when no handler is registered', async () => {
@@ -357,8 +358,8 @@ describe('FakeBus > cross-contract: works with the existing event-bus/helix help
     const { events } = collect(bus, 'order.*')
     await bus.emit('order.created', JSON.stringify({ id: 'O-1', correlationId: 'c-1' }))
     expect(events).toHaveLength(1)
-    expect(events[0].name).toBe('order.created')
-    expect(events[0].correlationId).toBe('c-1')
+    expect(defined(events[0]).name).toBe('order.created')
+    expect(defined(events[0]).correlationId).toBe('c-1')
     expect(() => assertEmitted(events, 'order.created')).not.toThrow()
   })
 })
@@ -384,7 +385,7 @@ describe('FakeBus > clone fallback', () => {
     try {
       const cloned = bus.getEmitted()
       expect(cloned).toHaveLength(1)
-      expect(cloned[0].name).toBe('evt')
+      expect(defined(cloned[0]).name).toBe('evt')
       expect(warnSpy).toHaveBeenCalled()
     } finally {
       globalThis.structuredClone = realClone
@@ -405,8 +406,8 @@ describe('FakeBus > clone fallback', () => {
     try {
       const cloned = bus.getEmitted()
       expect(cloned).toHaveLength(1)
-      expect(cloned[0].name).toBe('raw')
-      expect(cloned[0].data).toBe('not-json')
+      expect(defined(cloned[0]).name).toBe('raw')
+      expect(defined(cloned[0]).data).toBe('not-json')
       expect(cloned[0].parsedData).toBeUndefined()
     } finally {
       globalThis.structuredClone = realClone

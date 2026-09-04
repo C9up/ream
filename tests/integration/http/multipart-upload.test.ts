@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
 import { type HttpMethod, RequestBuilder } from '../../../src/testing/RequestBuilder.js'
 import type { TestResponse } from '../../../src/testing/TestClient.js'
+import { defined } from '../../__helpers__/defined.js'
 import { HyperServer } from './loader.js'
 
 /**
@@ -110,7 +111,7 @@ describeIfNetwork('hyper-server > multipart upload (RequestBuilder ↔ Rust pars
 
       expect(mp.fields).toContainEqual({ name: 'title', value: 'My Doc' })
       expect(mp.files).toHaveLength(1)
-      const file = mp.files[0]
+      const file = defined(mp.files[0])
       expect(file.fieldName).toBe('document')
       expect(file.clientName).toBe('doc.png')
       expect(file.contentType).toBe('image/png')

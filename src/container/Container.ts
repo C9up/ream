@@ -63,7 +63,7 @@ interface ResolutionChain {
    * down. Saved and restored around each construction, so a dependency's own
    * dependencies see IT as their parent, not its parent.
    */
-  parent?: new (
+  parent?: abstract new (
     ...args: never[]
   ) => unknown
 }
@@ -91,8 +91,12 @@ export class Container {
   /** Alias key → the token it forwards to (AdonisJS `container.alias`). */
   #aliases: Map<ServiceToken, ServiceToken> = new Map()
   /** parent class → (binding key → the factory that class gets instead). */
-  #contextualBindings: Map<new (...args: never[]) => unknown, Map<ServiceToken, ServiceFactory>> =
-    new Map()
+  #contextualBindings: Map<
+    abstract new (
+      ...args: never[]
+    ) => unknown,
+    Map<ServiceToken, ServiceFactory>
+  > = new Map()
   /** token key → post-resolution callbacks (AdonisJS `container.resolving`). */
   #resolvingHooks: Map<ServiceToken, Array<(value: unknown) => void | Promise<void>>> = new Map()
   /**
@@ -625,7 +629,7 @@ export class Container {
    * 3. No params → plain `new Class()`
    */
   async #autoConstruct(
-    target: new (...args: never[]) => unknown,
+    target: abstract new (...args: never[]) => unknown,
     runtimeValues?: unknown[],
   ): Promise<unknown> {
     // Everything resolved inside is a dependency OF `target`, which is what a
@@ -642,7 +646,7 @@ export class Container {
   }
 
   async #constructWithDeps(
-    target: new (...args: never[]) => unknown,
+    target: abstract new (...args: never[]) => unknown,
     runtimeValues?: unknown[],
   ): Promise<unknown> {
     const metadata = getServiceMetadata(target)
@@ -719,7 +723,12 @@ export class Container {
         )
       }
       // (d) Genuine zero-argument class.
-      const instance = new target()
+      //
+      // `Reflect.construct`, not `new target()`: a token may be an abstract
+      // class (that is what a contextual binding binds against), and `new` on
+      // one is a compile error even though the runtime constructs it happily —
+      // `abstract` exists only at compile time.
+      const instance = Reflect.construct(target, [])
       this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
       return instance
     }

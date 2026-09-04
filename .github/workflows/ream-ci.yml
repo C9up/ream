@@ -86,6 +86,10 @@ jobs:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
+      # The build project is `src` alone, so no test file was ever read by
+      # `tsc`. This is the project that includes them; the 35 files still
+      # excluded are named in it, so the list can only shrink.
+      - run: pnpm typecheck:tests
       - run: pnpm lint
   build-and-test:
     name: Build & test (${{ matrix.suffix }})

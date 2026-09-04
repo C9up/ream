@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Session } from '../../src/session/Session.js'
 import SessionMiddleware from '../../src/session/SessionMiddleware.js'
+import { defined } from '../__helpers__/defined.js'
 
 /** Narrow away null/undefined without a `!` non-null assertion (which lies to the compiler). */
-function defined<T>(value: T | null | undefined): T {
-  if (value == null) throw new Error('expected a defined session in the store')
-  return value
-}
-
 interface FakeStore {
   get<T>(key: string): T | undefined
   set(key: string, value: unknown): void
@@ -81,7 +77,7 @@ describe('SessionMiddleware > server-side driver (memory)', () => {
       s.put('user', 'alice')
     })
     expect(seed.response.cookies.length).toBe(1)
-    const cookie = seed.response.cookies[0]
+    const cookie = defined(seed.response.cookies[0])
     const sessionId = cookie.split('=')[1]
 
     // Subsequent read-only request should NOT re-emit the cookie by default.
@@ -104,7 +100,7 @@ describe('SessionMiddleware > server-side driver (memory)', () => {
     await mw.handle(seed as never, async () => {
       defined(seed.store.get<Session>('session')).put('user', 'alice')
     })
-    const sessionId = seed.response.cookies[0].split('=')[1]
+    const sessionId = defined(seed.response.cookies[0]).split('=')[1]
 
     const ro = makeCtx(`rs=${sessionId}`)
     await mw.handle(ro as never, async () => {
@@ -140,7 +136,7 @@ describe('SessionMiddleware > server-side driver (memory)', () => {
     await mw.handle(seed as never, async () => {
       defined(seed.store.get<Session>('session')).put('user', 'alice')
     })
-    const oldId = seed.response.cookies[0].split('=')[1]
+    const oldId = defined(seed.response.cookies[0]).split('=')[1]
 
     // Second request: simulate login (call regenerate()). The middleware
     // must migrate the driver entry to the new id AND emit the new cookie.
@@ -223,7 +219,7 @@ describe('SessionMiddleware > cookie driver', () => {
       defined(seed.store.get<Session>('session')).put('user', 'bob')
     })
     expect(seed.response.cookies.length).toBe(1)
-    const seedCookie = seed.response.cookies[0]
+    const seedCookie = defined(seed.response.cookies[0])
     const encrypted = seedCookie.slice('rs='.length)
 
     // Read-only with the encrypted cookie present.
@@ -246,7 +242,7 @@ describe('SessionMiddleware > cookie driver', () => {
     await mw.handle(seed as never, async () => {
       defined(seed.store.get<Session>('session')).put('user', 'bob')
     })
-    const encrypted = seed.response.cookies[0].slice('rs='.length)
+    const encrypted = defined(seed.response.cookies[0]).slice('rs='.length)
 
     const ro = makeCtx(`rs=${encrypted}`)
     await mw.handle(ro as never, async () => {

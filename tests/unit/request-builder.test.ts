@@ -3,10 +3,12 @@ import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import {
   type AuthStrategy,
+  type HttpSender,
   partialMatch,
   RequestBuilder,
 } from '../../src/testing/RequestBuilder.js'
 import type { TestResponse } from '../../src/testing/TestClient.js'
+import { defined } from '../__helpers__/defined.js'
 
 const makeResponse = (overrides: Partial<TestResponse> = {}): TestResponse => {
   const body = overrides.body ?? ''
@@ -14,7 +16,6 @@ const makeResponse = (overrides: Partial<TestResponse> = {}): TestResponse => {
     status: 200,
     headers: {},
     body,
-    bodyBuffer: Buffer.from(body),
     json<T = unknown>(): T {
       return JSON.parse(body) as T
     },
@@ -24,44 +25,44 @@ const makeResponse = (overrides: Partial<TestResponse> = {}): TestResponse => {
 
 describe('helix > RequestBuilder', () => {
   it('headers()/header() merge into the outgoing request', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'GET', '/p')
     await builder.headers({ 'X-A': '1', 'X-B': '2' }).header('X-C', '3').send()
 
     expect(sender).toHaveBeenCalledOnce()
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['x-a']).toBe('1')
     expect(init.headers['x-b']).toBe('2')
     expect(init.headers['x-c']).toBe('3')
   })
 
   it('json() sets content-type and serialises body', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
     await builder.json({ name: 'Ada' }).send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toBe('application/json')
     expect(init.body.toString('utf8')).toBe('{"name":"Ada"}')
   })
 
   it('form() emits application/x-www-form-urlencoded', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
     await builder.form({ a: '1', b: 'two words' }).send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toBe('application/x-www-form-urlencoded')
     expect(init.body.toString('utf8')).toBe('a=1&b=two%20words')
   })
 
   it('field() emits multipart/form-data with the text field part', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
     await builder.field('title', 'Hello World').send()
 
-    const init = sender.mock.calls[0][2]
-    const ct = init.headers['content-type']
+    const init = defined(sender.mock.calls[0])[2]
+    const ct = defined(init.headers['content-type'], 'content-type')
     expect(ct).toMatch(/^multipart\/form-data; boundary=----ReamRequestBuilder/)
     const boundary = ct.split('boundary=')[1]
     const body = init.body.toString('utf8')
@@ -72,7 +73,7 @@ describe('helix > RequestBuilder', () => {
   })
 
   it('file() encodes a binary part with filename + content-type; field() interleaves', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
     const builder = new RequestBuilder(sender, 'POST', '/avatar')
     await builder
@@ -80,7 +81,7 @@ describe('helix > RequestBuilder', () => {
       .field('description', 'my pic')
       .send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toMatch(/^multipart\/form-data/)
     const text = init.body.toString('binary')
     expect(text).toContain('Content-Disposition: form-data; name="avatar"; filename="a.png"')
@@ -92,38 +93,38 @@ describe('helix > RequestBuilder', () => {
   })
 
   it('file() from a Buffer defaults filename to the field name + octet-stream', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
     // A string arg is a PATH now (helix parity); pass a Buffer for inline content.
     await builder.file('doc', Buffer.from('hello')).send()
 
-    const text = sender.mock.calls[0][2].body.toString('utf8')
+    const text = defined(sender.mock.calls[0])[2].body.toString('utf8')
     expect(text).toContain('name="doc"; filename="doc"')
     expect(text).toContain('Content-Type: application/octet-stream')
     expect(text).toContain('\r\n\r\nhello\r\n')
   })
 
   it('multipart parts override a previously-set json body', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
     await builder.json({ a: 1 }).field('b', '2').send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toMatch(/^multipart\/form-data/)
     expect(init.body.toString('utf8')).not.toContain('{"a":1}')
   })
 
   it('cookies() serialises to Cookie header', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'GET', '/p')
     await builder.cookies({ s: 'abc', t: 'xyz' }).cookie('u', '1').send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers.cookie).toBe('s=abc; t=xyz; u=1')
   })
 
   it('withAuth() uses the injected AuthStrategy for headers and cookies', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const strategy: AuthStrategy = {
       headersFor: async (subject) => ({
         Authorization: `Bearer test-${subject.id}`,
@@ -133,30 +134,30 @@ describe('helix > RequestBuilder', () => {
     const builder = new RequestBuilder(sender, 'GET', '/me', strategy)
     await builder.withAuth({ id: 42 }).send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers.authorization).toBe('Bearer test-42')
     expect(init.headers.cookie).toBe('session=sid-42')
   })
 
   it('asUser() is a shortcut for withAuth({id})', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const strategy: AuthStrategy = {
       headersFor: async (s) => ({ 'X-User': String(s.id) }),
     }
     const builder = new RequestBuilder(sender, 'GET', '/me', strategy)
     await builder.asUser('u-99').send()
 
-    expect(sender.mock.calls[0][2].headers['x-user']).toBe('u-99')
+    expect(defined(sender.mock.calls[0])[2].headers['x-user']).toBe('u-99')
   })
 
   it('withAuth() without an AuthStrategy throws a helpful error', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'GET', '/x')
     await expect(builder.withAuth({ id: 1 }).send()).rejects.toThrow(/no AuthStrategy was provided/)
   })
 
   it('send() is memoised — multiple `await`s produce a single call', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'GET', '/p')
     const a = builder.send()
     const b = builder.send()
@@ -165,31 +166,33 @@ describe('helix > RequestBuilder', () => {
   })
 
   it('send() returns the response directly (explicit await)', async () => {
-    const sender = vi.fn(async () => makeResponse({ status: 201, body: '{"ok":true}' }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ status: 201, body: '{"ok":true}' }))
     const builder = new RequestBuilder(sender, 'GET', '/p')
     const res = await builder.send()
     expect(res.status()).toBe(201)
   })
 
   it('expectStatus() passes when codes match, fails otherwise', async () => {
-    const sender = vi.fn(async () => makeResponse({ status: 200 }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ status: 200 }))
     await expect(new RequestBuilder(sender, 'GET', '/p').expectStatus(200)).resolves.toBeDefined()
 
-    const sender2 = vi.fn(async () => makeResponse({ status: 500, body: 'kaboom' }))
+    const sender2 = vi.fn<HttpSender>(async () => makeResponse({ status: 500, body: 'kaboom' }))
     await expect(new RequestBuilder(sender2, 'GET', '/p').expectStatus(200)).rejects.toThrow(
       /Expected status 200, got 500/,
     )
   })
 
   it('expectHeader() matches exact strings and RegExp', async () => {
-    const sender = vi.fn(async () => makeResponse({ headers: { 'x-trace': 'req-123' } }))
+    const sender = vi.fn<HttpSender>(async () =>
+      makeResponse({ headers: { 'x-trace': 'req-123' } }),
+    )
     await new RequestBuilder(sender, 'GET', '/p')
       .expectHeader('x-trace', 'req-123')
       .expectHeader('X-Trace', /^req-/)
   })
 
   it('expectHeader() throws when header missing or mismatched', async () => {
-    const sender = vi.fn(async () => makeResponse({ headers: { 'x-trace': 'abc' } }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ headers: { 'x-trace': 'abc' } }))
     await expect(
       new RequestBuilder(sender, 'GET', '/p').expectHeader('x-missing', 'x'),
     ).rejects.toThrow(/Expected header x-missing/)
@@ -211,13 +214,15 @@ describe('helix > RequestBuilder', () => {
   })
 
   it('expectJson() performs partial match', async () => {
-    const sender = vi.fn(async () => makeResponse({ body: '{"id":1,"name":"Ada","extra":true}' }))
+    const sender = vi.fn<HttpSender>(async () =>
+      makeResponse({ body: '{"id":1,"name":"Ada","extra":true}' }),
+    )
     await new RequestBuilder(sender, 'GET', '/me').expectJson({
       id: 1,
       name: 'Ada',
     })
 
-    const sender2 = vi.fn(async () => makeResponse({ body: '{"id":1}' }))
+    const sender2 = vi.fn<HttpSender>(async () => makeResponse({ body: '{"id":1}' }))
     await expect(new RequestBuilder(sender2, 'GET', '/me').expectJson({ id: 2 })).rejects.toThrow(
       /JSON partial match failed/,
     )
@@ -244,62 +249,62 @@ describe('helix > RequestBuilder', () => {
 
 describe('RequestBuilder > qs / auth shortcuts (helix parity)', () => {
   it('qs() appends url-encoded params, repeating keys for arrays', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/search')
       .qs({ q: 'a b', page: 2, tag: ['x', 'y'] })
       .send()
 
-    const path = sender.mock.calls[0][1]
+    const path = defined(sender.mock.calls[0])[1]
     expect(path).toBe('/search?q=a+b&page=2&tag=x&tag=y')
   })
 
   it('qs() merges with a query string already on the path', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/search?existing=1').qs({ page: 2 }).send()
 
-    expect(sender.mock.calls[0][1]).toBe('/search?existing=1&page=2')
+    expect(defined(sender.mock.calls[0])[1]).toBe('/search?existing=1&page=2')
   })
 
   it('bearerToken() sets the Authorization header', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/me').bearerToken('tok-123').send()
 
-    expect(sender.mock.calls[0][2].headers.authorization).toBe('Bearer tok-123')
+    expect(defined(sender.mock.calls[0])[2].headers.authorization).toBe('Bearer tok-123')
   })
 
   it('basicAuth() base64-encodes the credentials', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/me').basicAuth('alice', 's3cret').send()
 
     const expected = `Basic ${Buffer.from('alice:s3cret', 'utf8').toString('base64')}`
-    expect(sender.mock.calls[0][2].headers.authorization).toBe(expected)
+    expect(defined(sender.mock.calls[0])[2].headers.authorization).toBe(expected)
   })
 })
 
 describe('RequestBuilder > withCsrf (signed double-submit)', () => {
   it('mirrors the XSRF-TOKEN cookie into the X-XSRF-TOKEN header', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/protected')
       .cookie('XSRF-TOKEN', 'signed.token')
       .withCsrf()
       .send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['x-xsrf-token']).toBe('signed.token')
     expect(init.headers.cookie).toBe('XSRF-TOKEN=signed.token')
   })
 
   it('withCsrf(token) sets both the cookie and the header', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/protected').withCsrf('abc.def').send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['x-xsrf-token']).toBe('abc.def')
     expect(init.headers.cookie).toBe('XSRF-TOKEN=abc.def')
   })
 
   it('throws when no XSRF-TOKEN cookie is present and no token is passed', () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     expect(() => new RequestBuilder(sender, 'POST', '/protected').withCsrf()).toThrow(
       /found no 'XSRF-TOKEN' cookie/,
     )
@@ -307,7 +312,10 @@ describe('RequestBuilder > withCsrf (signed double-submit)', () => {
 })
 
 describe('RequestBuilder > status shortcuts', () => {
-  const cases: Array<[number, (b: RequestBuilder) => Promise<RequestBuilder>]> = [
+  // The assertions are chainable AND thenable: each returns the builder, which
+  // `await` then resolves. Annotated as returning a Promise, every entry was a
+  // type error for returning what it actually returns.
+  const cases: Array<[number, (b: RequestBuilder) => RequestBuilder]> = [
     [200, (b) => b.assertOk()],
     [201, (b) => b.assertCreated()],
     [204, (b) => b.assertNoContent()],
@@ -319,10 +327,10 @@ describe('RequestBuilder > status shortcuts', () => {
 
   for (const [code, run] of cases) {
     it(`passes on ${code} and throws on a mismatch`, async () => {
-      const ok = vi.fn(async () => makeResponse({ status: code }))
+      const ok = vi.fn<HttpSender>(async () => makeResponse({ status: code }))
       await expect(run(new RequestBuilder(ok, 'GET', '/p'))).resolves.toBeDefined()
 
-      const bad = vi.fn(async () => makeResponse({ status: code === 200 ? 500 : 200 }))
+      const bad = vi.fn<HttpSender>(async () => makeResponse({ status: code === 200 ? 500 : 200 }))
       await expect(run(new RequestBuilder(bad, 'GET', '/p'))).rejects.toThrow(/Expected status/)
     })
   }
@@ -330,20 +338,22 @@ describe('RequestBuilder > status shortcuts', () => {
 
 describe('RequestBuilder > assertBodyContains / assertBodyNotContains', () => {
   it('assertBodyContains passes on a present subset, throws when absent', async () => {
-    const sender = vi.fn(async () => makeResponse({ body: '{"id":1,"name":"Ada","role":"admin"}' }))
+    const sender = vi.fn<HttpSender>(async () =>
+      makeResponse({ body: '{"id":1,"name":"Ada","role":"admin"}' }),
+    )
     await new RequestBuilder(sender, 'GET', '/me').assertBodyContains({ name: 'Ada' })
 
-    const sender2 = vi.fn(async () => makeResponse({ body: '{"id":1}' }))
+    const sender2 = vi.fn<HttpSender>(async () => makeResponse({ body: '{"id":1}' }))
     await expect(
       new RequestBuilder(sender2, 'GET', '/me').assertBodyContains({ name: 'Ada' }),
     ).rejects.toThrow(/Expected body to contain subset/)
   })
 
   it('assertBodyNotContains passes when absent, throws when the subset is present', async () => {
-    const sender = vi.fn(async () => makeResponse({ body: '{"id":1}' }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ body: '{"id":1}' }))
     await new RequestBuilder(sender, 'GET', '/me').assertBodyNotContains({ password: 'x' })
 
-    const sender2 = vi.fn(async () => makeResponse({ body: '{"password":"x"}' }))
+    const sender2 = vi.fn<HttpSender>(async () => makeResponse({ body: '{"password":"x"}' }))
     await expect(
       new RequestBuilder(sender2, 'GET', '/me').assertBodyNotContains({ password: 'x' }),
     ).rejects.toThrow(/Expected body NOT to contain subset/)
@@ -360,14 +370,16 @@ describe('RequestBuilder > assertRedirectsTo', () => {
   })
 
   it('throws when the response is not a redirect', async () => {
-    const sender = vi.fn(async () => makeResponse({ status: 200 }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ status: 200 }))
     await expect(
       new RequestBuilder(sender, 'GET', '/p').redirects(0).assertRedirectsTo('/x'),
     ).rejects.toThrow(/Expected redirect to "\/x"/)
   })
 
   it('throws when the Location pathname differs', async () => {
-    const sender = vi.fn(async () => makeResponse({ status: 301, headers: { location: '/other' } }))
+    const sender = vi.fn<HttpSender>(async () =>
+      makeResponse({ status: 301, headers: { location: '/other' } }),
+    )
     await expect(
       new RequestBuilder(sender, 'GET', '/p').redirects(0).assertRedirectsTo('/dashboard'),
     ).rejects.toThrow(/Expected redirect to "\/dashboard"/)
@@ -376,22 +388,24 @@ describe('RequestBuilder > assertRedirectsTo', () => {
 
 describe('RequestBuilder > header / cookie presence asserts', () => {
   it('assertHeader checks presence (no value) and value equality', async () => {
-    const sender = vi.fn(async () => makeResponse({ headers: { 'x-trace': 'req-1' } }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ headers: { 'x-trace': 'req-1' } }))
     await new RequestBuilder(sender, 'GET', '/p')
       .assertHeader('x-trace')
       .assertHeader('x-trace', 'req-1')
 
-    const sender2 = vi.fn(async () => makeResponse({ headers: {} }))
+    const sender2 = vi.fn<HttpSender>(async () => makeResponse({ headers: {} }))
     await expect(new RequestBuilder(sender2, 'GET', '/p').assertHeader('x-trace')).rejects.toThrow(
       /Expected header x-trace/,
     )
   })
 
   it('assertHeaderMissing passes when absent, throws when present', async () => {
-    const sender = vi.fn(async () => makeResponse({ headers: {} }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ headers: {} }))
     await new RequestBuilder(sender, 'GET', '/p').assertHeaderMissing('x-deprecated')
 
-    const sender2 = vi.fn(async () => makeResponse({ headers: { 'x-deprecated': '1' } }))
+    const sender2 = vi.fn<HttpSender>(async () =>
+      makeResponse({ headers: { 'x-deprecated': '1' } }),
+    )
     await expect(
       new RequestBuilder(sender2, 'GET', '/p').assertHeaderMissing('x-deprecated'),
     ).rejects.toThrow(/Expected header x-deprecated to be absent/)
@@ -405,7 +419,9 @@ describe('RequestBuilder > header / cookie presence asserts', () => {
       .assertCookie('session')
       .assertCookieMissing('theme')
 
-    const sender2 = vi.fn(async () => makeResponse({ headers: { 'set-cookie': 'theme=dark' } }))
+    const sender2 = vi.fn<HttpSender>(async () =>
+      makeResponse({ headers: { 'set-cookie': 'theme=dark' } }),
+    )
     await expect(
       new RequestBuilder(sender2, 'GET', '/p').assertCookieMissing('theme'),
     ).rejects.toThrow(/Expected cookie theme to be absent/)
@@ -436,50 +452,52 @@ describe('helix > partialMatch', () => {
 
 describe('helix > RequestBuilder > helix additions', () => {
   it('type()/accept() expand shorthands into headers', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'POST', '/u')
     await builder.type('json').accept('html').send()
 
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toBe('application/json')
     expect(init.headers.accept).toBe('text/html')
   })
 
   it('type() passes a full MIME type through unchanged', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/u').type('application/vnd.api+json').send()
-    expect(sender.mock.calls[0][2].headers['content-type']).toBe('application/vnd.api+json')
+    expect(defined(sender.mock.calls[0])[2].headers['content-type']).toBe(
+      'application/vnd.api+json',
+    )
   })
 
   it('withCsrfToken() aliases withCsrf (sets cookie + echo header)', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/u').withCsrfToken('signed-token').send()
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['x-xsrf-token']).toBe('signed-token')
     expect(init.headers.cookie).toContain('XSRF-TOKEN=signed-token')
   })
 
   it('assertStatus() passes on match and throws otherwise', async () => {
-    const okSender = vi.fn(async () => makeResponse({ status: 418 }))
+    const okSender = vi.fn<HttpSender>(async () => makeResponse({ status: 418 }))
     await new RequestBuilder(okSender, 'GET', '/p').assertStatus(418)
 
-    const badSender = vi.fn(async () => makeResponse({ status: 200 }))
+    const badSender = vi.fn<HttpSender>(async () => makeResponse({ status: 200 }))
     await expect(new RequestBuilder(badSender, 'GET', '/p').assertStatus(418)).rejects.toThrow()
   })
 
   it('named status shortcuts map to their codes', async () => {
     await new RequestBuilder(
-      vi.fn(async () => makeResponse({ status: 422 })),
+      vi.fn<HttpSender>(async () => makeResponse({ status: 422 })),
       'POST',
       '/p',
     ).assertUnprocessableEntity()
     await new RequestBuilder(
-      vi.fn(async () => makeResponse({ status: 409 })),
+      vi.fn<HttpSender>(async () => makeResponse({ status: 409 })),
       'POST',
       '/p',
     ).assertConflict()
     await new RequestBuilder(
-      vi.fn(async () => makeResponse({ status: 202 })),
+      vi.fn<HttpSender>(async () => makeResponse({ status: 202 })),
       'POST',
       '/p',
     ).assertAccepted()
@@ -488,7 +506,7 @@ describe('helix > RequestBuilder > helix additions', () => {
   it('assertBody() requires EXACT deep equality', async () => {
     const body = JSON.stringify({ id: 1, name: 'Ada' })
     await new RequestBuilder(
-      vi.fn(async () => makeResponse({ body })),
+      vi.fn<HttpSender>(async () => makeResponse({ body })),
       'GET',
       '/p',
     ).assertBody({
@@ -498,7 +516,7 @@ describe('helix > RequestBuilder > helix additions', () => {
     // A subset is NOT enough for assertBody (unlike assertBodyContains).
     await expect(
       new RequestBuilder(
-        vi.fn(async () => makeResponse({ body })),
+        vi.fn<HttpSender>(async () => makeResponse({ body })),
         'GET',
         '/p',
       ).assertBody({ id: 1 }),
@@ -506,11 +524,11 @@ describe('helix > RequestBuilder > helix additions', () => {
   })
 
   it('assertTextIncludes() checks the raw response text', async () => {
-    const sender = vi.fn(async () => makeResponse({ body: '<h1>Welcome Ada</h1>' }))
+    const sender = vi.fn<HttpSender>(async () => makeResponse({ body: '<h1>Welcome Ada</h1>' }))
     await new RequestBuilder(sender, 'GET', '/p').assertTextIncludes('Welcome Ada')
     await expect(
       new RequestBuilder(
-        vi.fn(async () => makeResponse({ body: 'nope' })),
+        vi.fn<HttpSender>(async () => makeResponse({ body: 'nope' })),
         'GET',
         '/p',
       ).assertTextIncludes('Welcome'),
@@ -520,9 +538,9 @@ describe('helix > RequestBuilder > helix additions', () => {
 
 describe('helix > RequestBuilder helix parity (F7-F9)', () => {
   it('fields() adds several multipart parts', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/u').fields({ a: '1', b: '2' }).send()
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toMatch(/^multipart\/form-data; boundary=/)
     const text = init.body.toString('utf8')
     expect(text).toContain('name="a"')
@@ -530,19 +548,19 @@ describe('helix > RequestBuilder helix parity (F7-F9)', () => {
   })
 
   it('unsafeQs() appends params from an object (helix signature)', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/s').unsafeQs({ a: 1, b: 'two' }).send()
-    expect(sender.mock.calls[0][1]).toBe('/s?a=1&b=two')
+    expect(defined(sender.mock.calls[0])[1]).toBe('/s?a=1&b=two')
   })
 
   it('timeout() threads the per-request timeout to the sender', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/s').timeout(1234).send()
-    expect(sender.mock.calls[0][2].timeoutMs).toBe(1234)
+    expect(defined(sender.mock.calls[0])[2].timeoutMs).toBe(1234)
   })
 
   it('redirects() follows a 3xx Location and records the chain', async () => {
-    const sender = vi.fn(async (m: string, p: string) => {
+    const sender = vi.fn<HttpSender>(async (_method, p) => {
       if (p === '/start') return makeResponse({ status: 302, headers: { location: '/dest' } })
       return makeResponse({ status: 200, body: 'arrived' })
     })
@@ -568,7 +586,9 @@ describe('helix > RequestBuilder helix parity (F7-F9)', () => {
   })
 
   it('redirects(0) disables following', async () => {
-    const sender = vi.fn(async () => makeResponse({ status: 302, headers: { location: '/dest' } }))
+    const sender = vi.fn<HttpSender>(async () =>
+      makeResponse({ status: 302, headers: { location: '/dest' } }),
+    )
     const res = await new RequestBuilder(sender, 'GET', '/start').redirects(0)
     expect(sender).toHaveBeenCalledOnce()
     expect(res.status()).toBe(302)
@@ -576,13 +596,13 @@ describe('helix > RequestBuilder helix parity (F7-F9)', () => {
 
   it('generated status-shortcut asserts run lazily against the response', async () => {
     await new RequestBuilder(
-      vi.fn(async () => makeResponse({ status: 410 })),
+      vi.fn<HttpSender>(async () => makeResponse({ status: 410 })),
       'GET',
       '/p',
     ).assertGone()
     await expect(
       new RequestBuilder(
-        vi.fn(async () => makeResponse({ status: 200 })),
+        vi.fn<HttpSender>(async () => makeResponse({ status: 200 })),
         'GET',
         '/p',
       ).assertTooManyRequests(),
@@ -590,7 +610,7 @@ describe('helix > RequestBuilder helix parity (F7-F9)', () => {
   })
 
   it('TLS knobs are inert no-ops that keep the chain (loopback has no TLS)', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     const builder = new RequestBuilder(sender, 'GET', '/p')
     expect(builder.trustLocalhost().disableTLSCerts().ca('x').cert('y').privateKey('z')).toBe(
       builder,
@@ -603,7 +623,7 @@ describe('helix > RequestBuilder helix parity (F7-F9)', () => {
     RequestBuilder.macro('tag', 'v1')
     RequestBuilder.getter('lazyTag', () => 'computed')
     const builder = new RequestBuilder(
-      vi.fn(async () => makeResponse()),
+      vi.fn<HttpSender>(async () => makeResponse()),
       'GET',
       '/p',
     ) as RequestBuilder & { tag: string; lazyTag: string }
@@ -627,34 +647,34 @@ describe('helix > RequestBuilder helix parity (F7-F9)', () => {
 
 describe('helix > RequestBuilder audit #3 parity', () => {
   it('header() accepts a string[] (joined)', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'GET', '/p').header('accept', ['a/b', 'c/d']).send()
-    expect(sender.mock.calls[0][2].headers.accept).toBe('a/b, c/d')
+    expect(defined(sender.mock.calls[0])[2].headers.accept).toBe('a/b, c/d')
   })
 
   it('form() repeats array values (a=1&a=2)', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/p').form({ tag: ['x', 'y'], n: 1 }).send()
-    expect(sender.mock.calls[0][2].body.toString('utf8')).toBe('tag=x&tag=y&n=1')
+    expect(defined(sender.mock.calls[0])[2].body.toString('utf8')).toBe('tag=x&tag=y&n=1')
   })
 
   it('field() accepts an array + a number (multiple parts)', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/p').field('t', ['a', 'b']).field('n', 42).send()
-    const body = sender.mock.calls[0][2].body.toString('utf8')
+    const body = defined(sender.mock.calls[0])[2].body.toString('utf8')
     expect(body.match(/name="t"/g)).toHaveLength(2)
     expect(body).toContain('\r\n\r\n42\r\n')
   })
 
   it('file() drains a Readable stream to the multipart part', async () => {
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/up')
       .file('doc', Readable.from(['strea', 'med']), {
         filename: 'd.txt',
         contentType: 'text/plain',
       })
       .send()
-    const body = sender.mock.calls[0][2].body.toString('utf8')
+    const body = defined(sender.mock.calls[0])[2].body.toString('utf8')
     expect(body).toContain('filename="d.txt"')
     expect(body).toContain('\r\n\r\nstreamed\r\n')
   })
@@ -664,9 +684,9 @@ describe('helix > RequestBuilder audit #3 parity', () => {
       body: Buffer.from((data as string[]).join(','), 'utf8'),
       contentType: 'text/csv',
     }))
-    const sender = vi.fn(async () => makeResponse())
+    const sender = vi.fn<HttpSender>(async () => makeResponse())
     await new RequestBuilder(sender, 'POST', '/p').serialize('csv', ['a', 'b', 'c']).send()
-    const init = sender.mock.calls[0][2]
+    const init = defined(sender.mock.calls[0])[2]
     expect(init.headers['content-type']).toBe('text/csv')
     expect(init.body.toString('utf8')).toBe('a,b,c')
   })

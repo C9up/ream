@@ -14,6 +14,7 @@ import {
   waitForChain,
   waitForEvent,
 } from '../../../src/events/helix/helpers.js'
+import { defined } from '../../__helpers__/defined.js'
 
 type Subscriber = (eventJson: string) => void
 function makeStubBus() {
@@ -42,7 +43,7 @@ describe('events > helix > collect', () => {
     bus.deliver({ name: 'order.created', data: '{"id":"1"}' })
     bus.deliver({ name: 'order.paid', data: '{"id":"1"}' })
     expect(events).toHaveLength(2)
-    expect(events[0].name).toBe('order.created')
+    expect(defined(events[0]).name).toBe('order.created')
   })
 
   it('stashes a parse-error stub when the payload is not JSON', () => {
@@ -50,8 +51,8 @@ describe('events > helix > collect', () => {
     const { events } = collect(bus, '*')
     bus.deliverRaw('not-json')
     expect(events).toHaveLength(1)
-    expect(events[0]._parseError).toBe(true)
-    expect(events[0]._raw).toBe('not-json')
+    expect(defined(events[0])._parseError).toBe(true)
+    expect(defined(events[0])._raw).toBe('not-json')
   })
 })
 

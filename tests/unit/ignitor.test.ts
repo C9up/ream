@@ -2,23 +2,21 @@ import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import type { Emitter } from '../../src/events/Emitter.js'
 import EventsProvider from '../../src/events/EventsProvider.js'
+import type { HttpKernelRequest, HttpKernelResponse } from '../../src/HttpKernel.js'
 import type { AppContext, ErrorEvent, HyperServerLike, ReamrcConfig } from '../../src/index.js'
 import { Ignitor, MigrationRegistry, Provider } from '../../src/index.js'
 
 class MockHyperServer implements HyperServerLike {
-  private handler?: (
-    req: string | Record<string, unknown>,
-  ) => Promise<{ status: number; headers: Record<string, string>; body: string }>
+  // The kernel's own types, not a hand-written approximation: spelt loosely,
+  // the mock accepted a shape the real server never sends and the drift was
+  // invisible while the file was outside the typecheck.
+  private handler?: (req: HttpKernelRequest) => Promise<HttpKernelResponse>
   private _port: number
   listening = false
   constructor(port: number) {
     this._port = port
   }
-  onRequest(
-    cb: (
-      r: string | Record<string, unknown>,
-    ) => Promise<{ status: number; headers: Record<string, string>; body: string }>,
-  ) {
+  onRequest(cb: (req: HttpKernelRequest) => Promise<HttpKernelResponse>) {
     this.handler = cb
   }
   async listen() {
@@ -54,19 +52,19 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
   it('register → boot → start → ready → shutdown', async () => {
     const log: string[] = []
     class LP extends Provider {
-      register() {
+      override register() {
         log.push('register')
       }
-      async boot() {
+      override async boot() {
         log.push('boot')
       }
-      async start() {
+      override async start() {
         log.push('start')
       }
-      async ready() {
+      override async ready() {
         log.push('ready')
       }
-      async shutdown() {
+      override async shutdown() {
         log.push('shutdown')
       }
     }
@@ -84,10 +82,10 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
   it('reamrc manifest loads providers and preloads', async () => {
     const log: string[] = []
     class DbProv extends Provider {
-      register() {
+      override register() {
         log.push('db:register')
       }
-      async boot() {
+      override async boot() {
         log.push('db:boot')
       }
     }
@@ -125,7 +123,7 @@ describe('ignitor > 4-phase lifecycle (AdonisJS-style)', () => {
     const { factory } = mockFactory()
     const received: unknown[] = []
     class Capture extends Provider {
-      async ready() {
+      override async ready() {
         // EventsProvider booted earlier → the 'events' emitter is available;
         // subscribe before the post-ready app:ready emission fires.
         const emitter = await this.app.container.resolve<Emitter>('events')
