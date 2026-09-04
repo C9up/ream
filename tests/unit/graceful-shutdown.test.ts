@@ -1,13 +1,22 @@
+import type { Mock } from 'vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installGracefulShutdown } from '../../src/GracefulShutdown.js'
 
+/**
+ * The logger shape `installGracefulShutdown` takes, spied.
+ *
+ * Typed through the signature rather than as a bare `ReturnType<typeof vi.fn>`:
+ * an untyped mock is `Mock<Procedure | Constructable>`, which does not satisfy
+ * `(msg: string) => void` — so the spy did not fit the parameter it was
+ * written for.
+ */
 interface LoggerSpy {
-  info: ReturnType<typeof vi.fn>
-  error: ReturnType<typeof vi.fn>
+  info: Mock<(msg: string) => void>
+  error: Mock<(msg: string) => void>
 }
 
 function makeLogger(): LoggerSpy {
-  return { info: vi.fn(), error: vi.fn() }
+  return { info: vi.fn<(msg: string) => void>(), error: vi.fn<(msg: string) => void>() }
 }
 
 describe('ream > installGracefulShutdown', () => {

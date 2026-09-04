@@ -7,13 +7,14 @@
 import { describe, expect, it } from 'vitest'
 import { Request } from '../../src/http/Request.js'
 import { Response as ReamResponse } from '../../src/http/Response.js'
+import { defined } from '../__helpers__/defined.js'
 
 /** Set a cookie on a response, then read it back through a request. */
 function roundTrip<T>(value: T, options?: { encode?: boolean }): unknown {
   const res = new ReamResponse()
   res.plainCookie('prefs', value, options)
   const setCookie = res.getHeaders()['set-cookie'] ?? ''
-  const raw = decodeURIComponent(setCookie.split(';')[0].split('=')[1] ?? '')
+  const raw = decodeURIComponent(defined(setCookie.split(';')[0]).split('=')[1] ?? '')
   const req = new Request(
     {
       method: 'GET',

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { VERSION } from '../../src/index.js'
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
+  version: string
   exports: Record<string, string | { types: string; import: string }>
   publishConfig: {
     exports: Record<string, string | { types: string; import: string }>

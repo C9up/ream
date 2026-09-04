@@ -8,8 +8,26 @@ import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
  * app's own wrapper.
  */
 export interface SessionDbConnection {
-  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>
+  /**
+   * Rows, as rows: `Record<string, unknown>`, not a shape the caller names.
+   *
+   * `query<T>` let this driver ASSERT what a SELECT returned — a promise the
+   * database never made and the connection cannot keep. It also made the
+   * interface unimplementable by anything but a real driver: a generic method
+   * must work for every `T`, so no fake could satisfy it, and this file's tests
+   * sat outside the typecheck because of it.
+   *
+   * The columns are read through {@link textColumn} below instead, which is
+   * what a row from a database deserves.
+   */
+  query(sql: string, params?: unknown[]): Promise<Array<Record<string, unknown>>>
   execute(sql: string, params?: unknown[]): Promise<{ rowsAffected: number }>
+}
+
+/** A column that must be text to be usable, or `null`. */
+function textColumn(row: Record<string, unknown>, name: string): string | null {
+  const value = row[name]
+  return typeof value === 'string' ? value : null
 }
 
 export interface DatabaseDriverOptions {
@@ -71,17 +89,20 @@ export class DatabaseDriver implements SessionDriverWithTagging {
   }
 
   async read(sessionId: string): Promise<Record<string, unknown> | null> {
-    const rows = await this.#db.query<{ data: string; expires_at: number | string }>(
-      `SELECT data, expires_at FROM ${this.#table} WHERE id = ?`,
-      [sessionId],
-    )
+    const rows = await this.#db.query(`SELECT data, expires_at FROM ${this.#table} WHERE id = ?`, [
+      sessionId,
+    ])
     const row = rows[0]
     if (!row) return null
     if (Number(row.expires_at) < Date.now()) {
       await this.destroy(sessionId)
       return null
     }
-    return parseData(row.data)
+    const data = textColumn(row, 'data')
+    // A row whose payload is not text is not a session — the same outcome as a
+    // row that will not parse.
+    if (data === null) return null
+    return parseData(data)
   }
 
   async write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void> {
@@ -157,11 +178,18 @@ export class DatabaseDriver implements SessionDriverWithTagging {
 
   /** Every non-expired session this user holds — their active devices. */
   async tagged(userId: string | number): Promise<TaggedSession[]> {
-    const rows = await this.#db.query<{ id: string; data: string }>(
+    const rows = await this.#db.query(
       `SELECT id, data FROM ${this.#table} WHERE user_id = ? AND expires_at >= ?`,
       [String(userId), Date.now()],
     )
-    return rows.map((row) => ({ id: row.id, data: parseData(row.data) }))
+    const sessions: TaggedSession[] = []
+    for (const row of rows) {
+      const id = textColumn(row, 'id')
+      const data = textColumn(row, 'data')
+      if (id === null || data === null) continue
+      sessions.push({ id, data: parseData(data) })
+    }
+    return sessions
   }
 
   /** Delete every expired row — for a scheduled job, since nothing else does. */

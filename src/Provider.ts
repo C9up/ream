@@ -7,12 +7,31 @@
  *   register() → boot() → start() → ready() → ... → shutdown()
  */
 
-import type { ConfigStore } from './ConfigLoader.js'
 import type { Container } from './container/Container.js'
+
+/**
+ * The config a provider reads, as a CONTRACT rather than as the class.
+ *
+ * `ConfigStore` satisfies it, so nothing that holds a real one changes. But
+ * typed as the class, `AppContext` demanded a private `#tree` no one outside
+ * `ConfigLoader` can produce — so a test could not substitute a config, and an
+ * independently-published package could not describe an `AppContext` at all
+ * without importing `@c9up/ream`, which is the coupling the comment below this
+ * one exists to avoid. bay, station and blackhole each re-declared their own
+ * for exactly that reason.
+ *
+ * `get` and `set` are what providers actually use; a `ConfigStore`'s other
+ * methods stay reachable on the concrete type.
+ */
+export interface ConfigReader {
+  get<T = unknown>(key: string): T | undefined
+  get<T = unknown>(key: string, defaultValue: T): T
+  set(key: string, value: unknown): void
+}
 
 export interface AppContext {
   container: Container
-  config: ConfigStore
+  config: ConfigReader
 }
 
 /**

@@ -5,6 +5,7 @@ import { Container, ReamError } from '../../src/index.js'
 import { MiddlewareRegistry } from '../../src/middleware/Pipeline.js'
 import { RpcProvider } from '../../src/rpc/RpcProvider.js'
 import { RpcRouter } from '../../src/rpc/RpcRouter.js'
+import { defined } from '../__helpers__/defined.js'
 
 function buildApp(container: Container): AppContext {
   const config = { get: () => undefined, set: () => {} }
@@ -126,7 +127,7 @@ describe('RpcProvider > endpoint mount', () => {
         },
       },
     }
-    await posted[0](ctx)
+    await defined(posted[0])(ctx)
     expect(out).toEqual([{ jsonrpc: '2.0', result: 'pong', id: 1 }])
   })
 
@@ -154,7 +155,7 @@ describe('RpcProvider > endpoint mount', () => {
     await provider.boot()
 
     const call = (id: number): Promise<void> =>
-      posted[0]({
+      defined(posted[0])({
         request: {
           body: () => ({ jsonrpc: '2.0', method: 'counter.bump', params: {}, id }),
         },
@@ -213,7 +214,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     await provider.boot()
     // Roles live ONLY under auth.user (the Warden shape) — pre-fix this denied.
     const out = await call(
-      posted[0],
+      defined(posted[0]),
       { jsonrpc: '2.0', method: 'admin.ping', params: {}, id: 1 },
       {
         isAuthenticated: true,
@@ -231,7 +232,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     await provider.boot()
     // A top-level JSON array (JSON-RPC batch) reaches the handler wrapped in the
     // `{ _body: [...] }` envelope `request.body()` puts around non-objects.
-    const out = await call(posted[0], {
+    const out = await call(defined(posted[0]), {
       _body: [
         { jsonrpc: '2.0', method: 'demo.echo', params: { x: 1 }, id: 0 },
         { jsonrpc: '2.0', method: 'demo.echo', params: { y: 2 }, id: 1 },
@@ -255,7 +256,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     // answered with a single Response object. 204 No Content is what this
     // replies when every call in a batch was a notification, so a client that
     // sent nothing was told its calls had run.
-    const out = await call(posted[0], { _body: [] })
+    const out = await call(defined(posted[0]), { _body: [] })
     expect(out).toEqual([
       { jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' }, id: null },
     ])
@@ -272,7 +273,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     const previous = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'
     try {
-      const out = await call(posted[0], {
+      const out = await call(defined(posted[0]), {
         jsonrpc: '2.0',
         method: 'task.slow',
         params: {},
@@ -301,7 +302,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       })
     })
     await provider.boot()
-    const out = await call(posted[0], {
+    const out = await call(defined(posted[0]), {
       jsonrpc: '2.0',
       method: 'task.find',
       params: {},
@@ -324,7 +325,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       })
     })
     await provider.boot()
-    const out = await call(posted[0], {
+    const out = await call(defined(posted[0]), {
       jsonrpc: '2.0',
       method: 'task.boom',
       params: {},
@@ -342,7 +343,12 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       rpc.method('user.create', () => 'created').validate('createUser')
     })
     await provider.boot()
-    const out = await call(posted[0], { jsonrpc: '2.0', method: 'user.create', params: {}, id: 2 })
+    const out = await call(defined(posted[0]), {
+      jsonrpc: '2.0',
+      method: 'user.create',
+      params: {},
+      id: 2,
+    })
     expect(out[0]).toMatchObject({ error: { code: -32602 } })
   })
 
@@ -352,7 +358,12 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       rpc.method('user.create', () => 'created').validate('missing')
     })
     await provider.boot()
-    const out = await call(posted[0], { jsonrpc: '2.0', method: 'user.create', params: {}, id: 3 })
+    const out = await call(defined(posted[0]), {
+      jsonrpc: '2.0',
+      method: 'user.create',
+      params: {},
+      id: 3,
+    })
     expect(out[0]).toMatchObject({ error: { code: -32603 } })
   })
 
@@ -367,7 +378,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       rpc.method('x.y', () => 'ok').middleware('deny')
     })
     await provider.boot()
-    const out = await call(posted[0], { jsonrpc: '2.0', method: 'x.y', params: {}, id: 4 })
+    const out = await call(defined(posted[0]), { jsonrpc: '2.0', method: 'x.y', params: {}, id: 4 })
     expect(out[0]).toHaveProperty('error')
     expect(out[0]).not.toHaveProperty('result')
   })
@@ -385,7 +396,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     let status = 0
     let sent: unknown
     const json: unknown[] = []
-    await posted[0]({
+    await defined(posted[0])({
       request: { body: () => ({ jsonrpc: '2.0', method: 'ping', params: {} }) },
       response: {
         status(c: number) {
@@ -419,7 +430,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       rpc.method('free.ping', () => 'pong')
     })
     await provider.boot()
-    const out = await call(posted[0], {
+    const out = await call(defined(posted[0]), {
       jsonrpc: '2.0',
       method: 'free.ping',
       params: {},
@@ -441,7 +452,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
       rpc.method('x.z', () => 'ok').middleware('pass')
     })
     await provider.boot()
-    const out = await call(posted[0], { jsonrpc: '2.0', method: 'x.z', params: {}, id: 5 })
+    const out = await call(defined(posted[0]), { jsonrpc: '2.0', method: 'x.z', params: {}, id: 5 })
     expect(ran).toBe(true)
     expect(out).toEqual([{ jsonrpc: '2.0', result: 'ok', id: 5 }])
   })

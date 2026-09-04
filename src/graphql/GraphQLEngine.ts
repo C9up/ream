@@ -182,7 +182,7 @@ export interface ResolverOptions {
 interface ResolverEntry {
   typeName: string
   fieldName: string
-  handlerClass: new (...args: unknown[]) => Record<string, (...args: unknown[]) => unknown>
+  handlerClass: abstract new (...args: never[]) => object
   methodName: string
   options: ResolverOptions
 }
@@ -204,7 +204,7 @@ export interface SelectionField {
 export class GraphQLEngine {
   #schemaSource: string
   #resolvers: Map<string, ResolverEntry> = new Map()
-  #container?: { make<T>(target: new (...args: unknown[]) => T): Promise<T> }
+  #container?: { make<T>(target: abstract new (...args: never[]) => T): Promise<T> }
   readonly path: string
   #playground: boolean
   #maxQueryBytes: number
@@ -239,7 +239,9 @@ export class GraphQLEngine {
   }
 
   /** Set IoC container for resolver instantiation. */
-  useContainer(container: { make<T>(target: new (...args: unknown[]) => T): Promise<T> }): void {
+  useContainer(container: {
+    make<T>(target: abstract new (...args: never[]) => T): Promise<T>
+  }): void {
     this.#container = container
   }
 
@@ -247,7 +249,7 @@ export class GraphQLEngine {
   resolver(
     typeName: string,
     fieldName: string,
-    handlerClass: new (...args: unknown[]) => Record<string, (...args: unknown[]) => unknown>,
+    handlerClass: abstract new (...args: never[]) => object,
     methodName: string,
     options?: ResolverOptions,
   ): void {
@@ -369,11 +371,13 @@ export class GraphQLEngine {
 
     try {
       // Resolve handler via IoC or direct instantiation.
-      const instance = this.#container
+      // `Reflect.construct`, not `new`: the resolver may be an abstract class,
+      // which the runtime builds happily and `new` refuses at compile time.
+      const instance: object = this.#container
         ? await this.#container.make(entry.handlerClass)
-        : new entry.handlerClass()
+        : Reflect.construct(entry.handlerClass, [])
 
-      const handler = instance[entry.methodName]
+      const handler = Reflect.get(instance, entry.methodName)
       if (typeof handler !== 'function') {
         return {
           ok: false,

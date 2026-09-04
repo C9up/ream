@@ -9,6 +9,7 @@ import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseDriver } from '../../src/session/drivers/DatabaseDriver.js'
 import { FileDriver } from '../../src/session/drivers/FileDriver.js'
+import { defined } from '../__helpers__/defined.js'
 
 describe('ream > file session driver', () => {
   let dir: string
@@ -46,7 +47,7 @@ describe('ream > file session driver', () => {
     const driver = new FileDriver({ location: dir })
     await driver.write('sid', { user: 1 }, 3600)
     const [file] = fs.readdirSync(dir)
-    fs.writeFileSync(path.join(dir, file), '{"data":{"user"')
+    fs.writeFileSync(path.join(dir, defined(file)), '{"data":{"user"')
     expect(await driver.read('sid')).toBe(null)
   })
 
@@ -66,7 +67,7 @@ function fakeDb() {
   return {
     rows,
     sql: [] as string[],
-    query: async (sql: string, params: unknown[] = []) => {
+    query: async (_sql: string, params: unknown[] = []) => {
       const row = rows.get(String(params[0]))
       return row ? [row] : []
     },

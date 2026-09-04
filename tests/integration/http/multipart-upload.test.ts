@@ -4,6 +4,7 @@ import { type HttpMethod, RequestBuilder } from '../../../src/testing/RequestBui
 import type { TestResponse } from '../../../src/testing/TestClient.js'
 import { defined } from '../../__helpers__/defined.js'
 import { HyperServer } from './loader.js'
+import { asRequest, type NapiRequest, rawField } from './napi-request.js'
 
 /**
  * End-to-end proof that the test utility's `.file()` / `.field()` encoding is
@@ -30,13 +31,27 @@ interface MultipartPayload {
   }>
 }
 
-interface NapiRequestWithMultipart {
-  method: string
-  path: string
-  query: string
-  headers: Record<string, string>
-  body: string
+/** The five named fields, plus the one this file is about. */
+interface NapiRequestWithMultipart extends NapiRequest {
   multipart?: MultipartPayload
+}
+
+/**
+ * `multipart` is not one of the five named fields, so it comes off the raw
+ * record — and is checked rather than asserted: the Rust ships it only when the
+ * body was multipart, and a shape that is not one is the same as absent here.
+ */
+function isMultipart(value: unknown): value is MultipartPayload {
+  if (typeof value !== 'object' || value === null) return false
+  const fields = Reflect.get(value, 'fields')
+  const files = Reflect.get(value, 'files')
+  return Array.isArray(fields) && Array.isArray(files)
+}
+
+function withMultipart(raw: Record<string, unknown>): NapiRequestWithMultipart {
+  const multipart = rawField(raw, 'multipart')
+  const named = asRequest(raw)
+  return isMultipart(multipart) ? { ...named, multipart } : named
 }
 
 async function createServer(
@@ -47,7 +62,7 @@ async function createServer(
   }>,
 ): Promise<{ port: number; close: () => Promise<void> }> {
   const server = new HyperServer(0)
-  server.onRequest(handler)
+  server.onRequest((raw) => handler(withMultipart(raw)))
   await server.listen()
   const port = await server.port()
   return { port, close: () => server.close() }
@@ -68,7 +83,6 @@ async function encodeViaBuilder(
       status: 200,
       headers: {},
       body: '',
-      bodyBuffer: Buffer.alloc(0),
       json<T = unknown>(): T {
         return undefined as T
       },
@@ -99,7 +113,11 @@ describeIfNetwork('hyper-server > multipart upload (RequestBuilder ↔ Rust pars
       const res = await fetch(`http://127.0.0.1:${port}/upload`, {
         method: 'POST',
         headers: enc.headers,
-        body: enc.body,
+        // A `Buffer` is a `Uint8Array` over a pooled allocation, and since
+        // TypeScript 5.7 a typed array carries the kind of buffer behind it —
+        // `BodyInit` wants one backed by a plain `ArrayBuffer`. `from` copies
+        // the bytes into one; a multipart fixture is small enough not to care.
+        body: Uint8Array.from(enc.body),
       })
       expect(res.status).toBe(200)
 

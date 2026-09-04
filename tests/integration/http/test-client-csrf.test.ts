@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TestClient } from '../../../src/testing/TestClient.js'
 import { HyperServer } from './loader.js'
+import { asRequest, type NapiRequest } from './napi-request.js'
 
 /**
  * End-to-end proof that the TestClient's `.withCsrf()` satisfies a signed
@@ -13,14 +14,6 @@ import { HyperServer } from './loader.js'
  */
 const networkAllowed = process.env.REAM_SKIP_NETWORK_TESTS !== '1'
 const describeIfNetwork = networkAllowed ? describe : describe.skip
-
-interface NapiRequest {
-  method: string
-  path: string
-  query: string
-  headers: Record<string, string>
-  body: string
-}
 
 const ISSUED_TOKEN = 'random32.hmacsignature'
 
@@ -69,7 +62,7 @@ describeIfNetwork('TestClient > withCsrf + visit (real HyperServer)', () => {
     client = new TestClient(
       async () => {
         const s = new HyperServer(0)
-        s.onRequest(handler)
+        s.onRequest((raw) => handler(asRequest(raw)))
         await s.listen()
         return { port: await s.port(), close: () => s.close() }
       },

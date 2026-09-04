@@ -579,11 +579,12 @@ describe('Container > two tokens that read alike are two tokens', () => {
     const parent = new Container()
     const Service = class Service {}
     parent.bindValue(Service, 'from-parent')
-    const child = parent.createChild ? parent.createChild() : parent
-
-    // Numbering per container would hand the child a different key, and it
-    // would never find what the parent bound.
-    expect(await child.resolve(Service)).toBe('from-parent')
+    // `createChild()` does not exist on Container. The line here read
+    // `parent.createChild ? parent.createChild() : parent`, so the fallback was
+    // always taken and the test resolved from the parent it had just bound —
+    // it could not fail. What it CAN check is the invariant underneath: a class
+    // used as a token keys on the class itself, so two containers would agree.
+    expect(await parent.resolve(Service)).toBe('from-parent')
   })
 
   it('still names the class in what it reports', () => {

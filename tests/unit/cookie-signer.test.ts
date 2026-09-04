@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { CookieSigner } from '../../src/security/CookieSigner.js'
 import { hmacSign } from '../../src/security/crypto.js'
+import { defined } from '../__helpers__/defined.js'
 
 const signer = new CookieSigner('super-secret-key')
 
@@ -64,7 +65,7 @@ describe('CookieSigner > encrypt / decrypt', () => {
   it('returns null when the auth tag / ciphertext is tampered (GCM fails)', () => {
     const [iv, data, tag] = signer.encrypt('top-secret').split('.')
     expect(signer.decrypt(`${iv}.${data}AA.${tag}`)).toBeNull()
-    expect(signer.decrypt(`${iv}.${data}.${tag.slice(0, -2)}AA`)).toBeNull()
+    expect(signer.decrypt(`${iv}.${data}.${defined(tag).slice(0, -2)}AA`)).toBeNull()
   })
 
   it('returns null when decrypted with a different secret', () => {

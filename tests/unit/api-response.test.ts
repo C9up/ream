@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { ApiResponse, type TestResponse } from '../../src/testing/RequestBuilder.js'
+import { defined } from '../__helpers__/defined.js'
 
 const raw = (over: Partial<TestResponse> = {}): TestResponse => {
   const body = over.body ?? ''
@@ -70,7 +71,7 @@ describe('ream > ApiResponse accessors (helix method form)', () => {
     )
     expect(res.cookie('session')?.value).toBe('abc')
     expect(res.cookie('session')?.path).toBe('/')
-    expect(res.cookies().theme.value).toBe('dark')
+    expect(defined(res.cookies().theme).value).toBe('dark')
     expect(res.links().next).toBe('/next')
     expect(res.hasError()).toBe(true)
     expect(res.hasFatalError()).toBe(true)
@@ -154,9 +155,9 @@ describe('ream > ApiResponse audit #3 parity', () => {
       raw({ headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body }),
     )
     const files = res.files()
-    expect(files.doc.filename).toBe('a.txt')
-    expect(files.doc.type).toBe('text/plain')
-    expect(files.doc.content.toString('utf8')).toBe('FILE-BYTES')
+    expect(defined(files.doc).filename).toBe('a.txt')
+    expect(defined(files.doc).type).toBe('text/plain')
+    expect(defined(files.doc).content.toString('utf8')).toBe('FILE-BYTES')
     // Non-file fields land in body().
     expect(res.body()).toEqual({ note: 'hello' })
   })

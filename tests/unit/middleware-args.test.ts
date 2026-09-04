@@ -6,6 +6,7 @@ import {
   type MiddlewareClass,
   resolveParametrizedMiddlewareEntry,
 } from '../../src/server/Server.js'
+import { defined } from '../__helpers__/defined.js'
 
 const RAW: RawRequest = { method: 'GET', path: '/', query: '', headers: {}, body: '' }
 function makeCtx(): HttpContext {
@@ -46,7 +47,7 @@ describe('router.named — factories + by-name registration', () => {
     const middleware = router.named({ tag: async () => ({ default: TagMiddleware }) })
 
     const ctx = makeCtx()
-    await middleware.tag({ role: 'admin' })(ctx, async () => {})
+    await defined(middleware.tag)({ role: 'admin' })(ctx, async () => {})
     expect(ctx.store.get('args')).toEqual({ role: 'admin' })
   })
 

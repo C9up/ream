@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HyperServer } from './loader.js'
+import { asRequest, type NapiRequest } from './napi-request.js'
 
 /**
  * Some sandboxed environments (restricted container runtimes, certain
@@ -17,13 +18,6 @@ const describeIfNetwork = networkAllowed ? describe : describe.skip
 // plain JS object and must return one (NOT a JSON string — JSON.stringify
 // would cross the boundary as a primitive and napi-rs would reject it,
 // surfacing as a 500 "Handler rejected").
-interface NapiRequest {
-  method: string
-  path: string
-  query: string
-  headers: Record<string, string>
-  body: string
-}
 interface NapiResponse {
   status: number
   // `headers` is REQUIRED on the Rust side (HashMap, not Option<HashMap>).
@@ -55,7 +49,9 @@ async function createServer(
   handler: (req: NapiRequest) => Promise<NapiResponse>,
 ): Promise<{ port: number; close: () => Promise<void> }> {
   const server = new HyperServer(0)
-  server.onRequest(handler)
+  // The binding hands over a raw record — the Rust declares no shape for it —
+  // so the five fields a test reads are pulled out here.
+  server.onRequest((raw) => handler(asRequest(raw)))
   await server.listen()
   const port = await server.port()
   return { port, close: () => server.close() }

@@ -22,6 +22,7 @@ import type {
   MigrationRunnerContract,
   RegisteredMigrationSource,
 } from '../../src/migrations/types.js'
+import { defined } from '../__helpers__/defined.js'
 
 interface FakeTask {
   name: string
@@ -62,7 +63,7 @@ async function run(
   // `raw` keeps every line in memory instead of printing it.
   kernel.ui.switchMode('raw')
   kernel.register(ScheduleList).register(ScheduleRun)
-  const command = await kernel.exec(argv[0], argv.slice(1))
+  const command = await kernel.exec(defined(argv[0]), argv.slice(1))
   return { output: kernel.ui.getLogs().join('\n'), exitCode: command.exitCode }
 }
 
@@ -192,7 +193,7 @@ describe('ream > migrate commands', () => {
     const kernel = new Kernel({ startApp: async () => application })
     kernel.ui.switchMode('raw')
     kernel.register(Migrate).register(MigrateRollback).register(MigrateStatus)
-    const command = await kernel.exec(argv[0], argv.slice(1))
+    const command = await kernel.exec(defined(argv[0]), argv.slice(1))
     return { output: kernel.ui.getLogs().join('\n'), exitCode: command.exitCode }
   }
 

@@ -128,8 +128,11 @@ impl HyperServer {
         })
     }
 
-    /// Register the request handler. Callback receives JSON request string, must return JSON response string.
+    /// Register the request handler.
     ///
+    /// The request arrives as an OBJECT (`serde_json::Value` → `JsObject`) and
+    /// the handler answers with a `NapiResponse` object — not the JSON strings
+    /// this comment described until the boundary stopped carrying them.
     #[napi]
     pub fn on_request(
         &self,

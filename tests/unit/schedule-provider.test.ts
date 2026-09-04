@@ -10,6 +10,7 @@ import {
   ScheduleProvider,
   Service,
 } from '../../src/index.js'
+import { defined } from '../__helpers__/defined.js'
 
 /**
  * Minimal `Scheduler`-shaped mock. Implements only the methods the
@@ -312,7 +313,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     Schedule('*/5 * * * *')(
       Anon.prototype,
       'run',
-      Object.getOwnPropertyDescriptor(Anon.prototype, 'run'),
+      defined(Object.getOwnPropertyDescriptor(Anon.prototype, 'run')),
     )
     Service()(Anon as unknown as new () => object)
 
@@ -373,7 +374,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     Schedule('*/5 * * * *')(
       SymbolMethod.prototype,
       runKey,
-      Object.getOwnPropertyDescriptor(SymbolMethod.prototype, runKey),
+      defined(Object.getOwnPropertyDescriptor(SymbolMethod.prototype, runKey)),
     )
 
     const provider = new ScheduleProvider(buildApp(new Container()), {

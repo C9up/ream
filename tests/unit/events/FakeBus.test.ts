@@ -14,7 +14,7 @@ describe('FakeBus > emit / dispatch', () => {
     await bus.emit('order.created', JSON.stringify({ id: 'O-1' }))
     expect(bus.getEmitted()).toHaveLength(1)
     expect(received).toHaveLength(1)
-    const envelope: Record<string, unknown> = JSON.parse(received[0])
+    const envelope: Record<string, unknown> = JSON.parse(defined(received[0]))
     expect(envelope.name).toBe('order.created')
     expect(envelope.data).toBe(JSON.stringify({ id: 'O-1' }))
   })
@@ -187,8 +187,10 @@ describe('FakeBus > getEmitted defensive clone', () => {
     await bus.emit('a', JSON.stringify({ n: 1 }))
     const first = bus.getEmitted()
     expect(defined(first[0]).parsedData).toEqual({ n: 1 })
-    if (!isObject(defined(first[0]).parsedData)) throw new Error('parsedData not object')
-    defined(first[0]).parsedData.n = 999
+    const parsed = defined(first[0]).parsedData
+    if (!isObject(parsed)) throw new Error('parsedData not object')
+    // Mutating the copy the caller was handed must not reach the bus's own.
+    parsed.n = 999
     const second = bus.getEmitted()
     expect(defined(second[0]).parsedData).toEqual({ n: 1 })
   })
@@ -408,7 +410,7 @@ describe('FakeBus > clone fallback', () => {
       expect(cloned).toHaveLength(1)
       expect(defined(cloned[0]).name).toBe('raw')
       expect(defined(cloned[0]).data).toBe('not-json')
-      expect(cloned[0].parsedData).toBeUndefined()
+      expect(defined(cloned[0]).parsedData).toBeUndefined()
     } finally {
       globalThis.structuredClone = realClone
     }

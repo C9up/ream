@@ -108,7 +108,7 @@ describe('session RedisDriver > a transient connection failure', () => {
     expect(attempts).toBe(2)
 
     // …and once connected, the client is memoised as before.
-    await driver.write('sid', { a: 1 })
+    await driver.write('sid', { a: 1 }, 3600)
     expect(await driver.read('sid')).toEqual({ a: 1 })
     expect(attempts).toBe(2)
   })

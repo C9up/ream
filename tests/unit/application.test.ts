@@ -237,7 +237,7 @@ describe('Application > the registered providers are readable', () => {
   }
 
   it('names them in registration order', () => {
-    const app = new Application(new URL('file:///tmp/app/'))
+    const app = new Application()
     app.register(new Alpha(app))
     app.register(new Beta(app))
 
@@ -249,7 +249,7 @@ describe('Application > the registered providers are readable', () => {
   })
 
   it('hands back a fresh array each time, not the internal one', () => {
-    const app = new Application(new URL('file:///tmp/app/'))
+    const app = new Application()
     app.register(new Alpha(app))
 
     // Two calls, two arrays: whatever a caller does to what it got cannot

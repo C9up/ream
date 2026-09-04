@@ -341,7 +341,14 @@ describe('events > BaseEvent', () => {
   }
 
   it('emit() is a no-op when no emitter has been wired', async () => {
-    BaseEvent.resetEmitter()
+    // `resetEmitter` takes the emitter to clear — it only clears when the one
+    // wired IS that one, so two applications sharing a process cannot unwire
+    // each other's. Called with nothing, as it was here, it never cleared
+    // anything: this test ran against whatever the previous one left wired.
+    const emitter = new Emitter(new FakeBus())
+    BaseEvent.useEmitter(emitter)
+    BaseEvent.resetEmitter(emitter)
+
     await new Sample(1).emit()
   })
 
@@ -354,7 +361,7 @@ describe('events > BaseEvent', () => {
     const emitted = bus.getEmitted()
     expect(defined(emitted[0]).name).toBe('sample')
     expect(defined(emitted[0]).data).toContain('"payload":7')
-    BaseEvent.resetEmitter()
+    BaseEvent.resetEmitter(emitter)
   })
 
   it('isolates a throwing class listener: siblings still run and the bus still emits', async () => {
@@ -380,6 +387,6 @@ describe('events > BaseEvent', () => {
     expect((errors[0] as { event: string }).event).toBe('sample')
     // Distributed subscribers still receive the event despite the failure.
     expect(bus.getEmitted().map((e) => e.name)).toContain('sample')
-    BaseEvent.resetEmitter()
+    BaseEvent.resetEmitter(emitter)
   })
 })

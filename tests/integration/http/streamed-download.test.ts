@@ -12,22 +12,22 @@ import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { Response } from '../../../src/http/Response.js'
+import type { NapiResponse } from '../../../src/native/generated.js'
 import { HyperServer } from './loader.js'
+import { asRequest, type NapiRequest } from './napi-request.js'
 
 const networkAllowed = process.env.REAM_SKIP_NETWORK_TESTS !== '1'
 const describeIfNetwork = networkAllowed ? describe : describe.skip
 
-interface NapiRequest {
-  method: string
-  path: string
-}
-
 /** Boot a server whose handler can push onto its own stream registry. */
 async function serve(
-  handler: (req: NapiRequest, server: InstanceType<typeof HyperServer>) => Promise<unknown>,
+  handler: (req: NapiRequest, server: InstanceType<typeof HyperServer>) => Promise<NapiResponse>,
 ): Promise<{ port: number; close: () => Promise<void> }> {
   const server = new HyperServer(0)
-  server.onRequest(async (req: NapiRequest) => handler(req, server))
+  // Raw record in, the five named fields out — the Rust declares no shape for
+  // the request. The response goes back untouched: it carries the `streamId`
+  // this whole file is about.
+  server.onRequest((raw) => handler(asRequest(raw), server))
   await server.listen()
   return { port: await server.port(), close: () => server.close() }
 }

@@ -16,7 +16,10 @@ describe('Scheduler (wrapper)', () => {
       unregister: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
-      nextRun: vi.fn(() => null as number | null),
+      // Typed by the call it stands in for, so `mockImplementation` can take
+      // one: inferred from `() => null`, the mock accepted no argument and no
+      // number back.
+      nextRun: vi.fn<(name: string) => number | null>(() => null),
     }
   }
 
@@ -104,7 +107,7 @@ describe('Scheduler (wrapper)', () => {
 
   it('listTasks returns name, cronExpr, and nextRun for every registered task', () => {
     const { native, scheduler } = build()
-    native.nextRun.mockImplementation((name: string) =>
+    native.nextRun.mockImplementation((name: string): number | null =>
       name === 'a' ? 42 : name === 'b' ? 99 : null,
     )
     scheduler.register('a', '0 * * * *', () => {})

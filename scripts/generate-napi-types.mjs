@@ -45,8 +45,15 @@ const CALLBACK_REFINEMENTS = {
     to: 'callback: (eventJson: string, reply: (response: string) => void) => void',
   },
   'HyperServer.onRequest': {
+    // Only the argument is named. The `to` used to say
+    // `(request: string) => Promise<string> | string`, which described the
+    // boundary as it was BEFORE it stopped serialising: the Rust hands the
+    // handler a JsObject and awaits a `NapiResponse`, and napi's own output
+    // already said so. The refinement was overwriting a correct shape with a
+    // stale one, and nothing noticed because every caller of `onRequest` was
+    // outside the typecheck.
     from: 'callback: (arg: unknown) => Promise<NapiResponse>',
-    to: 'callback: (request: string) => Promise<string> | string',
+    to: 'callback: (request: Record<string, unknown>) => Promise<NapiResponse>',
   },
   'HyperServer.onStreamDisconnect': {
     from: 'callback: (arg: unknown) => unknown',

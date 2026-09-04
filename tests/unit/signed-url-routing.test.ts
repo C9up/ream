@@ -16,7 +16,7 @@ function router(): Router {
 }
 
 function requestFor(url: string, withSigner = true): Request {
-  const [path, query = ''] = url.split('?')
+  const [path = '', query = ''] = url.split('?')
   const req = new Request({ method: 'GET', path, query, headers: {}, body: '' })
   if (withSigner) req.setSignedUrl(signedUrl)
   return req

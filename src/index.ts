@@ -254,7 +254,7 @@ export { ConsoleKernel, defineConfig, Ignitor, prettyPrintError } from './Ignito
 // ─── Providers ──────────────────────────────────────────────
 
 export { errors } from './errors/aggregate.js'
-export type { AppContext, ProviderContract } from './Provider.js'
+export type { AppContext, ConfigReader, ProviderContract } from './Provider.js'
 export { Provider } from './Provider.js'
 export type {
   AuthenticatorName,

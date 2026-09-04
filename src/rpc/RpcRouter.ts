@@ -30,7 +30,7 @@ export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown>
  * the shared `'middleware'` registry, and `validator:<name>` schemas.
  */
 interface RpcContainer {
-  make<T>(target: new (...args: unknown[]) => T): Promise<T>
+  make<T>(target: abstract new (...args: never[]) => T): Promise<T>
   resolve<T>(token: string): Promise<T>
   has(token: string): boolean
 }
@@ -151,11 +151,21 @@ export class RpcRouter {
     return new RpcMethodBuilder(def)
   }
 
-  /** Register methods from a controller — auto-registers all public methods. */
-  namespace(
-    prefix: string,
-    controller: new (...args: unknown[]) => Record<string, (...args: unknown[]) => unknown>,
-  ): void {
+  /**
+   * Register methods from a controller — auto-registers all public methods.
+   *
+   * The parameter used to demand
+   * `new (...args: unknown[]) => Record<string, (...args: unknown[]) => unknown>`,
+   * which NO real controller satisfies: a class with any non-method property
+   * fails the `Record`, and a method declared `bump(): number` fails the
+   * `unknown[]` parameters, which are compared contravariantly. So the
+   * documented call — `rpc.namespace('task', TaskController)` — did not
+   * typecheck, and nothing noticed because the tests were outside `tsc`.
+   *
+   * Any class, then. The body already checks that what it found is callable
+   * and names the method when it is not.
+   */
+  namespace(prefix: string, controller: abstract new (...args: never[]) => object): void {
     const proto = controller.prototype
     const methods = Object.getOwnPropertyNames(proto).filter(
       (m) => m !== 'constructor' && typeof proto[m] === 'function',
@@ -164,8 +174,12 @@ export class RpcRouter {
       this.method(`${prefix}.${methodName}`, async (ctx, params) => {
         // Resolve through the container on every call (fresh DI per request,
         // like GraphQLEngine), falling back to a bare `new` when unset.
-        const instance = this.#container ? await this.#container.make(controller) : new controller()
-        const handler = instance[methodName]
+        // `Reflect.construct`, not `new controller()`: the token may be an
+        // abstract class, which the runtime builds happily and `new` refuses.
+        const instance: object = this.#container
+          ? await this.#container.make(controller)
+          : Reflect.construct(controller, [])
+        const handler = Reflect.get(instance, methodName)
         if (typeof handler !== 'function') {
           throw new Error(
             `RPC method '${prefix}.${methodName}' is not a function on ${controller.name}`,

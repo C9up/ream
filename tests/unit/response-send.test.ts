@@ -7,6 +7,7 @@ import type { RawRequest } from '../../src/http/Request.js'
 import { Request } from '../../src/http/Request.js'
 import { Response } from '../../src/http/Response.js'
 import { CookieSigner } from '../../src/security/CookieSigner.js'
+import { defined } from '../__helpers__/defined.js'
 
 describe('ream > Response.send() / json() — AdonisJS parity', () => {
   it('serves a plain string as text/plain and an HTML-looking string as text/html', () => {
@@ -301,7 +302,9 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     const res = new Response()
     res.setCookieSigner(signer)
     res.cookie('token', 'hello')
-    const value = (res.getHeaders()['set-cookie'] ?? '').split(';')[0].slice('token='.length)
+    const value = defined((res.getHeaders()['set-cookie'] ?? '').split(';')[0]).slice(
+      'token='.length,
+    )
 
     const req = new Request(rawWithCookie('token', value), {})
     req.setCookieSigner(signer)
@@ -325,7 +328,9 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     const res = new Response()
     res.setCookieSigner(signer)
     res.cookie('theme', 'dark')
-    const value = (res.getHeaders()['set-cookie'] ?? '').split(';')[0].slice('theme='.length)
+    const value = defined((res.getHeaders()['set-cookie'] ?? '').split(';')[0]).slice(
+      'theme='.length,
+    )
 
     const req = new Request(rawWithCookie('role', value), {})
     req.setCookieSigner(signer)
@@ -338,7 +343,7 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     res.encryptedCookie('secret', 'top')
     const sc = res.getHeaders()['set-cookie'] ?? ''
     expect(sc).not.toContain('top')
-    const enc = sc.split(';')[0].split('=').slice(1).join('=')
+    const enc = defined(sc.split(';')[0]).split('=').slice(1).join('=')
     const req = new Request(rawWithCookie('secret', enc), {})
     req.setCookieSigner(signer)
     expect(req.encryptedCookie('secret')).toBe('top')

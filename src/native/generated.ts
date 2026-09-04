@@ -87,8 +87,14 @@ export declare class HyperServer {
    * the safe default for a dev machine.
    */
   constructor(port?: number | undefined | null, host?: string | undefined | null)
-  /** Register the request handler. Callback receives JSON request string, must return JSON response string. */
-  onRequest(callback: (request: string) => Promise<string> | string): void
+  /**
+   * Register the request handler.
+   *
+   * The request arrives as an OBJECT (`serde_json::Value` → `JsObject`) and
+   * the handler answers with a `NapiResponse` object — not the JSON strings
+   * this comment described until the boundary stopped carrying them.
+   */
+  onRequest(callback: (request: Record<string, unknown>) => Promise<NapiResponse>): void
   /**
    * Configure the trusted-proxy CIDR list used by `request.ip` resolution.
    * Must be called BEFORE `listen()`. Empty list = legacy permissive mode
