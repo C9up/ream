@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import type { AppContext } from '../../src/index.js'
 import { Container, OpenApiGenerator, OpenApiProvider, Router } from '../../src/index.js'
+import { defined } from '../__helpers__/defined.js'
 
 function buildApp(container: Container): AppContext {
   const config = { get: () => undefined, set: () => {} }
@@ -50,7 +51,7 @@ async function mountMiddleware(): Promise<
   const provider = new OpenApiProvider(buildApp(container), { generator })
   await provider.boot()
   expect(used).toHaveLength(1)
-  return used[0]
+  return defined(used[0])
 }
 
 describe('OpenApiProvider', () => {

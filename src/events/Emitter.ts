@@ -38,7 +38,10 @@ type EventConstructor<T = unknown> = new (...args: never[]) => T
  */
 type ListenerFn<T = unknown> = (event: T) => unknown
 
-type ListenerConstructor<T = unknown> = new (...args: never[]) => ListenerClass<T>
+// `abstract new`: a listener bound against an abstract base is as valid a
+// registration as one bound against a concrete class, and the container builds
+// either.
+type ListenerConstructor<T = unknown> = abstract new (...args: never[]) => ListenerClass<T>
 
 type Listener<T = unknown> = ListenerFn<T> | ListenerConstructor<T>
 
@@ -49,7 +52,16 @@ type Listener<T = unknown> = ListenerFn<T> | ListenerConstructor<T>
  * satisfies it.
  */
 export interface EmitterResolver {
-  make<T>(target: new (...args: never[]) => T): Promise<T>
+  /**
+   * Build a listener.
+   *
+   * Not generic: a generic method must work for every `T`, so nothing but a
+   * real container could implement it — the fake in the tests could not, and
+   * this file's own call site reached for `as ListenerConstructor<T>` to get
+   * past it. What comes back is checked below, which is what a container's
+   * answer deserves anyway.
+   */
+  make(target: abstract new (...args: never[]) => object): Promise<object>
 }
 
 /**
@@ -335,9 +347,15 @@ export class Emitter {
         if (isListenerClass(listener)) {
           // Listener class — resolve via container for @inject() support
           const instance = this.#resolver
-            ? await this.#resolver.make(listener as ListenerConstructor<T>)
-            : new (listener as ListenerConstructor<T>)()
-          await instance.handle(event)
+            ? await this.#resolver.make(listener)
+            : Reflect.construct(listener, [])
+          const handle = Reflect.get(instance, 'handle')
+          if (typeof handle !== 'function') {
+            throw new Error(
+              `Listener ${String(Reflect.get(listener, 'name'))} resolved to something with no handle()`,
+            )
+          }
+          await handle.call(instance, event)
         } else {
           await (listener as ListenerFn<T>)(event)
         }
@@ -659,7 +677,7 @@ function classToEventName(cls: EventConstructor): string {
 }
 
 /** Check if a listener entry is a class (has prototype.handle) vs a function. */
-function isListenerClass(listener: Listener): boolean {
+function isListenerClass(listener: Listener): listener is ListenerConstructor {
   return typeof listener === 'function' && typeof listener.prototype?.handle === 'function'
 }
 

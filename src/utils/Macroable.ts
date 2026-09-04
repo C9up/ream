@@ -38,7 +38,11 @@ export class Macroable {
    * `HttpContext`, and two subclasses declaring the same name clobbered each
    * other silently.
    */
-  static macro(this: typeof Macroable, name: string, fn: MacroFn): void {
+  // `{ prototype: object }`, not `typeof Macroable`: a subclass whose
+  // constructor takes arguments — `Request`, say — has a different static side,
+  // so `Request.macro(...)` was "the 'this' context of type 'typeof Request' is
+  // not assignable". What this needs from `this` is the prototype it defines on.
+  static macro(this: { prototype: object }, name: string, fn: MacroFn): void {
     Object.defineProperty(this.prototype, name, {
       value: fn,
       writable: true,
@@ -51,7 +55,7 @@ export class Macroable {
    * `getter`). With `singleton`, the value is computed once per instance and
    * cached.
    */
-  static getter(this: typeof Macroable, name: string, fn: GetterFn, singleton = false): void {
+  static getter(this: { prototype: object }, name: string, fn: GetterFn, singleton = false): void {
     if (!singleton) {
       Object.defineProperty(this.prototype, name, { get: fn, configurable: true })
       return

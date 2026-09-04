@@ -17,7 +17,11 @@ interface SessionGuard {
   logout(): Promise<void>
 }
 
-declare module '../../src/types/authenticators.js' {
+// `src/types/index.ts` is where `Authenticators` lives, and what
+// `@c9up/ream/types` resolves to — the path here named a file that does not
+// exist, so the augmentation applied to nothing and the test's whole point
+// (that a host can widen `auth.use`) was untested.
+declare module '../../src/types/index.js' {
   interface Authenticators {
     session: SessionGuard
   }

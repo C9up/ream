@@ -137,7 +137,9 @@ describe('events > Emitter > class-based events', () => {
     }
     const instance = new Listener()
     const resolver: ContainerResolver = {
-      make: vi.fn(() => instance),
+      make: vi.fn<(target: abstract new (...args: never[]) => object) => Promise<object>>(
+        async () => instance,
+      ),
     }
     const emitter = new Emitter(new FakeBus(), resolver)
     emitter.on(TaskDeclared, Listener)

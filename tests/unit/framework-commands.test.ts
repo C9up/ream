@@ -59,7 +59,15 @@ async function run(
   application: Application | undefined,
   argv: string[],
 ): Promise<{ output: string; exitCode: number | undefined }> {
-  const kernel = new Kernel({ startApp: async () => application })
+  // `startApp` promises an Application. The parameter is `Application |
+  // undefined` because one case checks what happens with none — so say that
+  // here rather than handing the kernel a promise that may resolve to nothing.
+  const kernel = new Kernel({
+    startApp: async () => {
+      if (application === undefined) throw new Error('no application wired')
+      return application
+    },
+  })
   // `raw` keeps every line in memory instead of printing it.
   kernel.ui.switchMode('raw')
   kernel.register(ScheduleList).register(ScheduleRun)

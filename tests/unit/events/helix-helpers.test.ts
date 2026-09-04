@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
+// The shipped helpers, not the copy of them that sits beside this file:
+// `tests/unit/events/helpers.js` duplicates `src/events/helix/helpers.ts`
+// export for export, so this suite was exercising a second implementation
+// while the one users import went untested by it.
+import {
+  assertEmitted,
+  assertNotEmitted,
+  collect,
+  fake,
+  waitForEvent,
+} from '../../../src/events/helix/helpers.js'
 import { EventBus } from '../../../src/events/native.js'
-import { assertEmitted, assertNotEmitted, collect, fake, waitForEvent } from './helpers.js'
+import { defined } from '../../__helpers__/defined.js'
 
 describe('helix > collect()', () => {
   it('captures emitted events into an array', async () => {
@@ -14,8 +25,8 @@ describe('helix > collect()', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(events.length).toBe(2)
-    expect(events[0].name).toBe('order.created')
-    expect(events[1].name).toBe('order.created')
+    expect(defined(events[0]).name).toBe('order.created')
+    expect(defined(events[1]).name).toBe('order.created')
     expect(subId).toBeGreaterThan(0)
   })
 
@@ -43,7 +54,7 @@ describe('helix > fake()', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(faked.events.length).toBe(1)
-    expect(faked.events[0].name).toBe('mail.send')
+    expect(defined(faked.events[0]).name).toBe('mail.send')
   })
 })
 

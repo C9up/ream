@@ -8,27 +8,39 @@
  * template provider installs.
  */
 import { describe, expect, it } from 'vitest'
+import { HttpContext } from '../../src/http/HttpContext.js'
+import type { RawRequest } from '../../src/http/Request.js'
 import { Router } from '../../src/router/Router.js'
 
-function contextWith(extra: Record<string, unknown>) {
+/**
+ * A real `HttpContext`, with its response watched and a view attached.
+ *
+ * The fake here used to be `{ store, response: { type, send } }` — a partial
+ * shape the handler's parameter does not accept, which is why this file sat
+ * outside the typecheck. A real context costs four arguments and cannot drift
+ * from what a handler is actually given.
+ */
+function contextWith(extra: { view?: unknown } = {}): {
+  ctx: HttpContext
+  sent: { body?: string; type?: string }
+} {
   const sent: { body?: string; type?: string } = {}
-  const store = new Map<string, unknown>()
-  return {
-    ctx: {
-      store,
-      response: {
-        type(value: string) {
-          sent.type = value
-          return this
-        },
-        send(body: string) {
-          sent.body = body
-        },
-      },
-      ...extra,
-    },
-    sent,
+  const raw: RawRequest = { method: 'GET', path: '/about', query: '', headers: {}, body: '' }
+  const ctx = new HttpContext('req-brisk', raw, {}, { pattern: '/about', middleware: [] })
+
+  const response = ctx.response
+  const type = response.type.bind(response)
+  response.type = (value: string) => {
+    sent.type = value
+    return type(value)
   }
+  response.send = (body: string) => {
+    sent.body = body
+  }
+  if (extra.view !== undefined) {
+    Object.defineProperty(ctx, 'view', { value: extra.view, configurable: true })
+  }
+  return { ctx, sent }
 }
 
 describe('ream > router.on().render()', () => {

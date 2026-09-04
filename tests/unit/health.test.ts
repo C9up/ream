@@ -168,8 +168,25 @@ describe('HealthChecks — caching', () => {
 describe('HealthChecks — tracing', () => {
   it('publishes each run on the diagnostics channel', async () => {
     const seen: string[] = []
+    // `ChannelListener` returns void; `push` returns a number, and a channel
+    // handler declared to return one does not fit. And the shape is read, not
+    // asserted: what a diagnostics channel publishes is `unknown`.
+    // All five handlers: `TracingChannelSubscribers` takes the set, and a
+    // partial one is a type error even though `subscribe` tolerates it at
+    // runtime. Only `start` is read here.
+    const noop = (): void => {}
     const subscriber = {
-      start: (data: unknown) => seen.push((data as { check: { name: string } }).check.name),
+      end: noop,
+      asyncStart: noop,
+      asyncEnd: noop,
+      error: noop,
+      start: (data: unknown): void => {
+        if (typeof data !== 'object' || data === null) return
+        const check = Reflect.get(data, 'check')
+        if (typeof check !== 'object' || check === null) return
+        const name = Reflect.get(check, 'name')
+        if (typeof name === 'string') seen.push(name)
+      },
     }
     tracingChannels.healthCheck.subscribe(subscriber)
     try {
