@@ -699,12 +699,31 @@ export class Ignitor {
     this.#phase = 'started'
   }
 
+  /**
+   * Whether this process should bind an HTTP server.
+   *
+   * Not the same question as "is the environment 'web'". A test harness needs
+   * the HTTP surface — it passes a `serverFactory` precisely to get one — but
+   * it also needs to declare itself as `test`, because that is what an
+   * environment-scoped provider entry reads. Tying the two together forced a
+   * test bootstrap to call `httpServer()`, which set the environment to
+   * `'web'`, so `{ environment: ['web'] }` excluded nothing from a test run and
+   * a scheduled task fired in the middle of the suite.
+   *
+   * A test process that passes no factory still gets no server, and no error.
+   */
+  #servesHttp(): boolean {
+    const environment = this.#app.getEnvironment()
+    if (environment === 'web') return true
+    return environment === 'test' && this.#config.serverFactory !== undefined
+  }
+
   async #phaseReady(): Promise<void> {
     // Boot the Server (resolves lazy error handler etc.)
     await this.#server.boot()
 
-    // Start HTTP server if in web mode
-    if (this.#app.getEnvironment() === 'web' && this.#config.serverFactory) {
+    // Start HTTP server if this process serves one
+    if (this.#servesHttp() && this.#config.serverFactory) {
       // Build the HttpKernel with server middleware + router middleware.
       // The streaming backend is resolved lazily — the HyperServer is
       // created a few lines down, after the kernel — so the kernel

@@ -10,7 +10,8 @@
  *     throws, tasks 1..N-1 registered in the same boot are unregistered
  *     before the error propagates, so the scheduler is never left in a
  *     half-registered state.
- *   - `start()` — launches the Rust tick loop.
+ *   - `ready()` — discovers the tasks `app/modules/**` declared, then
+ *     launches the Rust tick loop.
  *   - `shutdown()` — cancels the Rust tick loop.
  *
  * The registered callback resolves the service **at invocation time**
@@ -86,26 +87,35 @@ export class ScheduleProvider extends Provider {
   }
 
   /**
-   * Discovery runs at START, not at boot, and that is the whole point.
+   * The pass that matters runs at READY, and the ordering is the reason.
    *
-   * `app/modules/**` is auto-loaded during the start phase — after every
-   * provider has booted. A `@Service()` carrying `@Schedule` there, which is
-   * where one naturally lives, was therefore registered into the service
-   * registry AFTER this had already read it. The task was never registered,
-   * and nothing said so: no error, no warning, the application started
-   * normally and the task simply never fired.
+   * A `@Service()` carrying `@Schedule` naturally lives in `app/modules/**`,
+   * which the application auto-loads at the END of the start phase — after
+   * every provider's `start()`. Discovering in `start()` therefore read the
+   * service registry before the modules had put anything in it: the task was
+   * never registered, and nothing said so. No error, no warning, the
+   * application started normally and the task simply never fired. `ready()`
+   * runs after the autoload, which is what makes the second pass real.
    *
-   * Reading the registry once the modules are in place is what fixes it. A
-   * service declared anywhere earlier — a provider, a preload — is in the
-   * registry by then too, so nothing is lost by waiting.
+   * The earlier passes are kept because they cost nothing and shorten the gap:
+   * a service declared by a provider or a preload is registered as soon as it
+   * is seen. `#discover()` is idempotent, so a task found twice is registered
+   * once.
    */
   override async boot(): Promise<void> {
     // Anything already in the registry — declared by a provider, or imported
-    // by one. The rest is caught at start().
+    // by one. The rest is caught later.
     this.#discover()
   }
 
   override async start(): Promise<void> {
+    // Preloads have not run yet either; this catches whatever the boot phase
+    // added. The ticker deliberately does NOT start here.
+    this.#discover()
+  }
+
+  override async ready(): Promise<void> {
+    // The pass after `app/modules/**`.
     this.#discover()
     if (activeProvider !== undefined && activeProvider !== this) {
       // A previous app's scheduler is still running — stop it before this one

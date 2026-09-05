@@ -162,13 +162,18 @@ describe('ScheduleProvider > discovery + registration', () => {
     })
   })
 
-  it('start() forwards to scheduler.start', async () => {
+  it('ready() forwards to scheduler.start, and start() does not', async () => {
     const scheduler = new MockScheduler()
     const provider = new ScheduleProvider(buildApp(new Container()), {
       scheduler: scheduler as unknown as Scheduler,
     })
 
+    // The ticker waits for ready(): `app/modules/**` is auto-loaded at the end
+    // of the start phase, so a task declared there is not in the registry yet.
     await provider.start()
+    expect(scheduler.started).toBe(0)
+
+    await provider.ready()
     expect(scheduler.started).toBe(1)
   })
 
