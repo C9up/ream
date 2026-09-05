@@ -6,9 +6,11 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { readModuleConfig } from '../config/moduleConfig.js'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import { durationToSeconds } from '../helpers/duration.js'
 import type { HttpContext } from '../http/HttpContext.js'
+import type { SessionConfigInput } from './config.js'
 import { CookieDriver } from './drivers/CookieDriver.js'
 import { DatabaseDriver, type SessionDbConnection } from './drivers/DatabaseDriver.js'
 import { FileDriver } from './drivers/FileDriver.js'
@@ -16,7 +18,7 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
 import { RedisDriver } from './drivers/RedisDriver.js'
 import { quasarConnection } from './quasar.js'
 import { ReadOnlyValuesStore, type ValuePath } from './ReadOnlyValuesStore.js'
-import type { SessionConfig, SessionDriver } from './Session.js'
+import type { SessionDriver } from './Session.js'
 import { Session } from './Session.js'
 
 interface ResolvedSessionConfig {
@@ -42,7 +44,18 @@ export default class SessionMiddleware {
   #cookieDriver: CookieDriver | null = null
   #config: ResolvedSessionConfig
 
-  constructor(config?: SessionConfig & { secret?: string }) {
+  constructor(explicitConfig: SessionConfigInput | undefined = undefined) {
+    // The default value is load-bearing: an OPTIONAL parameter still counts
+    // toward `Function.length`, and the container refuses to auto-construct a
+    // class that declares parameters it has no metadata for. A parameter with a
+    // default counts for nothing, which is what lets
+    // `router.use([() => import('…')])` build this middleware.
+    // Nothing is passed when the container builds this middleware from
+    // `router.use([() => import('@c9up/ream/session_middleware')])`, which is
+    // the registration shape the framework documents. `config/session.ts` is
+    // where the settings live in that case — the same file the config loader
+    // already reads into `config.get('session')`.
+    const config = explicitConfig ?? readModuleConfig<SessionConfigInput>('session')
     // `store` + `stores` (AdonisJS) and `driver` (ream) name the same thing.
     // A named store supplies the driver and its own options, so
     // `{ store: 'redis', stores: { redis: { driver: 'redis' } } }` works.

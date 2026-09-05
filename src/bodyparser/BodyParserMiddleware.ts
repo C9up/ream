@@ -6,6 +6,7 @@
  * Configured via config/bodyparser.ts.
  */
 
+import { readModuleConfig } from '../config/moduleConfig.js'
 import { Exception } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
@@ -98,7 +99,17 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
 export default class BodyParserMiddleware {
   #config: ResolvedBodyParserConfig
 
-  constructor(config?: BodyParserConfig) {
+  constructor(explicitConfig: BodyParserConfig | undefined = undefined) {
+    // The default value is load-bearing: an OPTIONAL parameter still counts
+    // toward `Function.length`, and the container refuses to auto-construct a
+    // class that declares parameters it has no metadata for. A parameter with a
+    // default counts for nothing, which is what lets
+    // `router.use([() => import('…')])` build this middleware.
+    // Nothing is passed when the container builds this middleware from
+    // `router.use([() => import('@c9up/ream/bodyparser_middleware')])`, so the
+    // settings come from `config/bodyparser.ts` — the file this class's own
+    // documentation has always named.
+    const config = explicitConfig ?? readModuleConfig<BodyParserConfig>('bodyparser')
     assertNoEnabledFlag(config)
     this.#config = {
       allowedMethods: config?.allowedMethods ?? DEFAULT_CONFIG.allowedMethods,

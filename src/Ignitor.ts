@@ -210,6 +210,15 @@ export interface HyperServerLike {
 }
 
 export interface IgnitorConfig {
+  /**
+   * Bind port. Falls back to `process.env.PORT`, then to `3000`. Prefer the
+   * environment: the fallback is read when the server binds, AFTER `booting()`
+   * has loaded `#start/env`, whereas a value passed here is fixed at
+   * construction — before `.env` has been read at all.
+   *
+   * It stays available because a test harness booting several applications in
+   * one process needs to hand each one an ephemeral port it has already picked.
+   */
   port?: number
   /**
    * Bind address of the HTTP server. Falls back to `process.env.HOST`, then to
@@ -737,7 +746,18 @@ export class Ignitor {
         },
       })
 
-      const desiredPort = this.#config.port ?? 3000
+      // Read HERE, not at construction: `#start/env` runs in `booting()`, so a
+      // PORT living in `.env` does not exist in `process.env` until this point.
+      // Reading it early bound 3000 while every later reader — the boot banner
+      // included — saw 3007 and said so. Same lazy rule as `host` below.
+      const desiredPort = this.#config.port ?? Number(process.env.PORT || 3000)
+      if (!Number.isInteger(desiredPort) || desiredPort < 0 || desiredPort > 65535) {
+        throw new ReamError(
+          'E_IGNITOR_INVALID_PORT',
+          `PORT must be an integer between 0 and 65535, received '${process.env.PORT}'.`,
+          { hint: 'Set PORT in .env, or pass { port } to the Ignitor.' },
+        )
+      }
       // Port-scan fallback (+1..+19) is a DEV convenience only. In production
       // a silent drift to :3001 while the LB targets :3000 is an outage —
       // bind the configured port and let EADDRINUSE fail loudly. The probe

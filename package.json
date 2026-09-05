@@ -187,6 +187,14 @@
     "./swcrc.app.json": "./swcrc.app.json",
     "./tsconfig.package.json": "./tsconfig.package.json",
     "./tsconfig.client.json": "./tsconfig.client.json",
+    "./session/config": {
+      "types": "./src/session/config.ts",
+      "import": "./src/session/config.ts"
+    },
+    "./bodyparser/config": {
+      "types": "./src/bodyparser/config.ts",
+      "import": "./src/bodyparser/config.ts"
+    },
     "./session_middleware": {
       "types": "./src/session/SessionMiddleware.ts",
       "import": "./src/session/SessionMiddleware.ts"
@@ -445,6 +453,14 @@
       "./swcrc.app.json": "./swcrc.app.json",
       "./tsconfig.package.json": "./tsconfig.package.json",
       "./tsconfig.client.json": "./tsconfig.client.json",
+      "./session/config": {
+        "types": "./dist/session/config.d.ts",
+        "import": "./dist/session/config.js"
+      },
+      "./bodyparser/config": {
+        "types": "./dist/bodyparser/config.d.ts",
+        "import": "./dist/bodyparser/config.js"
+      },
       "./session_middleware": {
         "types": "./dist/session/SessionMiddleware.d.ts",
         "import": "./dist/session/SessionMiddleware.js"
