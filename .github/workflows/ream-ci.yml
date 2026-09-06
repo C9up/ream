@@ -124,7 +124,7 @@ jobs:
       # And clippy, as an error rather than a note. `cargo fmt --check` was
       # gating the formatting while nothing gated the lints that catch a real
       # defect — the one place the compiler stays silent and clippy does not.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
       - run: pnpm install
@@ -151,7 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all
+      - run: cargo test --locked --all
 
   # TypeScript: compile (produces the dist/ that ships) AND run vitest. Builds
   # the host binary on this runner — reliable, no cross-runner artefact
@@ -178,7 +178,7 @@ jobs:
           cp index.*.node tests/integration/http/
           # napi-roundtrip loader require()s the ream-napi-test FIXTURE crate
           # (hello/add/noop helpers), not the production binary — build + stage it.
-          cargo build --release -p ream-napi-test
+          cargo build --locked --release -p ream-napi-test
           cp target/release/libream_napi_test.so tests/integration/napi/index.linux-x64-gnu.node
       - name: Build TS (tsc -> dist/)
         run: pnpm build
