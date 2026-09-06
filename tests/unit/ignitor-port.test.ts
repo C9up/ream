@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { HttpKernelRequest, HttpKernelResponse, HyperServerLike } from '../../src/index.js'
+import type { HttpKernelRequest, HttpKernelResponse } from '../../src/HttpKernel.js'
+import type { HyperServerLike } from '../../src/index.js'
 import { Ignitor } from '../../src/index.js'
 
 /**

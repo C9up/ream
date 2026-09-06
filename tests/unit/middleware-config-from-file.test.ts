@@ -12,6 +12,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Application } from '../../src/Application.js'
 import BodyParserMiddleware from '../../src/bodyparser/BodyParserMiddleware.js'
+import { HttpContext } from '../../src/http/HttpContext.js'
+import type { RawRequest } from '../../src/http/Request.js'
 import { clearApp, setApp } from '../../src/services/app.js'
 import SessionMiddleware from '../../src/session/SessionMiddleware.js'
 
@@ -72,39 +74,34 @@ describe('ream > middleware config from config/*.ts', () => {
   it('reads bodyparser settings from config/bodyparser.ts', async () => {
     appWithConfig({ bodyparser: { allowedMethods: ['PATCH'] } })
     const ctx = formCtx('POST')
-    await new BodyParserMiddleware().handle(ctx.ctx, async () => {})
+    await new BodyParserMiddleware().handle(ctx, async () => {})
     // POST is not in the configured list, so the body is left unparsed.
-    expect(ctx.parsed).toBeUndefined()
+    expect(ctx.request.body()).toEqual({})
   })
 
   it('falls back to the defaults with no application at all', async () => {
     releaseApp()
     const ctx = formCtx('POST')
-    await new BodyParserMiddleware().handle(ctx.ctx, async () => {})
+    await new BodyParserMiddleware().handle(ctx, async () => {})
     // The default allowedMethods include POST, so the form body is parsed.
-    expect(ctx.parsed).toEqual({ hello: 'world' })
+    expect(ctx.request.body()).toEqual({ hello: 'world' })
   })
 })
 
-/** A context carrying one form-encoded body, enough for the parser to act on. */
-function formCtx(method: string) {
-  const state: { parsed?: unknown } = {}
-  const ctx = {
-    request: {
-      method: () => method,
-      hasBody: () => true,
-      header: (name: string) =>
-        name.toLowerCase() === 'content-type' ? 'application/x-www-form-urlencoded' : undefined,
-      raw: () => 'hello=world',
-      setParsedBody: (value: unknown) => {
-        state.parsed = value
-      },
+/** A real context carrying one form-encoded body, the way bodyparser.test.ts builds one. */
+function formCtx(method: string): HttpContext {
+  const body = 'hello=world'
+  const raw: RawRequest = {
+    method,
+    path: '/',
+    query: '',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      // The middleware returns early on a bodyless request, so the length has
+      // to be there for the parse to be reached at all.
+      'content-length': String(Buffer.byteLength(body, 'utf8')),
     },
+    body,
   }
-  return {
-    ctx,
-    get parsed() {
-      return state.parsed
-    },
-  }
+  return new HttpContext('test', raw, {}, { pattern: '/', middleware: [] })
 }
