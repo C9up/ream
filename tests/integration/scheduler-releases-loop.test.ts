@@ -66,6 +66,13 @@ describeNative('ream > the scheduler is not a reason for a process to live', () 
   it('still fires a task while something else holds the loop', () => {
     // The server case: the HTTP listener is what keeps the process running, and
     // the scheduler must tick inside it exactly as before.
+    //
+    // 65 seconds is the shortest window that GUARANTEES a minute boundary — the
+    // grammar is five fields, so once a minute is as often as a task can run.
+    // The count is asserted as "at least one", not "exactly one": a run that
+    // starts at :56 crosses two boundaries and fires twice, which is the
+    // scheduler working, and asserting equality failed on the clock rather than
+    // on the behaviour.
     const { exited, stdout } = runsToCompletion(
       `${load}
       let fired = 0
@@ -81,6 +88,8 @@ describeNative('ream > the scheduler is not a reason for a process to live', () 
       90_000,
     )
     expect(exited).toBe(true)
-    expect(stdout.trim()).toBe('fired=1')
+    const fired = Number(stdout.trim().replace('fired=', ''))
+    expect(Number.isFinite(fired)).toBe(true)
+    expect(fired).toBeGreaterThanOrEqual(1)
   }, 100_000)
 })
