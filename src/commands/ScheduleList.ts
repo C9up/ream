@@ -33,6 +33,9 @@ export default class ScheduleList extends BaseCommand {
     const tasks = scheduler.listTasks()
     if (tasks.length === 0) {
       this.logger.info('No scheduled tasks registered.')
+      for (const line of whyNothingWasFound(this.app.rcFile.modules)) {
+        this.logger.info(`  ${line}`)
+      }
       return
     }
 
@@ -63,4 +66,31 @@ export default class ScheduleList extends BaseCommand {
       )
     }
   }
+}
+
+/**
+ * Why an empty list is empty.
+ *
+ * Discovery walks the IoC service registry, and a class the process never
+ * imported is not in it. `@Schedule` in `app/modules/**` therefore depends on
+ * the module auto-loader having imported the file, and that has two conditions
+ * a reader of the folder-structure guide would not expect. Saying "no tasks"
+ * and stopping leaves them to find both by reading the Ignitor.
+ */
+function whyNothingWasFound(modules: { path?: string; autoload?: string[] } | undefined): string[] {
+  if (modules?.path === undefined) {
+    return [
+      'A @Schedule is only found once something has imported the class that declares it.',
+      'reamrc.ts has no `modules.path`, so nothing under app/modules/ is auto-loaded at all.',
+      "Either add `modules: { path: './app/modules', autoload: ['routes', 'events'] }`,",
+      'or import the file from a preload — which is explicit, and works anywhere.',
+    ]
+  }
+  const autoload = modules.autoload ?? ['routes', 'events']
+  return [
+    'A @Schedule is only found once something has imported the class that declares it.',
+    `modules.autoload is [${autoload.map((f) => `'${f}'`).join(', ')}], so app/modules/<name>/<file>.ts`,
+    'is imported only under one of those names. Add the file name to that list,',
+    'or import it from a preload — which is explicit, and works anywhere.',
+  ]
 }

@@ -56,11 +56,26 @@ export type ApplicationState =
   | 'terminating'
   | 'terminated'
 
+/**
+ * What the application keeps of the rc file.
+ *
+ * Structurally a subset of `ReamrcConfig`, declared here rather than imported:
+ * that type lives in `Ignitor.ts`, which imports this module, and naming it
+ * from here would close the cycle. Only the keys something reads back through
+ * `app.rcFile` are spelt out; the rest rides along untouched.
+ */
+export interface ReamrcContents {
+  directories?: Partial<DirectoriesNode>
+  /** `app/modules/**` auto-loading — opt-in, and scoped to named files. */
+  modules?: { path?: string; autoload?: string[] }
+}
+
 export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
   #appRoot?: URL
   #directories: DirectoriesNode = { ...defaultDirectories }
+  #rcFile: ReamrcContents = {}
   #providers: ProviderContract[] = []
   #booted = false
   #environment: AppEnvironment = 'unknown'
@@ -162,13 +177,26 @@ export class Application implements AppContext {
   }
 
   /**
+   * The parsed rc file (AdonisJS `app.rcFile`).
+   *
+   * Kept whole, not just the keys this class acts on. A console command has the
+   * application and nothing else, so anything it needs to explain itself — why
+   * `app/modules/**` loaded nothing, say — has to be reachable from here. Empty
+   * until `rcContents()` has run.
+   */
+  get rcFile(): ReamrcContents {
+    return this.#rcFile
+  }
+
+  /**
    * Feed the loaded rc file to the application (AdonisJS `rcContents`).
    *
-   * Today it reads one key, `directories`, merged over the defaults; the rest
-   * of the rc file is consumed by the Ignitor and the CLI, which own providers,
-   * preloads, commands and test suites.
+   * `directories` is merged over the defaults; the rest is stored as-is and
+   * read back through {@link rcFile}. Providers, preloads, commands and test
+   * suites are still consumed by the Ignitor and the CLI, which own them.
    */
-  rcContents(value: { directories?: Partial<DirectoriesNode> }): this {
+  rcContents(value: ReamrcContents): this {
+    this.#rcFile = value
     if (value.directories) {
       // Skip the undefined entries a `Partial` may carry: spreading them would
       // blank a default rather than leave it alone.
