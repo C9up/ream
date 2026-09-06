@@ -799,15 +799,24 @@ export class Ignitor {
       }
       await this.#_httpServer.listen()
 
+      // Whoever opened the socket closes it. `app.terminate()` runs the
+      // `terminating` hooks in reverse before shutting the providers down, so
+      // an application terminated by ANY path — this Ignitor's signal handler,
+      // an `app.listen('SIGTERM', () => app.terminate())` the entry point wired
+      // itself, a crash handler — drains the HTTP server. It used to skip it:
+      // `terminate()` shut the providers down and called `process.exit(0)`,
+      // which could win the race against a drain already in progress.
+      this.#app.terminating(() => this.stop())
+
       // Wire OS-signal graceful shutdown. Without it the process never closes
       // the HTTP server on SIGTERM/SIGINT, so live keep-alive / SSE sockets keep
       // the event loop alive — a `ream dev` restart or Ctrl+C ends in a watcher
       // force-kill, and an orchestrator's rolling deploy drops in-flight work.
-      // onShutdown = this.stop(), which closes the port (aborting connections),
-      // shuts providers down (DB pools), and releases the locators.
+      // It terminates the APPLICATION rather than stopping this Ignitor, so
+      // there is one authority however the shutdown was triggered.
       if (this.#config.gracefulShutdown !== false) {
         this.#shutdownHandle = installGracefulShutdown({
-          onShutdown: () => this.stop(),
+          onShutdown: () => this.#app.terminate(),
           logger: {
             info: (message) => this.#emitSystemInfo('GracefulShutdown', message, 'info'),
             error: (message) => this.#emitSystemInfo('GracefulShutdown', message, 'error'),

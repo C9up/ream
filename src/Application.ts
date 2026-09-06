@@ -83,6 +83,10 @@ export class Application implements AppContext {
   #packageJsonRead = false
   #packageJsonCache: { name?: string; version?: string } | undefined
   #mode: ApplicationMode = 'run'
+  /** Hooks that run — in reverse — when `terminate()` begins. */
+  #terminatingHooks: Array<() => Promise<void> | void> = []
+  /** Re-entrancy guard: two signals must terminate the application once. */
+  #terminating = false
   #bootingHooks: Array<() => Promise<void> | void> = []
   #bootedHooks: Array<() => Promise<void> | void> = []
   #shutdownHooks: Array<() => Promise<void> | void> = []
@@ -604,12 +608,56 @@ export class Application implements AppContext {
   }
 
   /**
-   * Graceful shutdown — stop all providers and exit.
-   * Like AdonisJS app.terminate().
+   * Register a hook that runs when the application begins to terminate
+   * (AdonisJS `app.terminating`).
+   *
+   * This is how the HTTP server closes on a signal: whoever opened the socket
+   * registers a hook that closes it, and `terminate()` runs them in reverse —
+   * last opened, first closed. Upstream's HTTP process does exactly this.
+   */
+  terminating(callback: () => Promise<void> | void): void {
+    this.#terminatingHooks.push(callback)
+  }
+
+  /**
+   * Graceful shutdown (AdonisJS `app.terminate()`).
+   *
+   * Runs the `terminating` hooks in reverse, then shuts the providers down.
+   * Two things it deliberately does NOT do:
+   *
+   * - It does not close the HTTP server itself. Whoever opened the socket
+   *   registers a `terminating` hook for it; the application does not know
+   *   what a server is. Terminating without one used to skip the close, the
+   *   error boundary and the service locators entirely.
+   * - It does not call `process.exit()`. Exiting from here cut the shutdown
+   *   short whenever a second path was already draining the server — and the
+   *   documented signal wiring set up exactly that race. The process ends when
+   *   nothing is left holding the loop, which is what "graceful" means.
+   *
+   * Re-entrant calls are ignored, so a SIGTERM handler and a crash handler
+   * firing together terminate once.
    */
   async terminate(): Promise<void> {
-    await this.shutdown()
-    process.exit(0)
+    if (this.#terminating) return
+    this.#terminating = true
+    const errors: unknown[] = []
+    for (const hook of [...this.#terminatingHooks].reverse()) {
+      try {
+        await hook()
+      } catch (err) {
+        errors.push(err)
+      }
+    }
+    this.#terminatingHooks = []
+    try {
+      await this.shutdown()
+    } catch (err) {
+      errors.push(err)
+    }
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Application.terminate() completed with errors')
+    }
   }
 
   // ─── Provider lifecycle ───────────────────────────────────
@@ -668,6 +716,11 @@ export class Application implements AppContext {
    * from closing their resources (DB pools, queues). Errors are aggregated.
    */
   async shutdown(): Promise<void> {
+    // Idempotent: `terminate()` runs the `terminating` hooks and one of them is
+    // the Ignitor's `stop()`, which shuts the application down on its way. The
+    // second pass must not call every provider's `shutdown()` again — a pool
+    // closed twice, a socket destroyed twice.
+    if (this.#state === 'terminated') return
     const errors: unknown[] = []
     this.#state = 'terminating'
 
