@@ -1,5 +1,7 @@
 import 'reflect-metadata'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Ignitor } from '../../src/index.js'
+import { ScheduleProvider } from '../../src/scheduler/ScheduleProvider.js'
 
 /**
  * What actually has to be true for a `@Schedule` in `app/modules/**` to fire.
@@ -20,6 +22,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const APP_ROOT = new URL('../', import.meta.url)
 const MODULES = './__fixtures__/scheduler-modules'
+/**
+ * A second fixture whose scheduler file nothing else in the suite imports, so
+ * the negative cases cannot pass because an earlier test happened to load it.
+ */
+const MODULES_UNLOADED = './__fixtures__/scheduler-modules-unloaded'
 
 interface Booted {
   taskNames: () => string[]
@@ -27,19 +34,19 @@ interface Booted {
 }
 
 /**
- * Boot with a fresh module graph.
+ * Boot and report which tasks the scheduler found.
  *
  * The service registry is a module-level map filled by `@Service()` at import
- * time, so a fixture one test imported stays registered for the next — the
- * negative cases pass for the wrong reason unless the graph is rebuilt. Which
- * is also the mechanism under test: a decorator only reaches the registry when
- * something imports the file.
+ * time, so a fixture one test imported stays registered for the next. The first
+ * draft rebuilt the module graph per case (`vi.resetModules()`) to get a clean
+ * one — which made every later dynamic import in the worker cold, and turned a
+ * 5-second test timeout into a coin flip for this file AND its neighbours.
+ *
+ * The assertions ask whether the task is PRESENT instead of whether the
+ * registry is empty, which needs no reset and is the more precise question
+ * anyway: what is under test is whether the autoload imported that file.
  */
 async function boot(modules: Record<string, unknown> | undefined): Promise<Booted> {
-  vi.resetModules()
-  const { Ignitor } = await import('../../src/index.js')
-  const { ScheduleProvider } = await import('../../src/scheduler/ScheduleProvider.js')
-
   let provider: InstanceType<typeof ScheduleProvider> | undefined
   const ignitor = new Ignitor(APP_ROOT, { gracefulShutdown: false })
     .provider((app) => {
@@ -71,13 +78,13 @@ describe('scheduler > a @Schedule declared in app/modules', () => {
     // `['routes', 'events']`. The module directory IS scanned — its routes.ts
     // is imported — so the task is missing for one reason only: nothing ever
     // imported the file that declares it.
-    running = await boot({ path: MODULES })
-    expect(running.taskNames()).toEqual([])
+    running = await boot({ path: MODULES_UNLOADED })
+    expect(running.taskNames()).not.toContain('InvoiceScheduler.refreshInvoices')
   })
 
   it('is invisible when modules.path is absent, whatever autoload says', async () => {
     running = await boot(undefined)
-    expect(running.taskNames()).toEqual([])
+    expect(running.taskNames()).not.toContain('InvoiceScheduler.refreshInvoices')
   })
 })
 
