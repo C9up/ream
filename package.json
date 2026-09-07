@@ -206,6 +206,10 @@
     "./hot": {
       "types": "./src/hot.ts",
       "import": "./src/hot.ts"
+    },
+    "./dev/hmr": {
+      "types": "./src/dev/hmr.ts",
+      "import": "./src/dev/hmr.ts"
     }
   },
   "files": [
@@ -480,6 +484,10 @@
       "./hot": {
         "types": "./dist/hot.d.ts",
         "import": "./dist/hot.js"
+      },
+      "./dev/hmr": {
+        "types": "./dist/dev/hmr.d.ts",
+        "import": "./dist/dev/hmr.js"
       }
     },
     "access": "public"

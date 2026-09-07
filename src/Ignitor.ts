@@ -17,6 +17,7 @@ import { Application } from './Application.js'
 import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
+import { HMR_PATH, hmrClientScript, hmrToken } from './dev/hmr.js'
 import type { DirectoriesNode } from './directories.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
@@ -737,6 +738,7 @@ export class Ignitor {
           this.#server.getErrorHandler() ?? new ExceptionHandler(!this.#app.inProduction),
         serverMiddleware: this.#server.getServerMiddleware(),
         routerMiddleware: this.#router.getRouterMiddleware(),
+        devReloadScript: this.#devReloadScript(),
         onError: (error, ctx) => {
           this.#errorBoundary.serviceError('HttpKernel', error, ctx.id)
         },
@@ -853,17 +855,23 @@ export class Ignitor {
       bus.emit('app:ready', { environment: this.#app.getEnvironment() })
     }
 
+    // What the injected reload script polls. Registered after the providers are
+    // ready so it sits alongside the application's own routes, and only in dev.
+    this.#registerDevReloadRoute()
+
     // Dev-mode change watcher. IMPORTANT: this does NOT attempt an in-process
     // reload. The previous implementation cleared the router + service registry
     // and re-invoked the reamrc preload thunks — but a dynamic import() of an
     // already-loaded ESM module returns the CACHED module without re-executing
     // its body (the thunk's specifier is opaque, so it cannot be cache-busted).
     // The "reload" therefore destroyed every preload-registered route on the
-    // first file save and never restored them. Process-level restart is the
-    // reload mechanism (`ream dev` runs `tsx watch`, which restarts on change);
-    // this watcher only surfaces an informational event for hosts that embed
-    // the Ignitor without a supervisor. A future true HMR needs a loader-hook
-    // (hot-hook style) that can invalidate the ESM cache — plug it in here.
+    // first file save and never restored them.
+    //
+    // Module-level reloading now happens OUTSIDE the Ignitor: `ream dev` loads
+    // `@c9up/ream/hot`, which registers hot-hook's loader and can invalidate
+    // the ESM cache — the loader hook this comment used to ask for. What is
+    // left here only surfaces an informational event for hosts that embed the
+    // Ignitor without a supervisor.
     if (this.isDevMode()) {
       const watchDirs = this.#config.watchDirs ?? ['app', 'start']
       this.#hotReloadCleanup = startHotReload({
@@ -1125,6 +1133,7 @@ export class Ignitor {
         this.#server.getErrorHandler() ?? new ExceptionHandler(!this.#app.inProduction),
       serverMiddleware: this.#server.getServerMiddleware(),
       routerMiddleware: this.#router.getRouterMiddleware(),
+      devReloadScript: this.#devReloadScript(),
     })
     return this.#kernel
   }
@@ -1133,6 +1142,33 @@ export class Ignitor {
 
   isDevMode(): boolean {
     return this.#app.inDev
+  }
+
+  /**
+   * The reload script, in development only.
+   *
+   * Gated on the environment rather than on `hot-hook` being present: the
+   * script is just as useful without it, since a restart is exactly what it
+   * detects. In production it is `undefined` and the response is untouched.
+   */
+  #devReloadScript(): ((nonce?: string) => string) | undefined {
+    return this.isDevMode() ? hmrClientScript : undefined
+  }
+
+  /**
+   * Serve the token the injected script polls.
+   *
+   * Registered on the router in development, next to the application's own
+   * routes, so it goes through the same server as everything else. Plain text
+   * and uncached: it is read once a second and its whole content is the answer.
+   */
+  #registerDevReloadRoute(): void {
+    if (!this.isDevMode()) return
+    this.#router.get(HMR_PATH, ({ response }) => {
+      response.header('cache-control', 'no-store')
+      response.header('content-type', 'text/plain; charset=utf-8')
+      response.send(hmrToken())
+    })
   }
 
   getPhase(): string {

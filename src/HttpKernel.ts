@@ -32,6 +32,16 @@ export interface HttpKernelConfig {
   container?: Container
   exceptionHandler?: ExceptionHandler
   serverMiddleware?: MiddlewareFunction[]
+  /**
+   * A `<script>` appended to every HTML response, dev only.
+   *
+   * Set by the Ignitor when the application runs in development; `undefined`
+   * everywhere else, so a production response is byte-for-byte what the
+   * handler produced. It lives here rather than in a middleware because this
+   * is the one place every response passes through on its way out, whichever
+   * route or error handler produced it.
+   */
+  devReloadScript?: (nonce?: string) => string
   routerMiddleware?: MiddlewareFunction[]
   onError?: (error: unknown, ctx: HttpContext) => void
   debug?: boolean
@@ -345,7 +355,7 @@ export function createHttpKernel(
           correlationId,
         )
       }
-      const serialized = await serializeResponse(ctx)
+      const serialized = await serializeResponse(ctx, config.devReloadScript)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
       ctx.response.runFinishCallbacks()
@@ -401,7 +411,7 @@ export function createHttpKernel(
           correlationId,
         )
       }
-      const serialized = await serializeResponse(ctx)
+      const serialized = await serializeResponse(ctx, config.devReloadScript)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
       ctx.response.runFinishCallbacks()
@@ -452,15 +462,44 @@ function readControllerGuardMetadata(
   }
 }
 
-async function serializeResponse(ctx: HttpContext): Promise<HttpKernelResponse> {
+async function serializeResponse(
+  ctx: HttpContext,
+  devReloadScript?: (nonce?: string) => string,
+): Promise<HttpKernelResponse> {
   // The terminal step, as AdonisJS' server calls `response.finish()`: it
   // stamps the request id and waits for a body still being produced.
   await ctx.response.finish()
   const streamId = ctx.response.getStreamId()
+  const headers = ctx.response.getHeaders()
   return {
     status: ctx.response.getStatus(),
-    headers: ctx.response.getHeaders(),
-    body: ctx.response.getBody(),
+    headers,
+    body: withDevReloadScript(
+      ctx.response.getBody(),
+      headers,
+      streamId,
+      devReloadScript === undefined ? undefined : devReloadScript(ctx.response.nonce),
+    ),
     ...(streamId !== undefined ? { streamId } : {}),
   }
+}
+
+/**
+ * Append the dev reload script to an HTML body.
+ *
+ * Only HTML, and never a stream: appending to an SSE or a download would
+ * corrupt it, and a page is the only thing that can act on the script anyway.
+ * Before `</body>` when there is one, so the script is inside the document
+ * rather than trailing after it.
+ */
+function withDevReloadScript(
+  body: string,
+  headers: Record<string, string>,
+  streamId: string | undefined,
+  script?: string,
+): string {
+  if (script === undefined || streamId !== undefined || body === '') return body
+  if (!(headers['content-type'] ?? '').includes('text/html')) return body
+  const closing = body.lastIndexOf('</body>')
+  return closing === -1 ? body + script : body.slice(0, closing) + script + body.slice(closing)
 }

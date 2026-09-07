@@ -26,6 +26,8 @@
  * upstream's behaviour, unmodified.
  */
 
+import { hotReloadHappened } from './dev/hmr.js'
+
 /** Exit code meaning "restart me" — see `EXIT_RESTART` in the CLI's dev module. */
 const FULL_RELOAD_EXIT_CODE = 75
 
@@ -127,12 +129,37 @@ try {
   )
 }
 
+// Impersonate the IPC channel upstream's dev server provides.
+//
+// hot-hook reports BOTH of its outcomes through `process.send`: a change it
+// swapped in place (`hot-hook:invalidated`) and one it could not
+// (`hot-hook:full-reload`). Under a Node parent that function exists and both
+// arrive; under our Rust parent it is `undefined` and both are dropped —
+// `onFullReloadAsked` alone recovers only half of that, leaving a hot swap
+// invisible to the very process it happened in, and so to the browser.
+//
+// This is not a trick played on hot-hook: it is exactly the contract it
+// expects, provided by us instead of by Node.
+const previousSend = process.send
+process.send = (message: unknown, ...rest: unknown[]): boolean => {
+  const type =
+    typeof message === 'object' && message !== null ? Reflect.get(message, 'type') : undefined
+  if (type === 'hot-hook:invalidated') {
+    hotReloadHappened()
+  }
+  // If a real channel ever exists (embedded under a Node supervisor) it still
+  // gets its message: this observes, it does not intercept.
+  if (typeof previousSend === 'function') {
+    return Reflect.apply(previousSend, process, [message, ...rest]) === true
+  }
+  return true
+}
+
 await hot?.init({
   ...config,
   rootDirectory: dirname(packageJsonPath),
   root: config.root ? resolve(dirname(packageJsonPath), config.root) : undefined,
-  // The one line that is ours. `process.send` does not exist under a Rust
-  // parent, so upstream's notification is dropped; exiting on a known code is
-  // how the CLI learns it must restart.
+  // Exiting on a known code is how the Rust parent learns it must restart —
+  // see `EXIT_RESTART` in the CLI's dev module.
   onFullReloadAsked: () => process.exit(FULL_RELOAD_EXIT_CODE),
 })
