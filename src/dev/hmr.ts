@@ -75,5 +75,9 @@ export function hmrClientScript(nonce?: string): string {
   // are escaped because a nonce is generated, not user input, but a broken
   // attribute would silently disable the tag rather than fail loudly.
   const attribute = nonce === undefined ? '' : ` nonce="${nonce.replace(/"/g, '&quot;')}"`
-  return `<script${attribute}>(()=>{let t=null;const p=${JSON.stringify(HMR_PATH)};const tick=async()=>{try{const r=await fetch(p,{cache:'no-store'});if(!r.ok)return;const n=(await r.text()).trim();if(t===null){t=n}else if(n!==t){location.reload();return}}catch(e){}setTimeout(tick,1000)};tick()})()</script>`
+  // A failed poll RETRIES. Returning on `!r.ok` stopped the loop for good, so a
+  // page opened in the window before the endpoint is mounted — or during any
+  // blip — never reloaded again for the life of that tab, which looks exactly
+  // like the feature not working.
+  return `<script${attribute}>(()=>{let t=null;const p=${JSON.stringify(HMR_PATH)};const tick=async()=>{try{const r=await fetch(p,{cache:'no-store'});if(r.ok){const n=(await r.text()).trim();if(t===null){t=n}else if(n!==t){location.reload();return}}}catch(e){}setTimeout(tick,1000)};tick()})()</script>`
 }

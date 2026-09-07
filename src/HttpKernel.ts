@@ -471,17 +471,47 @@ async function serializeResponse(
   await ctx.response.finish()
   const streamId = ctx.response.getStreamId()
   const headers = ctx.response.getHeaders()
+  const body = withDevReloadScript(
+    ctx.response.getBody(),
+    headers,
+    streamId,
+    devReloadScript === undefined ? undefined : devReloadScript(ctx.response.nonce),
+  )
   return {
     status: ctx.response.getStatus(),
-    headers,
-    body: withDevReloadScript(
-      ctx.response.getBody(),
-      headers,
-      streamId,
-      devReloadScript === undefined ? undefined : devReloadScript(ctx.response.nonce),
-    ),
+    headers: reconcileRepresentation(headers, ctx.response.getBody(), body),
+    body,
     ...(streamId !== undefined ? { streamId } : {}),
   }
+}
+
+/**
+ * Keep the representation headers describing the body that is actually sent.
+ *
+ * `content-length`, `etag` and the digest headers are computed from the body
+ * BEFORE the dev reload script is appended. Left alone they describe the
+ * previous one: a `content-length` short by the length of the script truncates
+ * it, and an `etag` computed before the change caches modified content under an
+ * unchanged validator.
+ *
+ * `content-length` is recomputed because it is cheap and exact; the validators
+ * are DROPPED rather than recomputed, because a validator this layer invents is
+ * not the one the handler meant.
+ */
+function reconcileRepresentation(
+  headers: Record<string, string>,
+  original: string,
+  sent: string,
+): Record<string, string> {
+  if (sent === original) return headers
+  const reconciled = { ...headers }
+  if (reconciled['content-length'] !== undefined) {
+    reconciled['content-length'] = String(Buffer.byteLength(sent, 'utf8'))
+  }
+  delete reconciled.etag
+  delete reconciled['content-md5']
+  delete reconciled.digest
+  return reconciled
 }
 
 /**

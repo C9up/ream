@@ -164,3 +164,76 @@ describe('dev > the script under a nonce-based CSP', () => {
     expect(script.startsWith('<script nonce="a&quot;b">')).toBe(true)
   })
 })
+
+describe('dev > the headers still describe the body that is sent', () => {
+  function get(path: string) {
+    return { method: 'GET', path, query: '', headers: {}, body: '' }
+  }
+
+  async function respond(handler: (ctx: { response: HttpResponseLike }) => void, script?: string) {
+    const router = new Router()
+    router.get('/page', handler)
+    const kernel = createHttpKernel({
+      router,
+      middleware: new MiddlewareRegistry(),
+      devReloadScript: script === undefined ? undefined : () => script,
+    })
+    return kernel(get('/page'))
+  }
+
+  const SCRIPT = '<script>RELOAD</script>'
+
+  it('recomputes content-length for the grown body', async () => {
+    // Short by the length of the script, the response is TRUNCATED — the tag
+    // is cut off and the page never reloads, with nothing to explain it.
+    const res = await respond(({ response }) => {
+      response.header('content-length', '13')
+      response.send('<p>hi</p>')
+    }, SCRIPT)
+
+    expect(res.headers['content-length']).toBe(String(Buffer.byteLength(res.body, 'utf8')))
+  })
+
+  it('drops a validator computed before the change', async () => {
+    // An ETag from the original body caches modified content under an
+    // unchanged validator, so the next load may not even ask.
+    const res = await respond(({ response }) => {
+      response.header('etag', '"abc"')
+      response.send('<p>hi</p>')
+    }, SCRIPT)
+
+    expect(res.headers.etag).toBeUndefined()
+  })
+
+  it('leaves the headers alone when nothing was injected', async () => {
+    // JSON is untouched, so its validators must survive intact.
+    const res = await respond(({ response }) => {
+      response.header('etag', '"abc"')
+      response.json({ ok: true })
+    }, SCRIPT)
+
+    expect(res.headers.etag).toBe('"abc"')
+  })
+
+  it('leaves them alone in production, where nothing is injected', async () => {
+    const res = await respond(({ response }) => {
+      response.header('etag', '"abc"')
+      response.send('<p>hi</p>')
+    })
+
+    expect(res.headers.etag).toBe('"abc"')
+  })
+})
+
+describe('dev > the poller survives a failed request', () => {
+  it('retries instead of giving up on a non-ok answer', () => {
+    // A page loaded before the endpoint is mounted, or during any blip, used to
+    // stop polling for the life of the tab — which looks exactly like the
+    // feature not working.
+    const script = hmrClientScript()
+    const afterCheck = script.slice(script.indexOf('r.ok'))
+
+    expect(afterCheck).toContain('setTimeout(tick,1000)')
+    expect(script).not.toContain('if(!r.ok)return')
+  })
+})

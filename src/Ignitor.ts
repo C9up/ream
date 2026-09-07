@@ -660,6 +660,12 @@ export class Ignitor {
   }
 
   async #phaseStart(): Promise<void> {
+    // What the injected reload script polls, mounted BEFORE the socket accepts
+    // anything. Registered in `ready()` it came up after the server was already
+    // serving, so a page loaded in that window polled a route that did not
+    // exist yet.
+    this.#registerDevReloadRoute()
+
     // Providers start BEFORE the preload files, matching upstream's warm-up
     // order (`providers.start()` → `starting` hooks → preloads). A preload is
     // where an app writes its routes and kernel, and those reach for services
@@ -854,10 +860,6 @@ export class Ignitor {
       const bus = await this.#app.container.resolve<Emitter>('events')
       bus.emit('app:ready', { environment: this.#app.getEnvironment() })
     }
-
-    // What the injected reload script polls. Registered after the providers are
-    // ready so it sits alongside the application's own routes, and only in dev.
-    this.#registerDevReloadRoute()
 
     // Dev-mode change watcher. IMPORTANT: this does NOT attempt an in-process
     // reload. The previous implementation cleared the router + service registry
