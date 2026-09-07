@@ -1,7 +1,7 @@
 {
   "name": "@c9up/ream",
-  "version": "0.2.17",
-  "description": "Ream \u2014 Rust-powered Node.js application framework",
+  "version": "0.2.18",
+  "description": "Ream — Rust-powered Node.js application framework",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -202,6 +202,10 @@
     "./bodyparser_middleware": {
       "types": "./src/bodyparser/BodyParserMiddleware.ts",
       "import": "./src/bodyparser/BodyParserMiddleware.ts"
+    },
+    "./hot": {
+      "types": "./src/hot.ts",
+      "import": "./src/hot.ts"
     }
   },
   "files": [
@@ -238,13 +242,17 @@
   },
   "peerDependencies": {
     "@c9up/comet": "^0.1.0",
-    "@c9up/quasar": "^0.1.0"
+    "@c9up/quasar": "^0.1.0",
+    "hot-hook": "^1.0.0"
   },
   "peerDependenciesMeta": {
     "@c9up/comet": {
       "optional": true
     },
     "@c9up/quasar": {
+      "optional": true
+    },
+    "hot-hook": {
       "optional": true
     }
   },
@@ -468,6 +476,10 @@
       "./bodyparser_middleware": {
         "types": "./dist/bodyparser/BodyParserMiddleware.d.ts",
         "import": "./dist/bodyparser/BodyParserMiddleware.js"
+      },
+      "./hot": {
+        "types": "./dist/hot.d.ts",
+        "import": "./dist/hot.js"
       }
     },
     "access": "public"
