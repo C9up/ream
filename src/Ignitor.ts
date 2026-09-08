@@ -675,27 +675,28 @@ export class Ignitor {
       await callProviderPhase(provider, 'start')
     }
 
-    // Import preload files (routes.ts, kernel.ts, etc.) — ONE AT A TIME.
+    // Import preload files (routes.ts, kernel.ts, etc.).
     //
-    // NAMED DEVIATION: upstream imports them with `Promise.all`, so whichever
-    // module finishes loading first evaluates first. A preload is where an
-    // application registers its routes, and routing is first-match — so the
-    // order the files are listed in is observable behaviour, and an array in a
-    // configuration file reads as an ordered list. Racing them would make
-    // which route answers depend on module-resolution timing.
+    // Filtered on the environment first, then imported TOGETHER — upstream's
+    // `PreloadsManager.import()` is a filter followed by one `Promise.all`, and
+    // this used to walk them one at a time.
     //
-    // The cost is start-up latency on a handful of local files, paid once.
+    // The consequence is worth knowing: evaluation order between two preload
+    // files is now whichever finishes loading first, so an application cannot
+    // rely on the array's order to decide which of two overlapping routes
+    // answers. Work that must be ordered belongs inside ONE preload, where the
+    // order is the file's own — which is how upstream applications are written.
     if (this.#reamrc?.preloads) {
-      for (const preloadEntry of this.#reamrc.preloads) {
-        const preloadImport = typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file
-        const env =
-          typeof preloadEntry === 'function'
-            ? undefined
-            : (preloadEntry as { environment?: string[] }).environment
-
-        if (env && !env.includes(this.#app.getEnvironment())) continue
-        await preloadImport()
-      }
+      const applicable = this.#reamrc.preloads.filter((preloadEntry) => {
+        if (typeof preloadEntry === 'function') return true
+        const env = (preloadEntry as { environment?: string[] }).environment
+        return !env || env.includes(this.#app.getEnvironment())
+      })
+      await Promise.all(
+        applicable.map((preloadEntry) =>
+          typeof preloadEntry === 'function' ? preloadEntry() : preloadEntry.file(),
+        ),
+      )
     }
 
     // Auto-load module files (routes.ts, etc.) from modules directory
