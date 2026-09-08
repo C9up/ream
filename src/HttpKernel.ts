@@ -508,9 +508,22 @@ function reconcileRepresentation(
   if (reconciled['content-length'] !== undefined) {
     reconciled['content-length'] = String(Buffer.byteLength(sent, 'utf8'))
   }
-  delete reconciled.etag
-  delete reconciled['content-md5']
-  delete reconciled.digest
+  // Every validator, not the two that came to mind. `Content-Digest` and
+  // `Repr-Digest` (RFC 9530) are what replaced `Digest`, and leaving them
+  // describing the old body is the same defect one header along — a client
+  // that checks them rejects a response that is perfectly fine.
+  for (const name of [
+    'etag',
+    'content-md5',
+    'digest',
+    'content-digest',
+    'repr-digest',
+    'want-digest',
+    'want-content-digest',
+    'want-repr-digest',
+  ]) {
+    delete reconciled[name]
+  }
   return reconciled
 }
 

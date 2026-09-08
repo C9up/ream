@@ -9,8 +9,9 @@
  *       const gql = app.container.make<GraphQLEngine>('graphql')
  *       gql.resolver('Query', 'tasks', TaskResolver, 'tasks')
  *
- *   - `boot()` — mount the engine at `engine.path` (default `/graphql`) for both
- *     GET (playground/introspection) and POST (queries).
+ *   - `start()` — mount the engine at `engine.path` (default `/graphql`) for
+ *     both GET (playground/introspection) and POST (queries). In `start`, which
+ *     is the phase upstream documents for routes.
  *
  * @implements Story 24.5
  */

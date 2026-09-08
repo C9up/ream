@@ -9,8 +9,9 @@
  *       rpc.method('task.validate', handler).guard('jwt')
  *       rpc.namespace('user', UserController)
  *
- *   - `boot()` — mount `POST <config.rpc.path ?? '/rpc'>` on the core router,
+ *   - `start()` — mount `POST <config.rpc.path ?? '/rpc'>` on the core router,
  *     dispatching every request body (single or batch) to `RpcRouter.handle()`.
+ *     In `start`, which is the phase upstream documents for routes.
  *
  * @implements Story 24.1, 24.2
  */

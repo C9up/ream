@@ -237,3 +237,27 @@ describe('dev > the poller survives a failed request', () => {
     expect(script).not.toContain('if(!r.ok)return')
   })
 })
+
+describe('dev > every validator, not just the ones that came to mind', () => {
+  it('drops the modern digest headers too', async () => {
+    // `Content-Digest` and `Repr-Digest` (RFC 9530) replaced `Digest`. Left
+    // describing the old body they are the same defect one header along: a
+    // client that checks them rejects a response that is perfectly fine.
+    const router = new Router()
+    router.get('/page', ({ response }) => {
+      response.header('content-digest', 'sha-256=:abc:')
+      response.header('repr-digest', 'sha-256=:abc:')
+      response.send('<p>hi</p>')
+    })
+    const kernel = createHttpKernel({
+      router,
+      middleware: new MiddlewareRegistry(),
+      devReloadScript: () => '<script>RELOAD</script>',
+    })
+
+    const res = await kernel({ method: 'GET', path: '/page', query: '', headers: {}, body: '' })
+
+    expect(res.headers['content-digest']).toBeUndefined()
+    expect(res.headers['repr-digest']).toBeUndefined()
+  })
+})
