@@ -174,3 +174,47 @@ describe('container > contextual bindings', () => {
     expect((await container.make<Hash>(Hash)).name()).toBe('bcrypt')
   })
 })
+
+/**
+ * A failed `call()` must not leave its class installed as the resolution parent.
+ *
+ * The restore was not in a `finally`, so a parameter that failed to resolve —
+ * with the caller catching the error — left the called class as the parent of
+ * every later resolution. A contextual binding meant for one handler then
+ * applied to the whole application, silently and for good.
+ */
+describe('container > the resolution parent after a failed call()', () => {
+  class Global {}
+  class Boom {}
+  class Handler {
+    async run(@Inject(Boom) _dep?: Boom): Promise<void> {}
+  }
+
+  it('restores the previous parent when a parameter throws', async () => {
+    // The leak only shows from INSIDE a resolution: at the top level `call()`
+    // opens its own chain and discards it. A factory that calls into a handler,
+    // catches the failure and carries on is where the mutated parent survived.
+    const container = new Container()
+    container.singleton(Global, () => ({ from: 'global' }))
+    container.singleton(Boom, () => {
+      throw new Error('this dependency cannot be built')
+    })
+    // Reserved for Handler, and for nothing else.
+    container.contextualBinding(Handler, Global, () => ({ from: 'handler' }))
+
+    container.singleton('probe', async (c) => {
+      try {
+        await c.call(new Handler(), 'run')
+      } catch {
+        // Swallowed on purpose — this is the shape that leaked.
+      }
+      return c.resolve<{ from: string }>(Global)
+    })
+
+    // Resolved after the failed call, still inside the same chain: it must get
+    // the global binding, not the one reserved for the handler.
+    expect(await container.resolve<{ from: string }>('probe')).toEqual({
+      from: 'global',
+    })
+  })
+})

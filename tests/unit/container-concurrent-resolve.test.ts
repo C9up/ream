@@ -75,3 +75,54 @@ describe('Container — concurrent resolution', () => {
     expect(cyclic.status).toBe('rejected')
   })
 })
+
+/**
+ * Rebinding a token has to replace what it produced.
+ *
+ * Resolution reads the cache BEFORE the binding, so a token re-registered with
+ * a new factory kept answering with the old instance — a rebind that changed
+ * nothing, silently. That is exactly what a provider does when it boots a
+ * second time in one process, so the container went on handing out the
+ * connection the previous shutdown had closed.
+ */
+describe('container > rebinding a token', () => {
+  it('forgets the instance the previous binding produced', async () => {
+    const container = new Container()
+    container.singleton('db', () => ({ id: 1 }))
+    expect(await container.resolve<{ id: number }>('db')).toEqual({ id: 1 })
+
+    container.singleton('db', () => ({ id: 2 }))
+
+    expect(await container.resolve<{ id: number }>('db')).toEqual({ id: 2 })
+  })
+
+  it('forgets it when rebinding from singleton to transient too', async () => {
+    const container = new Container()
+    container.singleton('db', () => ({ id: 1 }))
+    await container.resolve('db')
+
+    container.bind('db', () => ({ id: 2 }))
+
+    expect(await container.resolve<{ id: number }>('db')).toEqual({ id: 2 })
+  })
+
+  it('does not let an in-flight resolution become the new binding’s value', async () => {
+    const container = new Container()
+    let release: (value: { id: number }) => void = () => {}
+    container.singleton(
+      'db',
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const inFlight = container.resolve<{ id: number }>('db')
+
+    container.singleton('db', () => ({ id: 2 }))
+    release({ id: 1 })
+    await inFlight
+
+    // The awaited OLD factory must not be what the new binding answers with.
+    expect(await container.resolve<{ id: number }>('db')).toEqual({ id: 2 })
+  })
+})

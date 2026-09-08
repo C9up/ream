@@ -115,13 +115,34 @@ export class Container {
   /** Register a singleton binding (factory called once, cached). */
   singleton<_T>(token: ServiceToken, factory: ServiceFactory): void {
     const key = this.#tokenToKey(token)
+    this.#forgetCached(key)
     this.#bindings.set(key, { token, factory, scope: 'singleton', dependencies: [] })
   }
 
   /** Register a transient binding (new instance per resolve). */
   bind<_T>(token: ServiceToken, factory: ServiceFactory): void {
     const key = this.#tokenToKey(token)
+    this.#forgetCached(key)
     this.#bindings.set(key, { token, factory, scope: 'transient', dependencies: [] })
+  }
+
+  /**
+   * Drop what a previous binding produced, because the binding is being
+   * replaced.
+   *
+   * Resolution reads the cache BEFORE the binding, so a token re-registered
+   * with a new factory kept answering with the old instance — a rebind that
+   * changed nothing, silently. That is what a provider does when it boots a
+   * second time in one process (a hot reload, a test that restarts the app):
+   * it rebinds, and the container went on handing out the connection the
+   * previous shutdown had closed.
+   *
+   * The in-flight promise goes too: a resolution already awaiting the OLD
+   * factory must not become the value of the new binding.
+   */
+  #forgetCached(key: ServiceToken): void {
+    this.#singletons.delete(key)
+    this.#pendingSingletons.delete(key)
   }
 
   /** Bind an existing value directly. */
@@ -348,37 +369,47 @@ export class Container {
       )
     }
     const outerParent = chain.parent
-    chain.parent = target
-    const paramTypes: unknown[] =
-      Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
-    // `@Inject('token')` on a method parameter — a named binding the reflected
-    // type cannot express (an interface, or a class registered under a name).
-    const injectTokens = getMethodInjectTokens(target.prototype, method)
-
-    // `@Inject` counts towards the parameter span too: a method may carry named
-    // tokens without `design:paramtypes` being emitted for it, and computing the
-    // span from the reflected types alone left the loop at zero iterations —
-    // the tokens were read and then never used.
-    const injectSpan = injectTokens.size === 0 ? 0 : Math.max(...injectTokens.keys()) + 1
-    const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0, injectSpan)
-    // Sequential resolution keeps the shared cycle-detection stack consistent.
+    // Declared outside the try so the call below can still read it: only the
+    // RESOLUTION is guarded, because that is what can throw with the parent
+    // installed.
     const args: unknown[] = []
-    for (let index = 0; index < len; index += 1) {
-      // Runtime values take precedence (and fill slots beyond paramTypes).
-      if (runtimeValues && index < runtimeValues.length) {
-        args.push(runtimeValues[index])
-        continue
-      }
-      const named = injectTokens.get(index)
-      if (named !== undefined) {
-        args.push(await this.resolve(named))
-        continue
-      }
-      const type = paramTypes[index]
-      args.push(isInjectableClass(type) ? await this.resolve(type) : undefined)
-    }
+    chain.parent = target
+    try {
+      const paramTypes: unknown[] =
+        Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
+      // `@Inject('token')` on a method parameter — a named binding the reflected
+      // type cannot express (an interface, or a class registered under a name).
+      const injectTokens = getMethodInjectTokens(target.prototype, method)
 
-    chain.parent = outerParent
+      // `@Inject` counts towards the parameter span too: a method may carry named
+      // tokens without `design:paramtypes` being emitted for it, and computing the
+      // span from the reflected types alone left the loop at zero iterations —
+      // the tokens were read and then never used.
+      const injectSpan = injectTokens.size === 0 ? 0 : Math.max(...injectTokens.keys()) + 1
+      const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0, injectSpan)
+      // Sequential resolution keeps the shared cycle-detection stack consistent.
+      for (let index = 0; index < len; index += 1) {
+        // Runtime values take precedence (and fill slots beyond paramTypes).
+        if (runtimeValues && index < runtimeValues.length) {
+          args.push(runtimeValues[index])
+          continue
+        }
+        const named = injectTokens.get(index)
+        if (named !== undefined) {
+          args.push(await this.resolve(named))
+          continue
+        }
+        const type = paramTypes[index]
+        args.push(isInjectableClass(type) ? await this.resolve(type) : undefined)
+      }
+    } finally {
+      // RESTORED whatever happened. Without the `finally`, a parameter that
+      // failed to resolve left the called class installed as the parent, so a
+      // caller that caught the error saw its contextual bindings applied to
+      // every later resolution — a binding meant for one handler leaking into
+      // the whole application.
+      chain.parent = outerParent
+    }
 
     const member: unknown = instance[method]
     if (!isCallable(member)) {
@@ -583,6 +614,11 @@ export class Container {
       const readsBefore = store?.scopedReads ?? 0
       const building = (async (): Promise<unknown> => {
         const instance = binding.factory ? await binding.factory(this) : undefined
+        // Only cache while this is still the binding that started the build.
+        // A rebind that landed mid-flight already dropped the cache; letting
+        // the old factory write its result afterwards restored exactly what the
+        // rebind existed to replace.
+        if (this.#bindings.get(key) !== binding) return instance
         // See `ResolutionChain.scopedReads`: a build that consumed a
         // request-scoped value is that request's, not the application's.
         this.#cacheIfAppWide('singleton', key, instance, store, readsBefore)
@@ -596,7 +632,11 @@ export class Container {
         return (await building) as T
       } finally {
         // Cleared either way: a failed build must not poison later attempts.
-        this.#pendingSingletons.delete(key)
+        // Guarded, so a rebind that installed its own pending build is not
+        // undone by the old one finishing afterwards.
+        if (this.#pendingSingletons.get(key) === building) {
+          this.#pendingSingletons.delete(key)
+        }
       }
     }
 
