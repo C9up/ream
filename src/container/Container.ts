@@ -616,7 +616,7 @@ export class Container {
       const inFlight = this.#pendingSingletons.get(key)
       if (inFlight) {
         const shared = await inFlight
-        if (this.#singletons.get(key) === shared) return shared as T
+        if (this.#wasPublished(key, shared)) return shared as T
       }
 
       const readsBefore = store?.scopedReads ?? 0
@@ -726,7 +726,7 @@ export class Container {
       // consumed a request-scoped value belongs to its request — handing it to
       // another one is exactly the leak `createResolver()` exists to prevent —
       // so this resolution falls through and builds its own instead.
-      if (this.#singletons.get(key) === shared) return shared
+      if (this.#wasPublished(key, shared)) return shared
     }
 
     // Same rule as the explicit bindings: see `ResolutionChain.scopedReads`.
@@ -880,6 +880,20 @@ export class Container {
    * later one. AdonisJS does not guard this; it is the kind of silent
    * cross-request leak worth refusing.
    */
+  /**
+   * Is `instance` the value that was published under `key`?
+   *
+   * `Object.is`, not `===`: a factory answering `NaN` compares unequal to
+   * itself, so a waiter concluded the build had not been published and built a
+   * second singleton. And `has()` before the comparison, because an absent
+   * entry and one holding `undefined` both read back as `undefined` — a
+   * request-scoped build that produced nothing was then shared with the next
+   * request, which is the whole thing this check exists to prevent.
+   */
+  #wasPublished(key: ServiceToken, instance: unknown): boolean {
+    return this.#singletons.has(key) && Object.is(this.#singletons.get(key), instance)
+  }
+
   #cacheIfAppWide(
     scope: string,
     key: ServiceToken,

@@ -89,6 +89,31 @@ describe('container > createResolver', () => {
     expect(fromB.seen).toBe('request-b')
   })
 
+  it('does not share a request-scoped build that produced undefined', async () => {
+    // An absent cache entry and one holding `undefined` read back the same, so
+    // a request-scoped build returning nothing looked published and was handed
+    // to the next request — one factory call for two requests, each of which
+    // should have run its own.
+    let factoryCalls = 0
+    const seen: string[] = []
+    container.singleton('per-request', async () => {
+      factoryCalls += 1
+      await new Promise((resolve) => setImmediate(resolve))
+      const id = await container.resolve<RequestId>(RequestId)
+      seen.push(id.value)
+      return undefined
+    })
+    const a = container.createResolver()
+    const b = container.createResolver()
+    a.bindValue(RequestId, new RequestId('request-a'))
+    b.bindValue(RequestId, new RequestId('request-b'))
+
+    await Promise.all([a.make('per-request'), b.make('per-request')])
+
+    expect(factoryCalls).toBe(2)
+    expect(seen.sort()).toEqual(['request-a', 'request-b'])
+  })
+
   it('does not leak the bound value into the container', async () => {
     const resolver = container.createResolver()
     resolver.bindValue(RequestId, new RequestId('scoped'))

@@ -281,3 +281,44 @@ describe('container > an auto-constructed singleton follows the same pipeline', 
     expect(built).toBe(1)
   })
 })
+
+/**
+ * Identity, when the value is not a well-behaved object.
+ *
+ * The publication check compared with `===`, which `NaN` fails against itself
+ * — and could not tell an absent cache entry from one holding `undefined`.
+ */
+describe('container > a singleton is recognised whatever it holds', () => {
+  it('does not rebuild a singleton whose value is NaN', async () => {
+    const container = new Container()
+    let factoryCalls = 0
+    container.singleton('reading', async () => {
+      factoryCalls += 1
+      await new Promise((resolve) => setImmediate(resolve))
+      return Number.NaN
+    })
+
+    const [a, b] = await Promise.all([
+      container.resolve<number>('reading'),
+      container.resolve<number>('reading'),
+    ])
+
+    expect(factoryCalls).toBe(1)
+    expect(Number.isNaN(a)).toBe(true)
+    expect(Number.isNaN(b)).toBe(true)
+  })
+
+  it('does not rebuild a singleton whose value is undefined', async () => {
+    const container = new Container()
+    let factoryCalls = 0
+    container.singleton('nothing', async () => {
+      factoryCalls += 1
+      await new Promise((resolve) => setImmediate(resolve))
+      return undefined
+    })
+
+    await Promise.all([container.resolve('nothing'), container.resolve('nothing')])
+
+    expect(factoryCalls).toBe(1)
+  })
+})
