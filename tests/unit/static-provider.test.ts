@@ -28,6 +28,7 @@ describe('StaticProvider', () => {
     const middleware = new StaticMiddleware({ root: '/tmp/ream-static-test' })
     const provider = new StaticProvider(buildApp(container), { middleware })
     await provider.boot()
+    await provider.start()
     expect(used).toHaveLength(1)
   })
 })

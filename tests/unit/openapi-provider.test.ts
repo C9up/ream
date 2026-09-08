@@ -50,6 +50,7 @@ async function mountMiddleware(): Promise<
   })
   const provider = new OpenApiProvider(buildApp(container), { generator })
   await provider.boot()
+  await provider.start()
   expect(used).toHaveLength(1)
   return defined(used[0])
 }

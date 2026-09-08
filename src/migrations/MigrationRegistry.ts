@@ -27,6 +27,29 @@ export class MigrationRegistry {
     return this
   }
 
+  /**
+   * Remove a store's runner — only while it is still the one that registered.
+   *
+   * `register` refuses a duplicate name, deliberately: two providers claiming
+   * one name means one of them migrates nothing while the run reports success.
+   * But nothing ever removed a source, so a provider that shut down left its
+   * name taken and its runner holding a connection it had already closed. A
+   * second boot in the same process — a hot reload, a test that restarts the
+   * app — then failed on "already registered", and the CLI would have driven a
+   * runner pointing at a dead pool.
+   *
+   * `source` is the ownership guard. Two applications can share a process, and
+   * the one shutting down must not unregister the survivor's runner that
+   * happens to carry the same name.
+   */
+  unregister(name: string, source?: RegisteredMigrationSource): boolean {
+    const current = this.#sources.get(name)
+    if (current === undefined) return false
+    if (source !== undefined && current !== source) return false
+    this.#sources.delete(name)
+    return true
+  }
+
   /** Every registered store, in registration order. */
   all(): RegisteredMigrationSource[] {
     return [...this.#sources.values()]

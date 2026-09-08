@@ -26,7 +26,8 @@ describe('GraphQLProvider > opt-in', () => {
     provider.register()
     expect(provider.engine).toBeUndefined()
     await expect(container.resolve('graphql')).rejects.toThrow()
-    await provider.boot() // no router needed — returns early
+    await provider.boot()
+    await provider.start() // no router needed — returns early
   })
 })
 
@@ -54,6 +55,7 @@ describe('GraphQLProvider > wired', () => {
     const provider = new GraphQLProvider(buildApp(container), { engine: makeEngine() })
     provider.register()
     await provider.boot()
+    await provider.start()
     expect(verbs).toEqual([
       ['GET', '/graphql'],
       ['POST', '/graphql'],

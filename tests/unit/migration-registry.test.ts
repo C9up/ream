@@ -92,3 +92,51 @@ describe('MigrationRegistry', () => {
     expect(source?.runner.forceUnlock).toBeUndefined()
   })
 })
+
+/**
+ * A provider that shuts down has to give its name back.
+ *
+ * `register` refuses a duplicate on purpose — two providers claiming one name
+ * means one migrates nothing while the run reports success. But nothing ever
+ * removed a source, so a provider that shut down left its name taken and its
+ * runner holding a connection it had already closed. A second boot in the same
+ * process — a hot reload, a test that restarts the app — failed on "already
+ * registered", and the CLI would have driven a runner pointing at a dead pool.
+ */
+describe('migration registry > giving a name back', () => {
+  const source = (name: string) =>
+    ({ name, run: async () => {}, rollback: async () => {} }) as never
+
+  it('lets the same name be registered again after it is released', () => {
+    const registry = new MigrationRegistry()
+    const first = source('atlas')
+    registry.register(first)
+
+    expect(registry.unregister('atlas', first)).toBe(true)
+
+    expect(() => registry.register(source('atlas'))).not.toThrow()
+  })
+
+  it('refuses to release another owner’s registration', () => {
+    // Two applications can share a process; the one shutting down must not
+    // unregister the survivor's runner because the name matches.
+    const registry = new MigrationRegistry()
+    const theirs = source('atlas')
+    registry.register(theirs)
+
+    expect(registry.unregister('atlas', source('atlas'))).toBe(false)
+    expect(registry.get('atlas')).toBe(theirs)
+  })
+
+  it('releases by name when no owner is named', () => {
+    const registry = new MigrationRegistry()
+    registry.register(source('eon'))
+
+    expect(registry.unregister('eon')).toBe(true)
+    expect(registry.isEmpty).toBe(true)
+  })
+
+  it('says so when there was nothing to release', () => {
+    expect(new MigrationRegistry().unregister('nothing')).toBe(false)
+  })
+})

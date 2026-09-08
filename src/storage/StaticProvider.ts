@@ -30,7 +30,17 @@ export class StaticProvider extends Provider {
     this.#override = options.middleware
   }
 
-  override async boot(): Promise<void> {
+  /**
+   * Routes and server middleware go in `start`, not `boot`.
+   *
+   * Upstream documents that phase for exactly this, and the order is what makes
+   * it matter: providers boot, then providers START, then the preloads run —
+   * and the preloads are where an application writes its own routes and kernel.
+   * Mounted in `boot`, a framework route landed ahead of every application
+   * route, so an overlapping path was answered by the framework rather than by
+   * the app that meant to override it.
+   */
+  override async start(): Promise<void> {
     const config = this.app.config.get<StaticConfig>('static')
     const middleware = this.#override ?? (config?.root ? new StaticMiddleware(config) : undefined)
     if (!middleware) return // not configured — opt-out
