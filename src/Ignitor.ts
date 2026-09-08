@@ -675,7 +675,16 @@ export class Ignitor {
       await callProviderPhase(provider, 'start')
     }
 
-    // Import preload files (routes.ts, kernel.ts, etc.)
+    // Import preload files (routes.ts, kernel.ts, etc.) — ONE AT A TIME.
+    //
+    // NAMED DEVIATION: upstream imports them with `Promise.all`, so whichever
+    // module finishes loading first evaluates first. A preload is where an
+    // application registers its routes, and routing is first-match — so the
+    // order the files are listed in is observable behaviour, and an array in a
+    // configuration file reads as an ordered list. Racing them would make
+    // which route answers depend on module-resolution timing.
+    //
+    // The cost is start-up latency on a handful of local files, paid once.
     if (this.#reamrc?.preloads) {
       for (const preloadEntry of this.#reamrc.preloads) {
         const preloadImport = typeof preloadEntry === 'function' ? preloadEntry : preloadEntry.file

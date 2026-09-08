@@ -2,7 +2,7 @@
  * `StaticProvider` — serves static files from a directory.
  *
  * Opt-in: does nothing unless `config.static.root` is set (or a middleware is
- * injected for tests). When configured, `boot()` mounts a global
+ * injected for tests). When configured, `start()` mounts a global
  * `StaticMiddleware` (path-traversal + symlink-escape guarded) that serves
  * matching requests and falls through (`next()`) otherwise.
  *

@@ -1,11 +1,12 @@
 /**
  * `OpenApiProvider` — serves an auto-generated OpenAPI 3.1 spec + Swagger UI.
  *
- * `boot()` mounts a global middleware that, on the first GET to `/api-docs`
+ * `start()` mounts a global middleware that, on the first GET to `/api-docs`
  * (JSON) or `/docs` (Swagger UI), lazily generates the spec from the router's
- * registered routes — so every route registered during boot/start is included
- * (the spec must NOT be generated eagerly at boot, before other providers have
- * registered their routes). Opt-out via `config.openapi.enabled = false`.
+ * registered routes — so every route registered while the application starts
+ * up is included (the spec must NOT be generated eagerly, before the other
+ * providers and the preloads have registered their routes). Opt-out via
+ * `config.openapi.enabled = false`.
  *
  * @implements Story 24.4
  */
