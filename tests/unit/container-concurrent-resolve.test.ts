@@ -126,3 +126,72 @@ describe('container > rebinding a token', () => {
     expect(await container.resolve<{ id: number }>('db')).toEqual({ id: 2 })
   })
 })
+
+/**
+ * A singleton whose initialisation failed must not be published.
+ *
+ * The instance was cached BEFORE the `resolving` hooks ran, so a hook that
+ * threw left it in the cache: the caller saw the error, and the NEXT resolution
+ * was handed the same half-built object with no hook, no error, and nothing to
+ * say a step had been skipped. A hook that opens a connection, validates a
+ * config or wraps a security decorator failing is exactly when the instance
+ * must not be reachable.
+ */
+describe('container > a failed resolving hook must not publish the singleton', () => {
+  it('does not hand the half-built instance to the next caller', async () => {
+    const container = new Container()
+    let factoryCalls = 0
+    let hookCalls = 0
+    container.singleton('service', () => {
+      factoryCalls += 1
+      return { id: factoryCalls }
+    })
+    container.resolving('service', () => {
+      hookCalls += 1
+      throw new Error('hook failed')
+    })
+
+    await expect(container.resolve('service')).rejects.toThrow('hook failed')
+    // The second attempt must REBUILD and fail again, not succeed on a cached
+    // object the hook never finished with.
+    await expect(container.resolve('service')).rejects.toThrow('hook failed')
+
+    expect(factoryCalls).toBe(2)
+    expect(hookCalls).toBe(2)
+  })
+
+  it('still caches once the hooks succeed', async () => {
+    const container = new Container()
+    let factoryCalls = 0
+    container.singleton('service', () => {
+      factoryCalls += 1
+      return { id: factoryCalls }
+    })
+    container.resolving('service', () => {})
+
+    const first = await container.resolve<{ id: number }>('service')
+    const second = await container.resolve<{ id: number }>('service')
+
+    expect(second).toBe(first)
+    expect(factoryCalls).toBe(1)
+  })
+
+  it('runs the hooks once for concurrent callers', async () => {
+    // The pending promise is what keeps a second build from starting; moving
+    // the cache after the hooks must not cost that.
+    const container = new Container()
+    let hookCalls = 0
+    container.singleton('service', async () => ({ id: 1 }))
+    container.resolving('service', () => {
+      hookCalls += 1
+    })
+
+    const [a, b] = await Promise.all([
+      container.resolve<{ id: number }>('service'),
+      container.resolve<{ id: number }>('service'),
+    ])
+
+    expect(a).toBe(b)
+    expect(hookCalls).toBe(1)
+  })
+})

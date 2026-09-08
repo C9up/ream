@@ -619,12 +619,27 @@ export class Container {
         // the old factory write its result afterwards restored exactly what the
         // rebind existed to replace.
         if (this.#bindings.get(key) !== binding) return instance
+        // Hooks FIRST, cache after. Published before they ran, a singleton
+        // whose `resolving` hook threw was already in the cache: the caller saw
+        // the error, and the next resolution was handed the same half-built
+        // instance with no hook, no error and nothing to say a step had been
+        // skipped. A hook that opens a connection, validates a config or wraps
+        // a security decorator failing is precisely when the instance must not
+        // be reachable.
+        //
+        // Upstream's hooks are documented as modifying the value BEFORE it is
+        // returned, which only holds if the value is not already shared.
+        //
+        // Inside the promise, so the hooks run exactly once per instance no
+        // matter how many callers were waiting; the pending promise is what
+        // keeps concurrent callers from building a second one.
+        await this.#runResolvingHooks(key, instance)
+        // Re-checked: a rebind can land while the hooks run, and the cache it
+        // dropped must not be refilled by the build it replaced.
+        if (this.#bindings.get(key) !== binding) return instance
         // See `ResolutionChain.scopedReads`: a build that consumed a
         // request-scoped value is that request's, not the application's.
         this.#cacheIfAppWide('singleton', key, instance, store, readsBefore)
-        // Inside the promise, so the hooks run exactly once per instance no
-        // matter how many callers were waiting.
-        await this.#runResolvingHooks(key, instance)
         return instance
       })()
       this.#pendingSingletons.set(key, building)
