@@ -657,9 +657,7 @@ export class Container {
 
     // 6. Auto-construct if it's a class
     if (typeof token === 'function') {
-      const instance = (await this.#autoConstruct(token, runtimeValues)) as T
-      await this.#runResolvingHooks(key, instance)
-      return instance
+      return (await this.#resolveAutoConstructed(token, runtimeValues)) as T
     }
 
     // 7. Not found
@@ -683,6 +681,66 @@ export class Container {
    * 2. Reflect.getMetadata('design:paramtypes') — decorator metadata (requires SWC/tsc)
    * 3. No params → plain `new Class()`
    */
+  /**
+   * Resolve a class the container builds itself — through the SAME pipeline as
+   * an explicit singleton binding.
+   *
+   * `@Service({ scope: 'singleton' })` never goes through a binding, so this
+   * path had its own, weaker rules: the instance was cached on the way out of
+   * construction and the `resolving` hooks ran afterwards, so a hook that threw
+   * left a half-built object in the cache for the next caller — the failure the
+   * explicit path was fixed for, on the path most applications actually use.
+   * It also never joined `#pendingSingletons`, so two resolutions in flight at
+   * once each built their own and whichever finished last was the one everybody
+   * got.
+   *
+   * Pending promise, then construction, then hooks, then publication. In that
+   * order, on both paths.
+   */
+  async #resolveAutoConstructed(
+    target: abstract new (...args: never[]) => unknown,
+    runtimeValues?: unknown[],
+  ): Promise<unknown> {
+    const metadata = getServiceMetadata(target)
+    const key = metadata?.as ?? target
+
+    if (metadata?.scope !== 'singleton') {
+      const instance = await this.#autoConstruct(target, runtimeValues)
+      await this.#runResolvingHooks(key, instance)
+      return instance
+    }
+
+    if (this.#singletons.has(key)) return this.#singletons.get(key)
+    const inFlight = this.#pendingSingletons.get(key)
+    if (inFlight) {
+      const shared = await inFlight
+      // Joined ONLY if that build was published application-wide. A build that
+      // consumed a request-scoped value belongs to its request — handing it to
+      // another one is exactly the leak `createResolver()` exists to prevent —
+      // so this resolution falls through and builds its own instead.
+      if (this.#singletons.get(key) === shared) return shared
+    }
+
+    // Same rule as the explicit bindings: see `ResolutionChain.scopedReads`.
+    const store = this.#chain.getStore()
+    const readsBefore = store?.scopedReads ?? 0
+    const building = (async (): Promise<unknown> => {
+      const instance = await this.#autoConstruct(target, runtimeValues)
+      await this.#runResolvingHooks(key, instance)
+      this.#cacheIfAppWide('singleton', key, instance, store, readsBefore)
+      return instance
+    })()
+    this.#pendingSingletons.set(key, building)
+    try {
+      return await building
+    } finally {
+      // Cleared either way: a failed build must not poison later attempts.
+      if (this.#pendingSingletons.get(key) === building) {
+        this.#pendingSingletons.delete(key)
+      }
+    }
+  }
+
   async #autoConstruct(
     target: abstract new (...args: never[]) => unknown,
     runtimeValues?: unknown[],
@@ -704,19 +762,18 @@ export class Container {
     target: abstract new (...args: never[]) => unknown,
     runtimeValues?: unknown[],
   ): Promise<unknown> {
-    const metadata = getServiceMetadata(target)
-    const scope = metadata?.scope ?? 'transient'
     // The class itself, not `target.name`: two classes called `Service` share a
     // name and must not share a singleton cache entry.
+    const metadata = getServiceMetadata(target)
     const key = metadata?.as ?? target
 
-    if (scope === 'singleton' && this.#singletons.has(key)) {
+    // A cached singleton short-circuits construction — for the callers that
+    // reach this directly (`autoRegister`'s factory). PUBLISHING it is not this
+    // method's business: it builds, and `#resolveAutoConstructed` decides when
+    // the result may be shared, after the hooks have had their say.
+    if (metadata?.scope === 'singleton' && this.#singletons.has(key)) {
       return this.#singletons.get(key)
     }
-
-    // Same rule as the explicit singleton bindings: see `scopedReads`.
-    const store = this.#chain.getStore()
-    const readsBefore = store?.scopedReads ?? 0
 
     // A runtime value at this index (from `make(Class, [req, res])`) wins over
     // container resolution for that constructor slot.
@@ -753,7 +810,6 @@ export class Container {
           deps.push(depToken ? await this.resolve(depToken) : undefined)
         }
         const instance = Reflect.construct(target, deps)
-        this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
         return instance
       }
       // (b) No @Inject/metadata, but the caller supplied runtime values — build
@@ -762,7 +818,6 @@ export class Container {
       if (target.length > 0 && (runtimeValues?.length ?? 0) > 0) {
         const deps = Array.from({ length: target.length }, (_value, index) => runtimeAt(index))
         const instance = Reflect.construct(target, deps)
-        this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
         return instance
       }
       // (c) The constructor declares parameters but we have no way to resolve
@@ -784,7 +839,6 @@ export class Container {
       // one is a compile error even though the runtime constructs it happily —
       // `abstract` exists only at compile time.
       const instance = Reflect.construct(target, [])
-      this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
       return instance
     }
 
@@ -807,7 +861,6 @@ export class Container {
     }
 
     const instance = Reflect.construct(target, deps)
-    this.#cacheIfAppWide(scope, key, instance, store, readsBefore)
     return instance
   }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Container } from '../../src/container/Container.js'
+import { Inject, Service } from '../../src/decorators/Service.js'
 
 /**
  * Cycle detection under CONCURRENT resolution.
@@ -193,5 +194,90 @@ describe('container > a failed resolving hook must not publish the singleton', (
 
     expect(a).toBe(b)
     expect(hookCalls).toBe(1)
+  })
+})
+
+/**
+ * The same rule, for a class the container builds itself.
+ *
+ * `@Service({ scope: 'singleton' })` never goes through an explicit binding:
+ * `resolve()` falls through to auto-construction, which cached the instance
+ * on its way out and left the hooks to run afterwards — the exact ordering
+ * the explicit path was fixed for, on the path most applications actually use.
+ */
+describe('container > an auto-constructed singleton follows the same pipeline', () => {
+  it('does not publish an instance whose resolving hook threw', async () => {
+    const container = new Container()
+    let built = 0
+    let hookCalls = 0
+
+    @Service({ scope: 'singleton' })
+    class Broken {
+      readonly id: number
+      constructor() {
+        built += 1
+        this.id = built
+      }
+    }
+
+    container.resolving(Broken, () => {
+      hookCalls += 1
+      throw new Error('hook failed')
+    })
+
+    await expect(container.resolve(Broken)).rejects.toThrow('hook failed')
+    await expect(container.resolve(Broken)).rejects.toThrow('hook failed')
+
+    expect(built).toBe(2)
+    expect(hookCalls).toBe(2)
+  })
+
+  it('builds one instance for two concurrent callers', async () => {
+    // Auto-construction never joined `#pendingSingletons`, so two resolutions
+    // in flight at once each built their own — two singletons, and whichever
+    // finished last was the one everybody else got.
+    const container = new Container()
+    let built = 0
+    container.singleton('slow', async () => {
+      await new Promise((resolve) => setImmediate(resolve))
+      return { name: 'slow' }
+    })
+
+    @Service({ scope: 'singleton' })
+    class Shared {
+      readonly id: number
+      constructor(@Inject('slow') readonly dep: unknown) {
+        built += 1
+        this.id = built
+      }
+    }
+
+    const [a, b] = await Promise.all([
+      container.resolve<Shared>(Shared),
+      container.resolve<Shared>(Shared),
+    ])
+
+    expect(a).toBe(b)
+    expect(built).toBe(1)
+  })
+
+  it('still caches once the hooks succeed', async () => {
+    const container = new Container()
+    let built = 0
+
+    @Service({ scope: 'singleton' })
+    class Fine {
+      readonly id: number
+      constructor() {
+        built += 1
+        this.id = built
+      }
+    }
+
+    const first = await container.resolve<Fine>(Fine)
+    const second = await container.resolve<Fine>(Fine)
+
+    expect(second).toBe(first)
+    expect(built).toBe(1)
   })
 })
