@@ -64,6 +64,31 @@ describe('container > createResolver', () => {
     expect(rb.id.value).toBe('b')
   })
 
+  it('does not share a request-scoped build between two resolvers', async () => {
+    // An explicit singleton binding whose factory reads a request-scoped
+    // value. The second resolver joined the first's build in flight and was
+    // handed the FIRST request's instance — HttpContext, identity, tenant, an
+    // enriched logger, whichever the factory happened to read.
+    container.singleton('per-request', async () => {
+      // Yield, so the second resolver is genuinely in flight behind this.
+      await new Promise((resolve) => setImmediate(resolve))
+      const id = await container.resolve<RequestId>(RequestId)
+      return { seen: id.value }
+    })
+    const a = container.createResolver()
+    const b = container.createResolver()
+    a.bindValue(RequestId, new RequestId('request-a'))
+    b.bindValue(RequestId, new RequestId('request-b'))
+
+    const [fromA, fromB] = await Promise.all([
+      a.make<{ seen: string }>('per-request'),
+      b.make<{ seen: string }>('per-request'),
+    ])
+
+    expect(fromA.seen).toBe('request-a')
+    expect(fromB.seen).toBe('request-b')
+  })
+
   it('does not leak the bound value into the container', async () => {
     const resolver = container.createResolver()
     resolver.bindValue(RequestId, new RequestId('scoped'))

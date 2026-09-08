@@ -607,9 +607,17 @@ export class Container {
         return instance as T
       }
 
-      // A build already under way: join it rather than start a second one.
+      // A build already under way: join it rather than start a second one —
+      // but only take its result if it was actually PUBLISHED. A factory that
+      // reads a request-scoped value builds that request's instance, and
+      // `#cacheIfAppWide` deliberately refuses to cache it; handing it to the
+      // resolver waiting behind was one request's HttpContext, identity or
+      // tenant answering for another. That resolution builds its own instead.
       const inFlight = this.#pendingSingletons.get(key)
-      if (inFlight) return (await inFlight) as T
+      if (inFlight) {
+        const shared = await inFlight
+        if (this.#singletons.get(key) === shared) return shared as T
+      }
 
       const readsBefore = store?.scopedReads ?? 0
       const building = (async (): Promise<unknown> => {
