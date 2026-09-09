@@ -56,6 +56,16 @@ export class OpenApiGenerator {
   #router: Router
   #config: OpenApiConfig
   #runeSchemas: Map<string, Record<string, unknown>>
+  /**
+   * Schemas a validator produced itself, already in JSON Schema form.
+   *
+   * Kept apart from {@link #runeSchemas}, which holds rune FIELD MAPS that
+   * {@link #runeToJsonSchema} still has to convert. One map for both would
+   * mean guessing which kind a value is, and guessing wrong sends a finished
+   * schema back through the converter, which reads its `type` and `properties`
+   * keys as if they were field names.
+   */
+  #jsonSchemas = new Map<string, Record<string, unknown>>()
 
   constructor(
     router: Router,
@@ -70,6 +80,30 @@ export class OpenApiGenerator {
   /** Register a Rune validation schema for OpenAPI spec generation. */
   registerSchema(name: string, definition: Record<string, unknown>): void {
     this.#runeSchemas.set(name, definition)
+  }
+
+  /**
+   * Fill the schema map from the validators the routes already name.
+   *
+   * `route.validate('createUser')` records a container token, and the
+   * validator behind it can describe itself. Without this step every one of
+   * those routes documented its body as a bare `{ type: 'object' }` unless the
+   * app ALSO called `registerSchema` by hand with a definition it had to keep
+   * in step with the schema — two descriptions of one payload, and nothing
+   * checking they agreed.
+   *
+   * Resolution happens once, here, because `generate()` is synchronous and the
+   * container is not. A validator that cannot be resolved, or that cannot
+   * describe itself, is skipped: a missing section of documentation is a
+   * smaller problem than a boot that fails over one.
+   */
+  async hydrateSchemas(resolve: (token: string) => Promise<unknown>): Promise<void> {
+    const names = new Set(this.#getRoutes().flatMap((route) => route.validators))
+    for (const name of names) {
+      if (this.#runeSchemas.has(name) || this.#jsonSchemas.has(name)) continue
+      const definition = await describeValidator(resolve, name)
+      if (definition !== undefined) this.#jsonSchemas.set(name, definition)
+    }
   }
 
   /** Generate the complete OpenAPI 3.1 spec. */
@@ -171,13 +205,13 @@ export class OpenApiGenerator {
 
     if (route.validators.length > 0 && ['post', 'put', 'patch'].includes(method)) {
       const [validatorName] = route.validators
-      const schema = validatorName === undefined ? undefined : this.#runeSchemas.get(validatorName)
-      if (schema && validatorName !== undefined) {
+      const body = validatorName === undefined ? undefined : this.#bodySchema(validatorName)
+      if (body && validatorName !== undefined) {
         operation.requestBody = {
           required: true,
-          content: { 'application/json': { schema: this.#runeToJsonSchema(schema) } },
+          content: { 'application/json': { schema: body } },
         }
-        schemas[validatorName] = this.#runeToJsonSchema(schema)
+        schemas[validatorName] = body
       } else {
         operation.requestBody = {
           required: true,
@@ -209,6 +243,17 @@ export class OpenApiGenerator {
     }
     if (route.name) return route.name
     return `${route.method} ${route.path}`
+  }
+
+  /**
+   * The JSON Schema for a named validator: what it described about itself
+   * first, then a hand-registered field map converted here.
+   */
+  #bodySchema(name: string): Record<string, unknown> | undefined {
+    const described = this.#jsonSchemas.get(name)
+    if (described !== undefined) return described
+    const fields = this.#runeSchemas.get(name)
+    return fields === undefined ? undefined : this.#runeToJsonSchema(fields)
   }
 
   /** Convert a Rune schema (Record<string, RuleChain>) to JSON Schema. */
@@ -252,5 +297,40 @@ export class OpenApiGenerator {
   /** Get all routes from the router via public API. */
   #getRoutes(): RouteDefinition[] {
     return this.#router.getRoutes()
+  }
+}
+
+/** A validator that can describe its own shape as JSON Schema. */
+interface SelfDescribingValidator {
+  toJSONSchema(): Record<string, unknown>
+}
+
+function describesItself(value: unknown): value is SelfDescribingValidator {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'toJSONSchema' in value &&
+    typeof value.toJSONSchema === 'function'
+  )
+}
+
+/** Resolve one validator and ask it for its schema, or answer undefined. */
+async function describeValidator(
+  resolve: (token: string) => Promise<unknown>,
+  name: string,
+): Promise<Record<string, unknown> | undefined> {
+  let validator: unknown
+  try {
+    validator = await resolve(`validator:${name}`)
+  } catch {
+    // An unregistered validator is already a hard error at request time; the
+    // documentation is not the place to raise it a second time.
+    return undefined
+  }
+  if (!describesItself(validator)) return undefined
+  try {
+    return validator.toJSONSchema()
+  } catch {
+    return undefined
   }
 }

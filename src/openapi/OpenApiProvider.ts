@@ -70,10 +70,14 @@ export class OpenApiProvider extends Provider {
 
   async #buildGenerator(config: OpenApiDocsConfig): Promise<OpenApiGenerator> {
     const router = await this.app.container.make<Router>('router')
-    return new OpenApiGenerator(router, {
+    const generator = new OpenApiGenerator(router, {
       title: config.title ?? 'API',
       version: config.version ?? '1.0.0',
     })
+    // The routes already name their validators; ask each one to describe
+    // itself instead of making the app repeat the shape by hand.
+    await generator.hydrateSchemas((token) => this.app.container.make<unknown>(token))
+    return generator
   }
 }
 

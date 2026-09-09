@@ -85,3 +85,83 @@ describe('OpenApiGenerator', () => {
     expect(spec.paths['/x']?.post).toMatchObject({ requestBody: { required: true } })
   })
 })
+
+describe('OpenApiGenerator > schemas from the routes themselves', () => {
+  /** A validator that can describe its own shape, as a rune schema does. */
+  function selfDescribing(properties: Record<string, unknown>) {
+    return {
+      toJSONSchema: () => ({
+        type: 'object',
+        properties,
+        required: Object.keys(properties),
+      }),
+    }
+  }
+
+  function generatorFor(build: (r: Router) => void) {
+    const router = new Router()
+    build(router)
+    return new OpenApiGenerator(router, { title: 'API', version: '1.0.0' })
+  }
+
+  it('asks a route validator to describe itself', async () => {
+    const generator = generatorFor((r) => {
+      r.post('/users', noop).validate('createUser')
+    })
+    const registry = new Map<string, unknown>([
+      ['validator:createUser', selfDescribing({ email: { type: 'string' } })],
+    ])
+    await generator.hydrateSchemas((token) => Promise.resolve(registry.get(token)))
+
+    const spec = generator.generate()
+    const body = spec.paths['/users']?.post?.requestBody
+    // Before this, a validated route documented its body as a bare object —
+    // an API client generated from the spec knew none of the fields.
+    expect(body).toMatchObject({
+      content: {
+        'application/json': {
+          schema: { properties: { email: { type: 'string' } } },
+        },
+      },
+    })
+    expect(spec.components.schemas.createUser).toBeDefined()
+  })
+
+  it('leaves a hand-registered schema alone', async () => {
+    const generator = generatorFor((r) => {
+      r.post('/users', noop).validate('createUser')
+    })
+    // `registerSchema` takes a rune FIELD MAP, which the generator converts.
+    generator.registerSchema('createUser', {
+      handRegistered: { rules: [{ name: 'number' }] },
+    })
+    await generator.hydrateSchemas(() =>
+      Promise.resolve(selfDescribing({ described: { type: 'string' } })),
+    )
+    const schema = generator.generate().components.schemas.createUser
+    expect(schema).toMatchObject({
+      properties: { handRegistered: { type: 'number' } },
+    })
+    expect(schema).not.toHaveProperty('properties.described')
+  })
+
+  it('still produces a spec when a validator cannot be resolved', async () => {
+    const generator = generatorFor((r) => {
+      r.post('/users', noop).validate('missing')
+    })
+    // An unregistered validator is already a hard error at request time.
+    // Failing the documentation over it too would take the whole spec down.
+    await generator.hydrateSchemas(() => Promise.reject(new Error('nope')))
+    expect(generator.generate().paths['/users']?.post?.requestBody).toMatchObject({
+      content: { 'application/json': { schema: { type: 'object' } } },
+    })
+  })
+
+  it('skips a validator that cannot describe itself', async () => {
+    const generator = generatorFor((r) => {
+      r.post('/users', noop).validate('opaque')
+    })
+    await generator.hydrateSchemas(() => Promise.resolve({ validate: () => ({ valid: true }) }))
+    expect(generator.generate().components.schemas.opaque).toBeUndefined()
+  })
+})
