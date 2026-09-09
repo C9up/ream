@@ -60,6 +60,13 @@ export { HttpContext } from './http/HttpContext.js'
 export { RedirectBuilder } from './http/RedirectBuilder.js'
 export type { RawRequest } from './http/Request.js'
 export { Request } from './http/Request.js'
+export type {
+  RequestAwareValidator,
+  RequestValidationOptions,
+  ValidatableContext,
+  ValidationHookContext,
+} from './http/RequestValidator.js'
+export { RequestValidator } from './http/RequestValidator.js'
 export { Response } from './http/Response.js'
 export type { SseStreamOptions } from './http/SseStream.js'
 export { SseStream } from './http/SseStream.js'

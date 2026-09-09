@@ -13,6 +13,12 @@ import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
 import { Macroable } from '../utils/Macroable.js'
 import { getPath, omitPaths, pickPaths } from '../utils/objectPath.js'
+import type {
+  RequestAwareValidator,
+  RequestValidationOptions,
+  ValidatableContext,
+} from './RequestValidator.js'
+import { RequestValidator } from './RequestValidator.js'
 import { unpackCookieValue } from './Response.js'
 
 export interface RawRequest {
@@ -790,6 +796,44 @@ export class Request extends Macroable {
   }
 
   /**
+   * The context a validation hook is handed.
+   *
+   * The whole context when this request has one, because that is where a hook
+   * finds what it needs — `ctx.i18n` for a translated message. A Request built
+   * by hand for a test has none, and stands in for itself.
+   */
+  #validationContext(): ValidatableContext {
+    const ctx = this.ctx
+    // Handed back as it is, never spread: a context carries accessors
+    // (`ctx.i18n` is one), and a spread would freeze each into a plain value
+    // read at this instant instead of when the hook asks for it.
+    if (ctx !== undefined && carriesRequest(ctx)) return ctx
+    return { request: this }
+  }
+
+  /**
+   * Validate this request, throwing `E_VALIDATION_ERROR` on failure.
+   *
+   * The entry point that lets a schema stay ignorant of the request: the
+   * per-request messages provider and error reporter are filled in here, from
+   * hooks a package installed at boot. See {@link RequestValidator}.
+   */
+  validateUsing<T>(
+    validator: RequestAwareValidator<T>,
+    options?: RequestValidationOptions,
+  ): Promise<T> {
+    return new RequestValidator(this.#validationContext()).validateUsing(validator, options)
+  }
+
+  /** Validate this request, answering `[error, null]` or `[null, data]`. */
+  tryValidateUsing<T>(
+    validator: RequestAwareValidator<T>,
+    options?: RequestValidationOptions,
+  ): Promise<[unknown, null] | [null, T]> {
+    return new RequestValidator(this.#validationContext()).tryValidateUsing(validator, options)
+  }
+
+  /**
    * The original request input, captured once and never mutated (AdonisJS
    * `request.original`) — the basis for flash "old input" on validation errors.
    */
@@ -1173,4 +1217,14 @@ function languageMatches(entry: string, offered: string): boolean {
   const primary = entry.split('-')[0]
   if (primary && primary === o.split('-')[0]) return true
   return false
+}
+
+/**
+ * Whether an object is a context wrapped around a real request.
+ *
+ * `Request.ctx` is deliberately typed `object` — the request must not depend
+ * on the context's shape — so this is where that opacity is paid back.
+ */
+function carriesRequest(value: object): value is ValidatableContext {
+  return 'request' in value && value.request instanceof Request
 }

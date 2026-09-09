@@ -32,6 +32,7 @@ import type { HttpKernelRequest, HttpKernelResponse } from './HttpKernel.js'
 import { createHttpKernel } from './HttpKernel.js'
 import { ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
+import { RequestValidator } from './http/RequestValidator.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import { MigrationRegistry } from './migrations/MigrationRegistry.js'
@@ -326,6 +327,11 @@ export class Ignitor {
     // must stay agnostic reaches it through the container instead of importing
     // ream at runtime.
     this.#app.container.singleton('HttpContext', () => HttpContext)
+    // The seam a package installs its per-request messages provider or error
+    // reporter on. Bound rather than imported so an i18n provider can reach it
+    // without depending on ream — which is the only reason it is a container
+    // token and not just an import.
+    this.#app.container.singleton('requestValidator', () => RequestValidator)
     // `appRoot` is the URL passed to `new Ignitor(new URL('../', import.meta.url))`.
     // Providers resolve it through the container so they can interpret
     // relative paths in config files (e.g. `pages.root: './resources/pages'`)
