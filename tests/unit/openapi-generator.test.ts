@@ -114,13 +114,14 @@ describe('OpenApiGenerator > schemas from the routes themselves', () => {
     await generator.hydrateSchemas((token) => Promise.resolve(registry.get(token)))
 
     const spec = generator.generate()
-    const body = spec.paths['/users']?.post?.requestBody
     // Before this, a validated route documented its body as a bare object —
     // an API client generated from the spec knew none of the fields.
-    expect(body).toMatchObject({
-      content: {
-        'application/json': {
-          schema: { properties: { email: { type: 'string' } } },
+    expect(spec.paths['/users']?.post).toMatchObject({
+      requestBody: {
+        content: {
+          'application/json': {
+            schema: { properties: { email: { type: 'string' } } },
+          },
         },
       },
     })
@@ -152,8 +153,10 @@ describe('OpenApiGenerator > schemas from the routes themselves', () => {
     // An unregistered validator is already a hard error at request time.
     // Failing the documentation over it too would take the whole spec down.
     await generator.hydrateSchemas(() => Promise.reject(new Error('nope')))
-    expect(generator.generate().paths['/users']?.post?.requestBody).toMatchObject({
-      content: { 'application/json': { schema: { type: 'object' } } },
+    expect(generator.generate().paths['/users']?.post).toMatchObject({
+      requestBody: {
+        content: { 'application/json': { schema: { type: 'object' } } },
+      },
     })
   })
 

@@ -38,6 +38,17 @@ export type ServiceToken = (abstract new (...args: never[]) => unknown) | string
  */
 export interface FactoryResolver {
   make<T>(token: ServiceToken, runtimeValues?: unknown[]): Promise<T>
+  /**
+   * Call a method with its dependencies injected. Declared here because a
+   * factory that dispatches to a handler needs it and both implementations
+   * have it — leaving it off did not make the capability go away, it only
+   * hid it from the callers allowed to use it.
+   */
+  call<T, K extends string & keyof T>(
+    instance: T,
+    method: K,
+    runtimeValues?: unknown[],
+  ): Promise<unknown>
 }
 
 /**

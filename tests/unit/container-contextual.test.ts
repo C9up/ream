@@ -208,7 +208,10 @@ describe('container > the resolution parent after a failed call()', () => {
       } catch {
         // Swallowed on purpose — this is the shape that leaked.
       }
-      return c.resolve<{ from: string }>(Global)
+      // `make`, not `resolve`: a factory is handed a FactoryResolver, and the
+      // per-request resolver that also satisfies it has no `resolve`. They are
+      // the same call — `Container.make` delegates straight to it.
+      return c.make<{ from: string }>(Global)
     })
 
     // Resolved after the failed call, still inside the same chain: it must get
