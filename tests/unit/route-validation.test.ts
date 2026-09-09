@@ -157,10 +157,10 @@ describe('route .validate() — async validator contracts', () => {
     expect(JSON.parse(res.body).errors[0].rule).toBe('unique')
   })
 
-  it('translates a throwing VineJS-style validate() into a 422', async () => {
-    // VineJS's `validate()` resolves to the validated payload and throws
+  it('translates a throwing validate() into a 422', async () => {
+    // The throwing `validate()` resolves to the validated payload and throws
     // E_VALIDATION_ERROR carrying `messages` — the only contract a plain
-    // `@vinejs/vine` validator exposes.
+    // rune validator exposes.
     class ValidationFailure extends Error {
       readonly messages = [{ field: 'name', rule: 'required', message: 'name is required' }]
     }

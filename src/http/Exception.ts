@@ -156,7 +156,7 @@ export class E_VALIDATION_ERROR extends Exception {
   static override code = 'E_VALIDATION_ERROR'
 
   /**
-   * Per-field failures. Named `messages` because that is what VineJS, rune and
+   * Per-field failures. Named `messages` because that is what rune and
    * AdonisJS's own validation renderers read — a handler copied from an Adonis
    * app reaches for `error.messages`.
    */
@@ -249,7 +249,7 @@ export type HttpError = {
   code: string
   stack?: string
   cause?: unknown
-  /** Per-field failures, on a validation error (VineJS / rune shape). */
+  /** Per-field failures, on a validation error (rune's shape). */
   messages?: unknown
   /** Extra detail an exception chose to carry. */
   errors?: unknown
@@ -487,7 +487,7 @@ export class ExceptionHandler extends Macroable {
 
     // Validation failures have per-field detail and their own renderers. Keyed
     // on the code plus the presence of `messages`, exactly as AdonisJS does, so
-    // rune's and VineJS's errors both land here.
+    // rune's errors land here.
     if (httpError.code === 'E_VALIDATION_ERROR' && httpError.messages !== undefined) {
       await this.renderValidationError(httpError, ctx)
       return
@@ -523,7 +523,7 @@ export class ExceptionHandler extends Macroable {
 }
 
 /**
- * The fields a validation message carries (VineJS / rune `RuneErrorNode`).
+ * The fields a validation message carries (rune's `RuneErrorNode`).
  *
  * Read defensively: the messages come from whichever validator the app wired,
  * and a renderer must not throw while rendering someone else's error.

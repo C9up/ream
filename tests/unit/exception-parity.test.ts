@@ -164,7 +164,7 @@ describe('ExceptionHandler > render hooks (AdonisJS override points)', () => {
   }
 
   it('routes a validation failure to the validation renderers', async () => {
-    // rune and VineJS both raise `E_VALIDATION_ERROR` carrying `messages`.
+    // rune raises `E_VALIDATION_ERROR` carrying `messages`.
     // Before this, they fell through to the generic renderer and the per-field
     // detail never reached the client.
     const ctx = ctxWith('application/json')

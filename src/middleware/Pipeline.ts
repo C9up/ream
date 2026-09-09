@@ -32,7 +32,7 @@ export interface RuntimeValidationResult {
  * Structural contract for a route validator. ream stays decoupled from the
  * validation engine — any object exposing a result-returning check works.
  *
- * Three spellings are accepted because `@c9up/rune` follows VineJS: `validate()`
+ * Three spellings are accepted because `@c9up/rune` offers all three: `validate()`
  * is async and throws, `validateResult()` is synchronous and never throws, and
  * `validateResultAsync()` is the async result-based form.
  *
@@ -46,7 +46,7 @@ export interface RuntimeValidator {
   validateResultAsync?(data: unknown): Promise<RuntimeValidationResult>
 }
 
-/** A thrown validation failure, as raised by rune/VineJS `validate()`. */
+/** A thrown validation failure, as raised by rune's `validate()`. */
 interface ThrownValidationFailure {
   messages: unknown[]
 }
@@ -66,7 +66,7 @@ function isValidationResult(value: unknown): value is RuntimeValidationResult {
  * result object.
  *
  * Order matters: the async result form first (it is the only one that can run
- * `unique` / `exists`), then the synchronous one, then VineJS's throwing
+ * `unique` / `exists`), then the synchronous one, then the throwing
  * `validate()` — awaited, and with its `E_VALIDATION_ERROR` translated back
  * into a result so callers keep a single shape to handle.
  */
@@ -85,7 +85,7 @@ export async function runValidator(
   if (typeof validator.validate === 'function') {
     try {
       const outcome = await validator.validate(data)
-      // A result-returning `validate()` (not the VineJS contract) is honoured
+      // A result-returning `validate()` (not the throwing contract) is honoured
       // as-is; the throwing contract resolves to the validated payload.
       return isValidationResult(outcome) ? outcome : { valid: true, errors: [], data: outcome }
     } catch (err) {
