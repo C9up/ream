@@ -384,9 +384,15 @@ export class Request extends Macroable {
    * `defaultValue` (or null) when absent OR when the signature is invalid
    * (tampered / not signed).
    *
-   * NAMED DEVIATION — the fallback is `??`, where AdonisJS writes `||`. A
-   * cookie legitimately holding `0`, `false` or `""` is a value, not an
-   * absence, and upstream hands back the default for all three. Kept.
+   * NAMED DEVIATION — the fallback is `??`, where upstream writes `||`
+   * (`@adonisjs/http-server@9.3.0`: `return this.#cookieParser.unsign(key) ||
+   * defaultValue`). A cookie legitimately holding `0`, `false` or `""` is a
+   * value, not an absence, and `||` hands back the default for all three.
+   *
+   * Upstream's own doc-comment on that line says the default is returned "when
+   * actual value is undefined" — which is what `??` does and `||` does not. So
+   * this follows the contract upstream documents, and differs only from what it
+   * happens to execute. Kept.
    */
   cookie(name: string): string | null
   cookie(name: string, defaultValue: string): string
