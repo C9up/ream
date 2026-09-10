@@ -386,8 +386,12 @@ export class Request extends Macroable {
    *
    * NAMED DEVIATION — the fallback is `??`, where upstream writes `||`
    * (`@adonisjs/http-server@9.3.0`: `return this.#cookieParser.unsign(key) ||
-   * defaultValue`). A cookie legitimately holding `0`, `false` or `""` is a
-   * value, not an absence, and `||` hands back the default for all three.
+   * defaultValue`).
+   *
+   * The case that matters is the EMPTY STRING. A signed cookie carries a
+   * string — {@link Response.cookie} takes `value: string` — so `""` is the one
+   * falsy value this accessor can actually hold, and it is a value someone
+   * wrote, not an absence. `||` hands back the default for it; `??` does not.
    *
    * Upstream's own doc-comment on that line says the default is returned "when
    * actual value is undefined" — which is what `??` does and `||` does not. So
