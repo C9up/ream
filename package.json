@@ -241,8 +241,8 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
-    "file-type": "^22.0.1",
-    "reflect-metadata": "^0.2"
+    "file-type": "^22.0.2",
+    "reflect-metadata": "^0.2.2"
   },
   "peerDependencies": {
     "@c9up/comet": "^0.1.0",
@@ -263,12 +263,12 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
     "@c9up/comet": "^0.1.0",
-    "@types/node": "^22.19.15",
-    "@vitest/coverage-v8": "^4.1.6",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "4.1.11",
     "mime-db": "^1.54.0",
     "mime-types": "^3.0.2",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.6"
+    "typescript": "^6.0.3",
+    "vitest": "4.1.11"
   },
   "pnpm": {
     "//": "Pin the test toolchain to the versions used in dev. Without a committed lockfile the standalone CI resolves fresh (esbuild 0.28.x / vitest 4.1.9), whose decorator transform flakes 'Invalid or unexpected token' on the decorator suites. Overrides only apply when this package is the install root (CI), so the monorepo workspace is unaffected.",
