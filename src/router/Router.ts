@@ -1,5 +1,5 @@
 /**
- * Fluent Router — AdonisJS v6 compatible routing with controllers, resources, and groups.
+ * Fluent Router — AdonisJS-compatible routing with controllers, resources, and groups.
  *
  * @implements FR24, FR25, FR26, FR27, FR28
  */

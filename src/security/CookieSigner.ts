@@ -159,8 +159,9 @@ export class CookieSigner {
   /**
    * The cipher in use (AdonisJS `Encryption.algorithm`).
    *
-   * `aes-256-gcm`, not upstream's `aes-256-cbc` — see the deviation at the top
-   * of this file.
+   * `aes-256-gcm`, which is what upstream configures by default now; the CBC
+   * construction lives on there as the `legacy` driver. See the note at the top
+   * of this file for what that means for a cookie written by an older app.
    */
   get algorithm(): 'aes-256-gcm' {
     return 'aes-256-gcm'
