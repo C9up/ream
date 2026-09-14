@@ -542,10 +542,19 @@ pub fn argon2_hash(password: String) -> napi::Result<String> {
     catch_unwind_napi(|| {
         sigil_engine::argon2_hash(
             &password,
+            // Every field `None`: sigil owns the defaults, and restating
+            // them here would pin this binding to the values of the day it
+            // was written. `secret` is the pepper — left unset because it
+            // must be supplied identically at verify, and this entry point
+            // takes no place to carry one.
             sigil_engine::Argon2Options {
                 memory_kib: None,
                 iterations: None,
                 parallelism: None,
+                secret: None,
+                variant: None,
+                hash_length: None,
+                salt_length: None,
             },
         )
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
@@ -555,7 +564,9 @@ pub fn argon2_hash(password: String) -> napi::Result<String> {
 /// Verify a password against an Argon2id hash.
 #[napi]
 pub fn argon2_verify(password: String, hash: String) -> napi::Result<bool> {
-    catch_unwind_napi(|| Ok(sigil_engine::argon2_verify(&password, &hash)))
+    // `None` pepper, matching `argon2_hash` above: a verify with a secret
+    // the hash was not made with fails, so the two must agree.
+    catch_unwind_napi(|| Ok(sigil_engine::argon2_verify(&password, &hash, None)))
 }
 
 /// Hash a password with bcrypt (Rust-native).
@@ -565,7 +576,8 @@ pub fn argon2_verify(password: String, hash: String) -> napi::Result<bool> {
 #[napi]
 pub fn bcrypt_hash(password: String, rounds: Option<u32>) -> napi::Result<String> {
     catch_unwind_napi(|| {
-        sigil_engine::bcrypt_hash(&password, rounds.unwrap_or(12))
+        // `version` and `salt_length` left to sigil's defaults.
+        sigil_engine::bcrypt_hash(&password, rounds.unwrap_or(12), None, None)
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
     })
 }
