@@ -73,6 +73,21 @@ export interface ReamrcContents {
 export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
+  /**
+   * Whether the inker template engine is installed (AdonisJS `usingEdgeJS`).
+   *
+   * Set by `InkerProvider`'s CONSTRUCTOR, so it is already true by the time any
+   * other provider boots. A package that wants to contribute to templates —
+   * rosetta pushing its `t()` global, say — reads this before importing
+   * `@c9up/inker`, and stays installable without it when the answer is no.
+   *
+   * A flag rather than a container lookup, and that is the whole point: the
+   * engine is a module singleton, so asking the container would mean resolving
+   * a binding whose lifecycle has to have reached the right phase. This answers
+   * the only question the caller actually has — is the package there — without
+   * one.
+   */
+  usingInker = false
   #appRoot?: URL
   #directories: DirectoriesNode = { ...defaultDirectories }
   #rcFile: ReamrcContents = {}

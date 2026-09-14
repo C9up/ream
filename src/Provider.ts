@@ -32,6 +32,13 @@ export interface ConfigReader {
 export interface AppContext {
   container: Container
   config: ConfigReader
+  /**
+   * Whether the inker template engine is installed — see
+   * `Application#usingInker`. Optional here because a host that is not ream
+   * satisfies this contract structurally and has no such flag; a provider
+   * reading it treats `undefined` as "no engine".
+   */
+  usingInker?: boolean
 }
 
 /**
