@@ -41,9 +41,20 @@ export class StaticProvider extends Provider {
    * the app that meant to override it.
    */
   override async start(): Promise<void> {
-    const config = this.app.config.get<StaticConfig>('static')
-    const middleware = this.#override ?? (config?.root ? new StaticMiddleware(config) : undefined)
-    if (!middleware) return // not configured — opt-out
+    // `?? {}` rather than a default argument: a host may supply its own
+    // ConfigReader, and not every implementation honours the second parameter.
+    const config = this.app.config.get<StaticConfig>('static') ?? ({} as StaticConfig)
+
+    // Registering the provider is the whole opt-in, as it is upstream: there,
+    // `node ace configure @adonisjs/static` adds the provider AND the
+    // middleware, and the middleware serves `public/` with no `root` named
+    // anywhere. Requiring a `root` before doing anything meant a provider
+    // could be registered and silently serve nothing.
+    const root = config.root ?? this.app.publicPath?.() ?? 'public'
+    const middleware =
+      this.#override ??
+      (config.enabled === false ? undefined : new StaticMiddleware({ ...config, root }))
+    if (!middleware) return
     const server = await this.app.container.make<Server>('server')
     server.use([(ctx, next) => middleware.handle(ctx, next)])
   }

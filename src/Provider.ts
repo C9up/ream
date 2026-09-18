@@ -39,6 +39,14 @@ export interface AppContext {
    * reading it treats `undefined` as "no engine".
    */
   usingInker?: boolean
+  /**
+   * Absolute path to the application's `public/` directory — see
+   * `Application#publicPath`. Optional for the same reason as the flag above:
+   * a host that is not ream satisfies this contract structurally and has no
+   * directory layout. A provider that needs it falls back to a relative
+   * `'public'`, resolved against the working directory.
+   */
+  publicPath?(...paths: string[]): string
 }
 
 /**
