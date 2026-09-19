@@ -11,6 +11,7 @@ Rust-powered Node.js application framework. Convention over configuration with n
 - **Router** — fluent chaining, groups, params, guards, versioning, named routes + `urlFor()` URL builder (`namedManifest()` exposes them to the client)
 - **Middleware pipeline** — onion pattern, global + named, guard enforcement
 - **HTTP server** — Rust Hyper via NAPI
+- **Static files** — `public/` served with ETag, `Last-Modified` and byte ranges, guarded against escaping the directory (`@c9up/ream/storage/provider`)
 - **Event bus** — in-process emitter with optional Redis store (`@c9up/ream/events`)
 - **Scheduler** — cron/interval tasks via the `@Schedule()` decorator (Rust-backed)
 - **GraphQL & RPC** — built-in GraphQL engine and typed RPC router
@@ -110,13 +111,16 @@ universe through the container, never via a static import.
 | [@c9up/chronos](https://github.com/C9up/chronos) | Date/time & recurrence engine |
 | [@c9up/comet](https://github.com/C9up/comet) | JSON-RPC 2.0 protocol + isomorphic client |
 | [@c9up/echo](https://github.com/C9up/echo) | Cache (memory + Redis drivers) |
+| [@c9up/eclipse](https://github.com/C9up/eclipse) | Distributed locks (owner-checked leases, memory + Redis stores) |
 | [@c9up/eon](https://github.com/C9up/eon) | Time-series data layer (TDengine-backed) |
 | [@c9up/helix](https://github.com/C9up/helix) | Framework-agnostic test runtime |
 | [@c9up/helix-plugin-ream](https://github.com/C9up/helix-plugin-ream) | The ream↔helix bridge (boots a Ream app under test) |
 | [@c9up/inker](https://github.com/C9up/inker) | Server-side templating |
 | [@c9up/nebula](https://github.com/C9up/nebula) | shadcn/ui ported to Aurora, as atomic design |
 | [@c9up/nova](https://github.com/C9up/nova) | Web Push notifications (VAPID) |
+| [@c9up/parsec](https://github.com/C9up/parsec) | Metrics & telemetry (Prometheus exporter, optional OpenTelemetry) |
 | [@c9up/photon](https://github.com/C9up/photon) | Frontend rendering engine |
+| [@c9up/prism](https://github.com/C9up/prism) | Image processing — resize, convert, crop, composite, watermark (Rust-native) |
 | [@c9up/quasar](https://github.com/C9up/quasar) | Redis connections (named, pub/sub, health checks) |
 | [@c9up/ream-cli](https://github.com/C9up/ream-cli) | CLI & code generators (Rust binary, `ream` command) |
 | [@c9up/ream-mcp](https://github.com/C9up/ream-mcp) | MCP server — agent-ready framework assistant |
