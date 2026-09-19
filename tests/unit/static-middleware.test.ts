@@ -518,7 +518,7 @@ describe('StaticMiddleware > nothing outside the root', () => {
     mkdirSync(sibling, { recursive: true })
     writeFileSync(join(sibling, 'secret.txt'), 'SECRET')
     try {
-      const { ctx, backend } = makeCtx('/../' + basename(sibling) + '/secret.txt')
+      const { ctx, backend } = makeCtx(`/../${basename(sibling)}/secret.txt`)
       const next = vi.fn<() => Promise<void>>(async () => {})
       await middleware.handle(ctx, next)
       await ctx.response.streamed()

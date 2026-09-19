@@ -148,9 +148,8 @@ export { ApiResource } from './resources/ApiResource.js'
 
 // ─── Static Files ───────────────────────────────────────────
 
-export type { StaticConfig } from './storage/StaticMiddleware.js'
+export type { DotFilesPolicy, StaticConfig } from './storage/StaticMiddleware.js'
 export { defineStaticConfig, StaticMiddleware } from './storage/StaticMiddleware.js'
-export type { DotFilesPolicy } from './storage/StaticMiddleware.js'
 export type { StaticProviderOptions } from './storage/StaticProvider.js'
 export { StaticProvider } from './storage/StaticProvider.js'
 
