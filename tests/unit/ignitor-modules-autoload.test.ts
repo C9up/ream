@@ -61,7 +61,7 @@ describe('ignitor > modules.autoload', () => {
       'app/modules/billing/services/Weekly.js': marker('Weekly'),
       'app/modules/billing/services/nested/Deep.js': marker('Deep'),
     })
-    await boot(root, ['services'])
+    await boot(root, ['services/'])
     // One alphabetical pass over files and directories alike, so `nested/`
     // falls between `Daily.js` and `Weekly.js`. One rule rather than two, and
     // the same order on every machine instead of whatever readdir returns.
@@ -74,7 +74,7 @@ describe('ignitor > modules.autoload', () => {
       'app/modules/billing/services/types.d.ts': 'export type X = 1\n',
       'app/modules/billing/services/README.md': 'not code\n',
     })
-    await boot(root, ['services'])
+    await boot(root, ['services/'])
     expect(loaded()).toEqual(['Daily'])
   })
 
@@ -83,9 +83,9 @@ describe('ignitor > modules.autoload', () => {
     // symptom appeared much later as a task that never ran.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const root = app({ 'app/modules/billing/routes.js': marker('routes') })
-    await boot(root, ['routes', 'sevices'])
+    await boot(root, ['routes', 'sevices/'])
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0]?.[0])).toContain('"sevices"')
+    expect(String(warn.mock.calls[0]?.[0])).toContain('"sevices/"')
   })
 
   it('stays quiet when one module simply has no routes', async () => {
@@ -97,5 +97,18 @@ describe('ignitor > modules.autoload', () => {
     })
     await boot(root, ['routes', 'events'])
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('REGRESSION: the default list must not start walking a routes/ directory', async () => {
+    // 0.2.19 loaded nothing here. If 0.2.20 imports these, an application that
+    // never opted in suddenly executes files it never executed before.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const root = app({
+      'app/modules/billing/routes/admin.js': marker('routes/admin'),
+      'app/modules/billing/routes/public.js': marker('routes/public'),
+    })
+    await boot(root, ['routes', 'events'])
+    expect(loaded()).toEqual([])
+    void warn
   })
 })

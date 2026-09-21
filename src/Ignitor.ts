@@ -96,8 +96,12 @@ export interface ReamrcConfig {
     /**
      * What to load from each module directory. Default `['routes', 'events']`.
      *
-     * An entry names either a file (`routes` → `routes.ts`) or a DIRECTORY
-     * (`services` → every module file under `services/`, recursively). The
+     * An entry names a file (`routes` → `routes.ts`) or, WITH A TRAILING
+     * SLASH, a directory (`services/` → every module file under it,
+     * recursively). The slash is required rather than inferred: falling back
+     * to a directory of the same name made an application that holds
+     * `routes/` as a directory execute every file in it on upgrade, having
+     * asked for nothing. The
      * directory form is what makes decorator-registered code — `@Schedule()`,
      * and anything else that registers by being imported — discoverable
      * without a hand-written preload.
@@ -1006,7 +1010,13 @@ export class Ignitor {
 
     for (const moduleDir of moduleDirs) {
       for (const entry of autoloadFiles) {
-        const loaded = await this.#autoloadEntry(join(basePath, moduleDir, entry))
+        // A trailing slash is the whole opt-in: `services/` walks a directory,
+        // `routes` names a file. Explicit, because the alternative — falling
+        // back to a directory of the same name — changes what an existing
+        // application executes without it asking.
+        const asDirectory = entry.endsWith('/')
+        const name = asDirectory ? entry.slice(0, -1) : entry
+        const loaded = await this.#autoloadEntry(join(basePath, moduleDir, name), asDirectory)
         if (loaded) matched.add(entry)
       }
     }
@@ -1016,8 +1026,8 @@ export class Ignitor {
       // eslint-disable-next-line no-console -- the logger is bound by a provider, and this runs before them
       console.warn(
         `[ream] reamrc modules.autoload: ${missing.map((m) => `"${m}"`).join(', ')} matched nothing under ` +
-          `${modulesConfig.path}/*/. Expected a file (\`${missing[0]}.ts\`) or a directory ` +
-          `(\`${missing[0]}/\`) in at least one module.`,
+          `${modulesConfig.path}/*/. An entry names a file (\`routes\` → \`routes.ts\`) or, ` +
+          `with a trailing slash, a directory (\`services/\` → every module file under it).`,
       )
     }
   }
@@ -1034,17 +1044,26 @@ export class Ignitor {
    * Answers whether anything was loaded, so a name that matches nowhere can be
    * reported rather than ignored.
    */
-  async #autoloadEntry(entryPath: string): Promise<boolean> {
+  async #autoloadEntry(entryPath: string, asDirectory: boolean): Promise<boolean> {
     const { existsSync, readdirSync, statSync } = await import('node:fs')
     const { join } = await import('node:path')
     const { pathToFileURL } = await import('node:url')
 
-    for (const ext of ['.ts', '.js']) {
-      const filePath = `${entryPath}${ext}`
-      if (existsSync(filePath)) {
-        await import(pathToFileURL(filePath).href)
-        return true
+    // A file, unless the entry asked for a directory. NOT "a file, or else a
+    // directory of the same name": an application whose module holds
+    // `routes/` as a DIRECTORY would then execute every file in it the day it
+    // upgraded, having asked for nothing. That shipped in 0.2.20 and killed a
+    // test server long after boot, silently, because what those files started
+    // outlived the import.
+    if (!asDirectory) {
+      for (const ext of ['.ts', '.js']) {
+        const filePath = `${entryPath}${ext}`
+        if (existsSync(filePath)) {
+          await import(pathToFileURL(filePath).href)
+          return true
+        }
       }
+      return false
     }
 
     if (!existsSync(entryPath) || !statSync(entryPath).isDirectory()) return false
@@ -1058,7 +1077,7 @@ export class Ignitor {
     for (const entry of entries) {
       const child = join(entryPath, entry.name)
       if (entry.isDirectory()) {
-        if (await this.#autoloadEntry(child)) loaded = true
+        if (await this.#autoloadEntry(child, true)) loaded = true
         continue
       }
       // `.d.ts` declares types and executes nothing; importing it is a parse
