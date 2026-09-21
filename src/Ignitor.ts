@@ -93,7 +93,18 @@ export interface ReamrcConfig {
   modules?: {
     /** Path to the modules directory (relative to app root). Default: './app/modules' */
     path?: string
-    /** Auto-loaded files in each module directory. Default: ['routes'] */
+    /**
+     * What to load from each module directory. Default `['routes', 'events']`.
+     *
+     * An entry names either a file (`routes` → `routes.ts`) or a DIRECTORY
+     * (`services` → every module file under `services/`, recursively). The
+     * directory form is what makes decorator-registered code — `@Schedule()`,
+     * and anything else that registers by being imported — discoverable
+     * without a hand-written preload.
+     *
+     * An entry that matches nothing in any module is reported at boot: the
+     * failure it otherwise produces is silence.
+     */
     autoload?: string[]
   }
   /** Test suites and runner settings — the `tests` block of adonisrc.ts. */
@@ -973,7 +984,6 @@ export class Ignitor {
     const { readdirSync, existsSync } = await import('node:fs')
     const { join, resolve } = await import('node:path')
     const { fileURLToPath } = await import('node:url')
-    const { pathToFileURL } = await import('node:url')
 
     // Resolve modules path relative to app root or cwd
     const basePath = this.#appRoot
@@ -988,16 +998,77 @@ export class Ignitor {
       .map((d) => d.name)
       .sort()
 
+    // Entries that matched nothing in ANY module. A single module without a
+    // `routes.ts` is normal; an entry that matches nowhere is a name that does
+    // not exist, and the cost of getting it wrong is silence — a decorator
+    // nobody imported is never registered, and nothing says so.
+    const matched = new Set<string>()
+
     for (const moduleDir of moduleDirs) {
-      for (const fileName of autoloadFiles) {
-        const tsPath = join(basePath, moduleDir, `${fileName}.ts`)
-        const jsPath = join(basePath, moduleDir, `${fileName}.js`)
-        const filePath = existsSync(tsPath) ? tsPath : existsSync(jsPath) ? jsPath : null
-        if (filePath) {
-          await import(pathToFileURL(filePath).href)
-        }
+      for (const entry of autoloadFiles) {
+        const loaded = await this.#autoloadEntry(join(basePath, moduleDir, entry))
+        if (loaded) matched.add(entry)
       }
     }
+
+    const missing = autoloadFiles.filter((entry) => !matched.has(entry))
+    if (missing.length > 0) {
+      // eslint-disable-next-line no-console -- the logger is bound by a provider, and this runs before them
+      console.warn(
+        `[ream] reamrc modules.autoload: ${missing.map((m) => `"${m}"`).join(', ')} matched nothing under ` +
+          `${modulesConfig.path}/*/. Expected a file (\`${missing[0]}.ts\`) or a directory ` +
+          `(\`${missing[0]}/\`) in at least one module.`,
+      )
+    }
+  }
+
+  /**
+   * Load one autoload entry: a module file, or every module file in a directory.
+   *
+   * Directories are supported because that is what an entry like `services`
+   * reads as, and naming one used to load NOTHING — a configuration no-op with
+   * no error, which is the worst shape a missing import can take. A
+   * `@Schedule()` in a file nobody imports is simply never discovered, and the
+   * application starts perfectly.
+   *
+   * Answers whether anything was loaded, so a name that matches nowhere can be
+   * reported rather than ignored.
+   */
+  async #autoloadEntry(entryPath: string): Promise<boolean> {
+    const { existsSync, readdirSync, statSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const { pathToFileURL } = await import('node:url')
+
+    for (const ext of ['.ts', '.js']) {
+      const filePath = `${entryPath}${ext}`
+      if (existsSync(filePath)) {
+        await import(pathToFileURL(filePath).href)
+        return true
+      }
+    }
+
+    if (!existsSync(entryPath) || !statSync(entryPath).isDirectory()) return false
+
+    // Sorted, so a module that depends on load order behaves the same
+    // everywhere rather than on whatever the filesystem returns.
+    const entries = readdirSync(entryPath, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )
+    let loaded = false
+    for (const entry of entries) {
+      const child = join(entryPath, entry.name)
+      if (entry.isDirectory()) {
+        if (await this.#autoloadEntry(child)) loaded = true
+        continue
+      }
+      // `.d.ts` declares types and executes nothing; importing it is a parse
+      // error under a runtime that does not strip types.
+      if (entry.name.endsWith('.d.ts')) continue
+      if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.js')) continue
+      await import(pathToFileURL(child).href)
+      loaded = true
+    }
+    return loaded
   }
 
   /**
