@@ -27,6 +27,7 @@
  */
 
 import { hotReloadHappened } from './dev/hmr.js'
+import { type HotHookConfig, readHotHookConfig } from './dev/hotConfig.js'
 
 /** Exit code meaning "restart me" — see `EXIT_RESTART` in the CLI's dev module. */
 const FULL_RELOAD_EXIT_CODE = 75
@@ -43,46 +44,16 @@ interface HotHook {
   }): Promise<void>
 }
 
-interface HotHookConfig {
-  root?: string
-  boundaries?: string[]
-  restart?: string[]
-  ignore?: string[]
-  throwWhenBoundariesAreNotDynamicallyImported?: boolean
-}
-
-/** Read `hotHook` out of the application's package.json, with no assumptions. */
-function readConfig(pkg: unknown): HotHookConfig {
-  if (typeof pkg !== 'object' || pkg === null) return {}
-  const raw = Reflect.get(pkg, 'hotHook')
-  if (typeof raw !== 'object' || raw === null) return {}
-  const stringArray = (key: string): string[] | undefined => {
-    const value = Reflect.get(raw, key)
-    if (!Array.isArray(value)) return undefined
-    return value.filter((entry): entry is string => typeof entry === 'string')
-  }
-  const root = Reflect.get(raw, 'root')
-  const strict = Reflect.get(raw, 'throwWhenBoundariesAreNotDynamicallyImported')
-  return {
-    root: typeof root === 'string' ? root : undefined,
-    boundaries: stringArray('boundaries'),
-    restart: stringArray('restart'),
-    ignore: stringArray('ignore'),
-    throwWhenBoundariesAreNotDynamicallyImported: typeof strict === 'boolean' ? strict : undefined,
-  }
-}
-
 const { readFile } = await import('node:fs/promises')
 const { dirname, resolve } = await import('node:path')
 
 const packageJsonPath = resolve(process.cwd(), 'package.json')
 let config: HotHookConfig = {}
 try {
-  config = readConfig(JSON.parse(await readFile(packageJsonPath, 'utf8')))
+  config = readHotHookConfig(JSON.parse(await readFile(packageJsonPath, 'utf8')))
 } catch {
-  // No package.json, or unreadable: hot-hook still works, it just has no
-  // boundaries, so every change asks for a restart. That is the old
-  // behaviour, not a failure worth stopping dev over.
+  // No package.json, or unreadable: fall through to the conventional
+  // boundaries below rather than stopping dev over it.
 }
 
 // `hot-hook` is an optional peer, declared by the application because it is a
