@@ -12,6 +12,7 @@
 
 import type { Container } from './container/Container.js'
 import { debugHttp } from './debug.js'
+import { hotReloadCount } from './dev/hmr.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
@@ -117,7 +118,16 @@ export function createHttpKernel(
   // router.clear() drops the route objects, their chains become unreachable
   // and are GC'd — no need to monkey-patch router.clear (which leaked a
   // wrapper chain when createHttpKernel ran more than once on one router).
-  const pipelineCache = new WeakMap<RouteDefinition, { chain: MiddlewareFunction }>()
+  // `hotAt` is what makes hot reloading reach the router at all. A lazy
+  // controller is promoted to a concrete one on first request and the whole
+  // pipeline is cached per route — so once hot-hook swapped a module, both
+  // still pointed at the class from before, the process kept serving it, and
+  // the swap looked like it had not happened. Remembering when an entry was
+  // built lets a later swap throw it away.
+  //
+  // In production this is a number compared against a constant zero: nothing
+  // bumps the counter when `@c9up/ream/hot` was never loaded.
+  const pipelineCache = new WeakMap<RouteDefinition, { chain: MiddlewareFunction; hotAt: number }>()
 
   // Resolve the events emitter once, only when the app registered
   // `EventsProvider`. Lazy + cached: the binding may not exist yet at kernel
@@ -245,7 +255,17 @@ export function createHttpKernel(
           throw new E_ROUTE_NOT_FOUND(reqData.method, reqData.path)
         }
 
+        const hotAt = hotReloadCount()
         let cached = pipelineCache.get(match.route)
+        if (cached !== undefined && cached.hotAt !== hotAt) {
+          // A module was swapped since this was built. Drop the pipeline AND
+          // the promoted controller, so the loader runs again and `import()`
+          // hands back what hot-hook just invalidated rather than the copy in
+          // the ESM cache.
+          pipelineCache.delete(match.route)
+          if (match.route.lazyController) match.route.controller = undefined
+          cached = undefined
+        }
 
         if (!cached) {
           // Promote a lazy/string controller to a concrete controller tuple on
@@ -314,7 +334,7 @@ export function createHttpKernel(
             { guards, roles, permissions, validators },
           )
 
-          cached = { chain }
+          cached = { chain, hotAt }
           pipelineCache.set(match.route, cached)
         }
 
