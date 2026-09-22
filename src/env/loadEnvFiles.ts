@@ -5,6 +5,29 @@ import { interpolate } from './interpolate.js'
 import { normalizeNodeEnv } from './nodeEnv.js'
 
 /**
+ * The `.env*` files that will be read, most-specific first.
+ *
+ * Exported because `@c9up/ream/hot` has to WATCH exactly this list: nothing
+ * imports an env file, so hot-hook's dependency tree never sees one and an
+ * edit to `.env` changed nothing at all. A second copy of the list in the
+ * loader entry would drift from this one the first time the naming changes.
+ *
+ * @param options.skipEnvLocal Skip `.env.local` — see {@link loadEnvFiles}.
+ */
+export function envFileNames(options: { skipEnvLocal?: boolean } = {}): string[] {
+  // Normalised, so `NODE_ENV=prod` loads `.env.production` — the file the
+  // deployment actually wrote — instead of looking for `.env.prod`.
+  const raw = normalizeNodeEnv(process.env.NODE_ENV)
+  const nodeEnv = raw === 'unknown' ? undefined : raw
+  return [
+    nodeEnv ? `.env.${nodeEnv}.local` : null,
+    options.skipEnvLocal ? null : '.env.local',
+    nodeEnv ? `.env.${nodeEnv}` : null,
+    '.env',
+  ].filter((name): name is string => name !== null)
+}
+
+/**
  * Load `.env` files into `process.env` — the shared primitive behind both the
  * Ignitor (HTTP/console boot) and `Env.create()` (config/test flow), mirroring
  * AdonisJS which loads env in every flow.
@@ -18,18 +41,7 @@ import { normalizeNodeEnv } from './nodeEnv.js'
  *   developer's local overrides don't leak into tests).
  */
 export function loadEnvFiles(appRoot: URL, options: { skipEnvLocal?: boolean } = {}): void {
-  // Normalised, so `NODE_ENV=prod` loads `.env.production` — the file the
-  // deployment actually wrote — instead of looking for `.env.prod`.
-  const raw = normalizeNodeEnv(process.env.NODE_ENV)
-  const nodeEnv = raw === 'unknown' ? undefined : raw
-  const files = [
-    nodeEnv ? `.env.${nodeEnv}.local` : null,
-    options.skipEnvLocal ? null : '.env.local',
-    nodeEnv ? `.env.${nodeEnv}` : null,
-    '.env',
-  ].filter((name): name is string => name !== null)
-
-  for (const name of files) {
+  for (const name of envFileNames(options)) {
     let contents: string
     try {
       contents = readFileSync(fileURLToPath(new URL(name, appRoot)), 'utf8')

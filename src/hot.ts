@@ -26,8 +26,10 @@
  * upstream's behaviour, unmodified.
  */
 
+import { fullReloadNotice } from './dev/fullReload.js'
 import { hotReloadHappened } from './dev/hmr.js'
 import { type HotHookConfig, readHotHookConfig } from './dev/hotConfig.js'
+import { envFileNames } from './env/loadEnvFiles.js'
 
 /** Exit code meaning "restart me" — see `EXIT_RESTART` in the CLI's dev module. */
 const FULL_RELOAD_EXIT_CODE = 75
@@ -44,8 +46,9 @@ interface HotHook {
   }): Promise<void>
 }
 
+const { existsSync, writeSync } = await import('node:fs')
 const { readFile } = await import('node:fs/promises')
-const { dirname, resolve } = await import('node:path')
+const { dirname, relative, resolve } = await import('node:path')
 
 const packageJsonPath = resolve(process.cwd(), 'package.json')
 let config: HotHookConfig = {}
@@ -118,6 +121,19 @@ process.send = (message: unknown, ...rest: unknown[]): boolean => {
   if (type === 'hot-hook:invalidated') {
     hotReloadHappened()
   }
+  const notice = fullReloadNotice(message, (file) => relative(process.cwd(), file))
+  if (notice !== undefined) {
+    // Written synchronously because the very next thing hot-hook does is call
+    // `onFullReloadAsked`, which exits: a piped stdout — what `ream dev` hands
+    // this process when it runs an asset watcher alongside — is asynchronous,
+    // and the line would be dropped on the way out.
+    try {
+      writeSync(1, `${notice}\n`)
+    } catch {
+      // The parent can close the pipe first on Ctrl-C. Losing the line is
+      // fine; throwing here would break the message hot-hook is delivering.
+    }
+  }
   // If a real channel ever exists (embedded under a Node supervisor) it still
   // gets its message: this observes, it does not intercept.
   if (typeof previousSend === 'function') {
@@ -126,8 +142,21 @@ process.send = (message: unknown, ...rest: unknown[]): boolean => {
   return true
 }
 
+// Env files are not modules: nothing imports one, so hot-hook's dependency
+// tree never sees them and an edit to `.env` did nothing at all until the next
+// manual restart — the values are read once, at boot. Upstream's dev server
+// watches them explicitly and treats a change as a full restart; `restart` is
+// where hot-hook takes the same list. Absolute, because chokidar 5 resolves a
+// relative path against the cwd rather than against hot-hook's root.
+const envFiles = envFileNames()
+  .map((name) => resolve(dirname(packageJsonPath), name))
+  .filter((file) => existsSync(file))
+
 await hot?.init({
   ...config,
+  // After the spread: the application's own `restart` entries are kept, the
+  // env files are added to them.
+  restart: [...(config.restart ?? []), ...envFiles],
   rootDirectory: dirname(packageJsonPath),
   root: config.root ? resolve(dirname(packageJsonPath), config.root) : undefined,
   // Exiting on a known code is how the Rust parent learns it must restart —
