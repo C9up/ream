@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HMR_PATH,
   hmrClientScript,
+  hmrEndpoint,
   hmrToken,
   hotReloadCount,
   hotReloadHappened,
@@ -53,20 +54,36 @@ describe('dev > the reload token', () => {
 describe('dev > the injected script', () => {
   const script = hmrClientScript()
 
-  it('polls the path the server answers on', () => {
+  it('listens on the path the server answers on', () => {
     expect(script).toContain(JSON.stringify(HMR_PATH))
   })
 
-  it('reloads the page, and asks for no cached answer', () => {
-    expect(script).toContain('location.reload()')
-    expect(script).toContain("cache:'no-store'")
+  it('is pushed to rather than polling', () => {
+    // A poll ran the whole middleware stack once a second, per open tab. The
+    // stream pays that once, at connect.
+    expect(script).toContain('EventSource')
+    expect(script).not.toContain('setTimeout')
+    expect(script).not.toContain('fetch(')
   })
 
-  it('does not reload on a failed request', () => {
+  it('listens for the NAMED event, never onmessage', () => {
+    // The stream names its events, and `onmessage` fires only for unnamed
+    // ones — a client wired that way receives nothing at all, silently. This
+    // codebase has already shipped that bug once, in relay.
+    expect(script).toContain('addEventListener("ream:hmr"')
+    expect(script).not.toContain('onmessage')
+  })
+
+  it('reloads the page when the token moves', () => {
+    expect(script).toContain('location.reload()')
+  })
+
+  it('does not reload when the connection drops', () => {
     // A restarting server is unreachable for a moment. Reloading then shows the
-    // browser's error page instead of the application.
-    const failurePath = script.slice(script.indexOf('catch'))
-    expect(failurePath).not.toContain('location.reload()')
+    // browser's error page instead of the application. `EventSource` retries on
+    // its own, and the reload happens on the token the reconnect carries.
+    expect(script).not.toContain('onerror')
+    expect(script).not.toContain('addEventListener("error"')
   })
 
   it('is one self-contained tag, so it can be appended anywhere', () => {
@@ -225,16 +242,21 @@ describe('dev > the headers still describe the body that is sent', () => {
   })
 })
 
-describe('dev > the poller survives a failed request', () => {
-  it('retries instead of giving up on a non-ok answer', () => {
-    // A page loaded before the endpoint is mounted, or during any blip, used to
-    // stop polling for the life of the tab — which looks exactly like the
-    // feature not working.
+describe('dev > the stream survives a restart', () => {
+  it('leaves reconnection to EventSource rather than closing on error', () => {
+    // A page loaded before the endpoint is mounted, or during any blip, must
+    // not stop listening for the life of the tab — which looks exactly like
+    // the feature not working. `EventSource` reconnects by itself, and only an
+    // explicit `close()` on the error path would take that away.
     const script = hmrClientScript()
-    const afterCheck = script.slice(script.indexOf('r.ok'))
+    const beforeTokenCheck = script.slice(0, script.indexOf('n!==t'))
 
-    expect(afterCheck).toContain('setTimeout(tick,1000)')
-    expect(script).not.toContain('if(!r.ok)return')
+    expect(beforeTokenCheck).not.toContain('.close()')
+  })
+
+  it('closes only once it is about to reload, so no stream is left behind', () => {
+    const script = hmrClientScript()
+    expect(script).toContain('s.close();location.reload()')
   })
 })
 
@@ -259,5 +281,114 @@ describe('dev > every validator, not just the ones that came to mind', () => {
 
     expect(res.headers['content-digest']).toBeUndefined()
     expect(res.headers['repr-digest']).toBeUndefined()
+  })
+})
+
+describe('dev > the endpoint, ahead of the application', () => {
+  interface FakeStream {
+    sent: Array<{ event: string; data: unknown }>
+    close: () => void
+  }
+
+  function fakeCtx(path: string, options: { streaming?: boolean } = {}) {
+    const stream: FakeStream = { sent: [], close: () => {} }
+    const ctx = {
+      request: { url: () => path },
+      response: {
+        sse: async () => {
+          if (options.streaming === false) throw new Error('no stream backend')
+          return {
+            send: async (event: string, data: unknown) => {
+              stream.sent.push({ event, data })
+              return true
+            },
+            onClose: (callback: () => void) => {
+              stream.close = callback
+            },
+          }
+        },
+      },
+    }
+    return { ctx, stream }
+  }
+
+  it('answers the poll path and does NOT call the application', async () => {
+    // The whole point: an application that resolves a user from a cookie ran a
+    // SELECT for this, once a second, per tab.
+    const { ctx, stream } = fakeCtx(HMR_PATH)
+    let reachedTheApp = false
+
+    await hmrEndpoint()(ctx, async () => {
+      reachedTheApp = true
+    })
+
+    expect(reachedTheApp).toBe(false)
+    expect(stream.sent).toHaveLength(1)
+  })
+
+  it('greets the connection with the current token', async () => {
+    // A tab connecting after a restart must compare against the CURRENT token,
+    // not wait for the next swap to learn anything.
+    const { ctx, stream } = fakeCtx(HMR_PATH)
+    await hmrEndpoint()(ctx, async () => {})
+
+    expect(stream.sent[0]).toEqual({ event: 'ream:hmr', data: hmrToken() })
+  })
+
+  it('ignores the query string a client may append', async () => {
+    const { ctx, stream } = fakeCtx(`${HMR_PATH}?t=123`)
+    await hmrEndpoint()(ctx, async () => {})
+
+    expect(stream.sent).toHaveLength(1)
+  })
+
+  it('passes every other path straight through', async () => {
+    const { ctx, stream } = fakeCtx('/dashboard')
+    let reachedTheApp = false
+
+    await hmrEndpoint()(ctx, async () => {
+      reachedTheApp = true
+    })
+
+    expect(reachedTheApp).toBe(true)
+    expect(stream.sent).toHaveLength(0)
+  })
+
+  it('pushes to an open tab when a module is swapped', async () => {
+    const { ctx, stream } = fakeCtx(HMR_PATH)
+    await hmrEndpoint()(ctx, async () => {})
+    const greeting = stream.sent.length
+
+    hotReloadHappened()
+    await Promise.resolve()
+
+    expect(stream.sent.length).toBeGreaterThan(greeting)
+    expect(stream.sent.at(-1)?.data).toBe(hmrToken())
+    stream.close()
+  })
+
+  it('stops pushing to a tab that closed', async () => {
+    const { ctx, stream } = fakeCtx(HMR_PATH)
+    await hmrEndpoint()(ctx, async () => {})
+    stream.close()
+    const afterClose = stream.sent.length
+
+    hotReloadHappened()
+    await Promise.resolve()
+
+    expect(stream.sent).toHaveLength(afterClose)
+  })
+
+  it('falls through when the host cannot stream, rather than failing', async () => {
+    // A mock server in a unit test has no streaming NAPI. Losing the reload is
+    // fine; failing the request is not.
+    const { ctx } = fakeCtx(HMR_PATH, { streaming: false })
+    let reachedTheApp = false
+
+    await hmrEndpoint()(ctx, async () => {
+      reachedTheApp = true
+    })
+
+    expect(reachedTheApp).toBe(true)
   })
 })

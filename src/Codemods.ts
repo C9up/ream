@@ -3,6 +3,7 @@ import * as path from 'node:path'
 
 export interface Codemods {
   addProvider(importPath: string): Promise<void>
+  addMetaFile(pattern: string, reloadServer?: boolean): Promise<void>
   addEnvVars(vars: Record<string, string>): Promise<void>
   writeFile(filePath: string, content: string, options?: { force?: boolean }): Promise<void>
   registerCommand(importPath: string): Promise<void>
@@ -117,6 +118,58 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       const insertAt = match.index + match[0].length
       const eol = detectLineEnding(content)
       content = `${content.slice(0, insertAt)}${eol}${entry}${content.slice(insertAt)}`
+      fs.writeFileSync(rcPath, content)
+    },
+
+    /**
+     * Record a non-module file the application owns.
+     *
+     * A package calls this from `configure()` so its files reach the build:
+     * `addMetaFile('resources/lang/**\/*.json', false)`. The second argument
+     * is DELIBERATELY explicit at every call site — whether an edit costs a
+     * development restart is the decision the entry exists to record.
+     *
+     * Same regex codemod as `addProvider`, and the same limits: a `metaFiles`
+     * assembled by a spread or extracted into a `const` above the config is not
+     * rewritten. The block is created when absent, which `addProvider` cannot
+     * do — `providers` is always there, `metaFiles` usually is not.
+     */
+    async addMetaFile(pattern: string, reloadServer = false): Promise<void> {
+      const rcPath = path.join(root, 'reamrc.ts')
+      if (!fs.existsSync(rcPath)) {
+        throw new Error(
+          `[configure] reamrc.ts not found — cannot register meta file ${pattern}. Run 'ream new' first.`,
+        )
+      }
+      assertCanonicallyInside(root, rcPath, 'reamrc.ts')
+
+      let content = fs.readFileSync(rcPath, 'utf8')
+      // Dedup on the PATTERN alone: the same glob registered twice with
+      // different flags is a contradiction, and the first one wins rather than
+      // both being written.
+      if (content.includes(`'${pattern}'`) || content.includes(`"${pattern}"`)) return
+
+      const eol = detectLineEnding(content)
+      const entry = `    { pattern: '${pattern}', reloadServer: ${reloadServer} },`
+
+      const existing = /metaFiles\s*:\s*(?:\/\*[\s\S]*?\*\/\s*)?\[/.exec(content)
+      if (existing !== null) {
+        const insertAt = existing.index + existing[0].length
+        content = `${content.slice(0, insertAt)}${eol}${entry}${content.slice(insertAt)}`
+        fs.writeFileSync(rcPath, content)
+        return
+      }
+
+      // No block yet — open one beside `providers`, which every rc file has.
+      const providers = /providers\s*:\s*(?:\/\*[\s\S]*?\*\/\s*)?\[/.exec(content)
+      if (providers === null) {
+        throw new Error(
+          `[configure] Could not find 'providers: [' in reamrc.ts — meta file ${pattern} not added. Check your reamrc.ts format.`,
+        )
+      }
+      const blockAt = providers.index
+      const block = `metaFiles: [${eol}${entry}${eol}  ],${eol}  `
+      content = `${content.slice(0, blockAt)}${block}${content.slice(blockAt)}`
       fs.writeFileSync(rcPath, content)
     },
 

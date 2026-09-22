@@ -45,6 +45,90 @@ function holder(): CounterHolder {
 export function hotReloadHappened(): void {
   const store = holder()
   store[COUNTER] = (store[COUNTER] ?? 0) + 1
+  notifyClients()
+}
+
+/**
+ * The dev clients currently listening.
+ *
+ * A `Set` and not a count: each entry is pushed to on a swap, and dropped when
+ * the tab closes. `unknown`-typed on purpose — this module must not import the
+ * HTTP layer, which imports it back.
+ */
+interface DevClient {
+  send: (event: string, data: unknown) => Promise<boolean>
+  onClose: (callback: () => void) => void
+}
+
+const clients = new Set<DevClient>()
+
+/** The event name the injected script listens for. */
+const HMR_EVENT = 'ream:hmr'
+
+/**
+ * Answer the dev client BEFORE any application middleware runs, and PUSH.
+ *
+ * Two problems, one change.
+ *
+ * It used to be an ordinary route polled once a second, per open tab, and a
+ * route runs the whole middleware stack. An application that resolves a user
+ * from a session cookie therefore ran `SELECT * FROM users` once a second for
+ * a response whose entire content is a process id and a counter, and which
+ * depends on no user, no session and no body.
+ *
+ * It is a stream now, so the cost is paid ONCE per tab instead of once a
+ * second, and a change reaches the browser immediately rather than up to a
+ * second later. Upstream gets the same thing from Vite's websocket; this needs
+ * no bundler, because the server already speaks SSE.
+ *
+ * Registered FIRST rather than merely outside the router: middleware that
+ * authenticates lives at either tier, and an application is free to put it in
+ * `server.use([...])` — many do, because it must run before routing.
+ *
+ * Development only. In production nothing injects the script and nothing
+ * registers this.
+ */
+export function hmrEndpoint(): (
+  ctx: {
+    request: { url: () => string }
+    response: { sse: () => Promise<DevClient> }
+  },
+  next: () => Promise<void>,
+) => Promise<void> {
+  return async (ctx, next) => {
+    // `url()` carries the query string; a client may append a cache-buster.
+    const path = ctx.request.url().split('?')[0]
+    if (path !== HMR_PATH) {
+      await next()
+      return
+    }
+
+    let stream: DevClient
+    try {
+      stream = await ctx.response.sse()
+    } catch {
+      // A host without the streaming NAPI — a mock server in a test, say.
+      // Losing the reload is fine; failing the request is not.
+      await next()
+      return
+    }
+
+    clients.add(stream)
+    stream.onClose(() => clients.delete(stream))
+    // Immediately, so a tab that connects after a restart compares against the
+    // CURRENT token rather than waiting for the next swap to learn anything.
+    await stream.send(HMR_EVENT, hmrToken())
+  }
+}
+
+/** Tell every open tab the token moved. */
+function notifyClients(): void {
+  const token = hmrToken()
+  for (const client of clients) {
+    // Detached: a swap must not wait on a socket, and a dead one is dropped by
+    // its own close handler.
+    void client.send(HMR_EVENT, token).catch(() => clients.delete(client))
+  }
 }
 
 /** How many hot swaps this process has seen. */
@@ -63,10 +147,15 @@ export function hmrToken(): string {
 /**
  * The script injected into HTML pages in dev.
  *
- * It reloads when the token changes, NOT when the request fails: a server that
- * is restarting is unreachable for a moment, and reloading then would only show
- * the browser's error page. It waits for an answer, and the answer carries a
- * new boot id.
+ * An `EventSource`, not a poll. The server pushes the token, so a change
+ * reaches the page immediately and an idle tab costs one open connection
+ * rather than a request per second through the whole middleware stack.
+ *
+ * It reloads when the token CHANGES, never when the connection fails: a
+ * restarting server is unreachable for a moment, and reloading then would only
+ * show the browser's error page. `EventSource` reconnects on its own, and the
+ * server greets the new connection with its token — which after a restart is a
+ * different boot id, so the reload happens then, once the server can serve it.
  */
 export function hmrClientScript(nonce?: string): string {
   // A nonce-based CSP — which the scaffold ships, via `@c9up/blackhole` —
@@ -75,9 +164,13 @@ export function hmrClientScript(nonce?: string): string {
   // are escaped because a nonce is generated, not user input, but a broken
   // attribute would silently disable the tag rather than fail loudly.
   const attribute = nonce === undefined ? '' : ` nonce="${nonce.replace(/"/g, '&quot;')}"`
-  // A failed poll RETRIES. Returning on `!r.ok` stopped the loop for good, so a
-  // page opened in the window before the endpoint is mounted — or during any
-  // blip — never reloaded again for the life of that tab, which looks exactly
-  // like the feature not working.
-  return `<script${attribute}>(()=>{let t=null;const p=${JSON.stringify(HMR_PATH)};const tick=async()=>{try{const r=await fetch(p,{cache:'no-store'});if(r.ok){const n=(await r.text()).trim();if(t===null){t=n}else if(n!==t){location.reload();return}}}catch(e){}setTimeout(tick,1000)};tick()})()</script>`
+  // `addEventListener(HMR_EVENT)`, NOT `onmessage`: the stream names its
+  // events, and `onmessage` fires only for unnamed ones — a client wired that
+  // way receives nothing at all, silently, which is a mistake this codebase
+  // has already made once with relay.
+  return `<script${attribute}>(()=>{let t=null;const s=new EventSource(${JSON.stringify(
+    HMR_PATH,
+  )});s.addEventListener(${JSON.stringify(
+    HMR_EVENT,
+  )},e=>{let n;try{n=JSON.parse(e.data)}catch(_){n=e.data}if(t===null){t=n}else if(n!==t){s.close();location.reload()}})})()</script>`
 }

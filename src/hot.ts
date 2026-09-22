@@ -27,7 +27,7 @@ import { existsSync, writeSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { dirname, relative, resolve as resolvePath } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { fullReloadNotice } from './dev/fullReload.js'
 import { hotReloadHappened } from './dev/hmr.js'
 import { readHotHookConfig } from './dev/hotConfig.js'
@@ -66,9 +66,60 @@ const restartFiles = new Set(
     .filter((file) => existsSync(file)),
 )
 
+/**
+ * `metaFiles` entries that asked for a restart.
+ *
+ * Non-module files the application owns — translations, view templates — live
+ * in `reamrc.ts` because the BUILD has to copy them. A change to one is
+ * invisible to the import graph, so the only way it can do anything in
+ * development is by being named here.
+ *
+ * `reloadServer: false` is the interesting default, and the one upstream picks
+ * for translations: the entry exists so the file ships, and an edit does NOT
+ * restart. NAMED DEVIATION — upstream still logs such a change, because its
+ * watcher covers the whole project anyway. This one watches a fixed list of
+ * directories on purpose (`resources/` belongs to the asset watcher, and a
+ * stylesheet edit must not restart the server), so a `false` entry is simply
+ * not watched. The observable behaviour is the same: nothing happens.
+ */
+async function readReloadPatterns(): Promise<string[]> {
+  try {
+    const rc = (await import(pathToFileURL(resolvePath(root, 'reamrc.ts')).href)) as {
+      default?: { metaFiles?: Array<{ pattern?: unknown; reloadServer?: unknown }> }
+    }
+    return (rc.default?.metaFiles ?? [])
+      .filter((entry) => entry.reloadServer === true && typeof entry.pattern === 'string')
+      .map((entry) => String(entry.pattern))
+  } catch {
+    // No rc file, or one that does not load. The server itself reports a broken
+    // rc far more clearly than the loader could, and a dev server that refuses
+    // to start because of a watch list helps nobody.
+    return []
+  }
+}
+
+const reloadPatterns = await readReloadPatterns()
+
+/**
+ * The directory a pattern lives under — everything before its first wildcard.
+ *
+ * `resources/lang/**\/*.json` is watched as `resources/lang`. Watching the
+ * project root instead would pull in `node_modules` and the build output.
+ */
+function watchRootOf(pattern: string): string {
+  const segments = pattern.replace(/^\.\//, '').split('/')
+  const fixed: string[] = []
+  for (const segment of segments) {
+    if (/[*?{[]/.test(segment)) break
+    fixed.push(segment)
+  }
+  // A pattern that is a bare glob has no directory to narrow to.
+  return fixed.slice(0, -1).join('/') || fixed.join('/')
+}
+
 const relativeToRoot = (file: string): string => relative(root, file).replace(/\\/g, '/')
 const matchesBoundary = globMatcher(boundaries)
-const matchesRestartGlob = globMatcher(restart)
+const matchesRestartGlob = globMatcher([...restart, ...reloadPatterns])
 
 const graph = new HotGraph({
   isBoundary: (file) => matchesBoundary(relativeToRoot(file)),
@@ -126,7 +177,12 @@ function sayNow(line: string): void {
 
 watchProject({
   root,
-  directories: WATCH_DIRS,
+  directories: [
+    ...WATCH_DIRS,
+    // Whatever a `reloadServer: true` entry named, and nothing else: the
+    // directories above are the ones the graph can reason about.
+    ...reloadPatterns.map(watchRootOf).filter((dir) => dir !== ''),
+  ],
   files: [...restartFiles].map((file) => relative(root, file)),
   onChange: (file) => {
     const decision = graph.decide(file)

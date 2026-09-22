@@ -7,9 +7,16 @@
  * what they need is to be right, not fast.
  *
  * The dialect is the one those files already use:
- *   *   any run of characters inside one path segment
- *   **  any number of segments, including none
- *   ?   exactly one character inside a segment
+ *   *      any run of characters inside one path segment
+ *   **     any number of segments, including none
+ *   ?      exactly one character inside a segment
+ *   {a,b}  either alternative
+ *
+ * The brace form is the one a `metaFiles` entry uses —
+ * `resources/lang/**\/*.{json,yaml,yml}` — and it has to be understood on this
+ * side too: the CLI matches the same pattern when it copies those files into
+ * the build, and a dialect that differed between the two would let an entry
+ * copy at build time and never fire in development, or the reverse.
  *
  * A leading `./` is optional, and matching is done on POSIX-shaped paths
  * relative to the project root, so a Windows checkout and a Linux one read the
@@ -41,6 +48,24 @@ export function globToRegExp(pattern: string): RegExp {
     if (char === '?') {
       out += '[^/]'
       continue
+    }
+    if (char === '{') {
+      const close = cleaned.indexOf('}', i)
+      if (close !== -1) {
+        // Alternatives are literal text, never nested globs: that is the whole
+        // of the form these patterns use, and a recursive reading would accept
+        // shapes the CLI's matcher does not.
+        const options = cleaned
+          .slice(i + 1, close)
+          .split(',')
+          .map((option) => option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        out += `(?:${options.join('|')})`
+        i = close
+        continue
+      }
+      // Unclosed: read literally rather than throwing. A pattern is a string in
+      // a config file, and a malformed one should match nothing, not take the
+      // dev server down at boot.
     }
     // Everything else is literal, including the characters a regular
     // expression would otherwise read as syntax.

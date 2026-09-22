@@ -491,3 +491,96 @@ describe('Codemods', () => {
     })
   })
 })
+
+describe('Codemods > addMetaFile', () => {
+  let tmpDir: string
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codemods-meta-'))
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  const RC = `import { defineConfig } from '@c9up/ream'
+
+export default defineConfig({
+  providers: [
+    () => import('@c9up/ream/events/provider'),
+  ],
+})
+`
+
+  function writeRc(content = RC): string {
+    const file = path.join(tmpDir, 'reamrc.ts')
+    fs.writeFileSync(file, content)
+    return file
+  }
+
+  function read(): string {
+    return fs.readFileSync(path.join(tmpDir, 'reamrc.ts'), 'utf8')
+  }
+
+  it('opens a metaFiles block when the rc file has none', async () => {
+    writeRc()
+    await createCodemods({ cwd: tmpDir }).addMetaFile('resources/lang/**/*.json', false)
+
+    const rc = read()
+    expect(rc).toContain("{ pattern: 'resources/lang/**/*.json', reloadServer: false }")
+    // Beside `providers`, not inside it.
+    expect(rc.indexOf('metaFiles:')).toBeLessThan(rc.indexOf('providers:'))
+  })
+
+  it('records the reloadServer flag it was given', async () => {
+    writeRc()
+    await createCodemods({ cwd: tmpDir }).addMetaFile('config/tokens.json', true)
+    expect(read()).toContain('reloadServer: true')
+  })
+
+  it('defaults to NOT restarting, as upstream registers translations', async () => {
+    writeRc()
+    await createCodemods({ cwd: tmpDir }).addMetaFile('resources/lang/**/*.json')
+    expect(read()).toContain('reloadServer: false')
+  })
+
+  it('appends into an existing block rather than opening a second one', async () => {
+    writeRc(`import { defineConfig } from '@c9up/ream'
+
+export default defineConfig({
+  metaFiles: [
+    { pattern: 'resources/views/**/*.edge', reloadServer: false },
+  ],
+  providers: [],
+})
+`)
+    await createCodemods({ cwd: tmpDir }).addMetaFile('resources/lang/**/*.json', false)
+
+    const rc = read()
+    expect(rc.match(/metaFiles\s*:/g)).toHaveLength(1)
+    expect(rc).toContain('resources/views/**/*.edge')
+    expect(rc).toContain('resources/lang/**/*.json')
+  })
+
+  it('is idempotent on the pattern, so re-running configure adds nothing', async () => {
+    writeRc()
+    const codemods = createCodemods({ cwd: tmpDir })
+    await codemods.addMetaFile('resources/lang/**/*.json', false)
+    const once = read()
+    await codemods.addMetaFile('resources/lang/**/*.json', false)
+    expect(read()).toBe(once)
+  })
+
+  it('refuses when there is no rc file to edit', async () => {
+    await expect(
+      createCodemods({ cwd: tmpDir }).addMetaFile('resources/lang/**/*.json', false),
+    ).rejects.toThrow(/reamrc\.ts not found/)
+  })
+
+  it('says what it could not find when the rc file has no providers block', async () => {
+    writeRc(`export default {}\n`)
+    await expect(
+      createCodemods({ cwd: tmpDir }).addMetaFile('resources/lang/**/*.json', false),
+    ).rejects.toThrow(/providers: \[/)
+  })
+})

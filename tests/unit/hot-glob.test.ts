@@ -53,3 +53,43 @@ describe('dev > boundary globs', () => {
     expect(globMatcher([])('anything.ts')).toBe(false)
   })
 })
+
+describe('globToRegExp > brace alternatives', () => {
+  it('accepts any of the alternatives', () => {
+    // The shape a `metaFiles` entry uses for translations.
+    const matches = globMatcher(['resources/lang/**/*.{json,yaml,yml}'])
+    expect(matches('resources/lang/en.json')).toBe(true)
+    expect(matches('resources/lang/fr/deep.yaml')).toBe(true)
+    expect(matches('resources/lang/it.yml')).toBe(true)
+  })
+
+  it('rejects an extension the braces do not list', () => {
+    const matches = globMatcher(['resources/lang/**/*.{json,yaml,yml}'])
+    expect(matches('resources/lang/en.txt')).toBe(false)
+    expect(matches('public/en.json')).toBe(false)
+  })
+
+  it('keeps the alternatives literal rather than reading them as globs', () => {
+    // `a.b` must not match `axb`: an alternative is text, not a pattern.
+    const matches = globMatcher(['x/{a.b,c}.json'])
+    expect(matches('x/a.b.json')).toBe(true)
+    expect(matches('x/axb.json')).toBe(false)
+    expect(matches('x/c.json')).toBe(true)
+  })
+
+  it('reads an unclosed brace literally instead of throwing', () => {
+    // A pattern is a string in a config file; a malformed one must match
+    // nothing rather than take the dev server down at boot.
+    expect(() => globMatcher(['resources/{json'])).not.toThrow()
+    expect(globMatcher(['resources/{json'])('resources/en.json')).toBe(false)
+    expect(globMatcher(['resources/{json'])('resources/{json')).toBe(true)
+  })
+
+  it('agrees with the CLI on the same pattern, which is the point', () => {
+    // The CLI matches this pattern when it copies the files into the build.
+    // A dialect that differed would copy at build time and never fire in dev.
+    const matches = globMatcher(['resources/**/*.{json,yaml}'])
+    expect(matches('resources/lang/en.json')).toBe(true)
+    expect(matches('resources/views/home.edge')).toBe(false)
+  })
+})

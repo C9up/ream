@@ -17,7 +17,7 @@ import { Application } from './Application.js'
 import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
-import { HMR_PATH, hmrClientScript, hmrToken } from './dev/hmr.js'
+import { hmrClientScript, hmrEndpoint } from './dev/hmr.js'
 import type { DirectoriesNode } from './directories.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
@@ -137,6 +137,35 @@ export interface ReamrcConfig {
    * `defineConfig`, which is a strange way to learn that the option exists.
    */
   assets?: AssetsConfig
+  /**
+   * Files that are not modules but belong to the application.
+   *
+   * Translations, view templates, a mail signature: the build has no reason to
+   * know about them, and without being told it ships a `dist/` that boots and
+   * then cannot find them. Every pattern here is copied into the build output,
+   * keeping its path relative to the project root.
+   *
+   * `reloadServer` decides what a change does in DEVELOPMENT, and the default
+   * is the interesting half. Upstream registers translations with `false` —
+   * the files are watched so the build copies them, and an edit does NOT
+   * restart the server. A package that genuinely needs a restart asks for one
+   * by passing `true`.
+   */
+  metaFiles?: MetaFileConfig[]
+}
+
+/**
+ * One `metaFiles` entry.
+ *
+ * `reloadServer` is required rather than defaulted: whether an edit costs a
+ * restart is the whole decision this entry exists to record, and a default
+ * would let it be made by accident.
+ */
+export interface MetaFileConfig {
+  /** Glob, relative to the project root — `resources/lang/**\/*.json`. */
+  pattern: string
+  /** Restart the development server when a matching file changes. */
+  reloadServer: boolean
 }
 
 /** One test suite, as declared in the rc file (AdonisJS `tests.suites[]`). */
@@ -709,7 +738,6 @@ export class Ignitor {
     // anything. Registered in `ready()` it came up after the server was already
     // serving, so a page loaded in that window polled a route that did not
     // exist yet.
-    this.#registerDevReloadRoute()
 
     // Providers start BEFORE the preload files, matching upstream's warm-up
     // order (`providers.start()` → `starting` hooks → preloads). A preload is
@@ -797,7 +825,10 @@ export class Ignitor {
         container: this.#app.container,
         exceptionHandler:
           this.#server.getErrorHandler() ?? new ExceptionHandler(!this.#app.inProduction),
-        serverMiddleware: this.#server.getServerMiddleware(),
+        serverMiddleware: [
+          ...this.#frameworkServerMiddleware(),
+          ...this.#server.getServerMiddleware(),
+        ],
         routerMiddleware: this.#router.getRouterMiddleware(),
         devReloadScript: this.#devReloadScript(),
         onError: (error, ctx) => {
@@ -1288,19 +1319,18 @@ export class Ignitor {
   }
 
   /**
-   * Serve the token the injected script polls.
+   * The server middleware the framework itself contributes, ahead of the
+   * application's.
    *
-   * Registered on the router in development, next to the application's own
-   * routes, so it goes through the same server as everything else. Plain text
-   * and uncached: it is read once a second and its whole content is the answer.
+   * Only the hot-reload token, and only in development. It answers first
+   * because the poll arrives once a second per open tab and its content
+   * depends on nothing — no user, no session, no body. Behind an application's
+   * middleware it paid for the whole stack each time, which for anything that
+   * resolves a user from a cookie meant a `SELECT` per second for a string
+   * holding a process id and a counter.
    */
-  #registerDevReloadRoute(): void {
-    if (!this.isDevMode()) return
-    this.#router.get(HMR_PATH, ({ response }) => {
-      response.header('cache-control', 'no-store')
-      response.header('content-type', 'text/plain; charset=utf-8')
-      response.send(hmrToken())
-    })
+  #frameworkServerMiddleware(): MiddlewareFunction[] {
+    return this.isDevMode() ? [hmrEndpoint()] : []
   }
 
   getPhase(): string {
