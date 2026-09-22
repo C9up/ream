@@ -63,6 +63,18 @@ import type { AppEnvironment } from './Application.js'
 /**
  * Reamrc config — like AdonisJS adonisrc.ts with defineConfig().
  */
+/** A command the CLI runs on the application's behalf. */
+export interface AssetsCommand {
+  command: string
+  args?: string[]
+}
+
+/** What `assets` declares: a watcher for `dev`, a one-shot for `build`. */
+export interface AssetsConfig {
+  devServer?: AssetsCommand
+  build?: AssetsCommand
+}
+
 export interface ReamrcConfig {
   providers?: Array<
     | (() => Promise<{ default: new (app: AppContext) => ProviderContract }>)
@@ -113,6 +125,18 @@ export interface ReamrcConfig {
   }
   /** Test suites and runner settings — the `tests` block of adonisrc.ts. */
   tests?: TestsConfig
+  /**
+   * The asset pipeline `ream dev` and `ream build` drive alongside the app.
+   *
+   * `devServer` is started beside the development server and killed with it;
+   * `build` runs once, before the TypeScript build, and a non-zero exit stops
+   * the build rather than shipping a bundle nobody rebuilt.
+   *
+   * Declared here because the CLI already reads it: without the type an app
+   * that configures its asset build gets an excess-property error from
+   * `defineConfig`, which is a strange way to learn that the option exists.
+   */
+  assets?: AssetsConfig
 }
 
 /** One test suite, as declared in the rc file (AdonisJS `tests.suites[]`). */
