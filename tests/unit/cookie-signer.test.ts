@@ -10,6 +10,24 @@ import { defined } from '../__helpers__/defined.js'
 
 const signer = new CookieSigner('super-secret-key')
 
+/**
+ * Change one character of a base64url part to a different one.
+ *
+ * Tampering has to be a difference, not a constant. Overwriting the last two
+ * characters with a fixed `AA` was a no-op whenever the part already ended in
+ * `AA` — for a 16-byte GCM tag that is about one run in 266, because its final
+ * character carries only two significant bits and is therefore always one of
+ * `A`, `Q`, `g` or `w`. The test then asserted that an untampered value failed
+ * to decrypt, and failed.
+ *
+ * Swapping the last character between two of those four keeps the part the
+ * same length and canonical, so what is being tested is GCM rejecting altered
+ * content rather than a decoder rejecting a malformed string.
+ */
+function tamper(part: string): string {
+  return `${part.slice(0, -1)}${part.endsWith('A') ? 'Q' : 'A'}`
+}
+
 describe('CookieSigner > sign / unsign', () => {
   it('round-trips a signed value', () => {
     const signed = signer.sign('session=abc')
@@ -64,8 +82,21 @@ describe('CookieSigner > encrypt / decrypt', () => {
 
   it('returns null when the auth tag / ciphertext is tampered (GCM fails)', () => {
     const [iv, data, tag] = signer.encrypt('top-secret').split('.')
-    expect(signer.decrypt(`${iv}.${data}AA.${tag}`)).toBeNull()
-    expect(signer.decrypt(`${iv}.${data}.${defined(tag).slice(0, -2)}AA`)).toBeNull()
+    expect(signer.decrypt(`${iv}.${tamper(defined(data))}.${tag}`)).toBeNull()
+    expect(signer.decrypt(`${iv}.${data}.${tamper(defined(tag))}`)).toBeNull()
+  })
+
+  it('tampers by a difference, so the tamper is never a no-op', () => {
+    // The guard on the test above. It used to overwrite the last two
+    // characters with a literal `AA`, which changed nothing whenever the part
+    // already ended in `AA`, and then asserted that an untampered value failed
+    // to decrypt. Over real tags that came up about once in 266 runs.
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const [, data, tag] = signer.encrypt(`value-${attempt}`).split('.')
+      expect(tamper(defined(data))).not.toBe(data)
+      expect(tamper(defined(tag))).not.toBe(tag)
+      expect(tamper(defined(tag))).toHaveLength(defined(tag).length)
+    }
   })
 
   it('returns null when decrypted with a different secret', () => {
