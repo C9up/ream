@@ -5,161 +5,143 @@
  *
  *   node --import @swc-node/register/esm-register --import @c9up/ream/hot bin/server.ts
  *
- * It is a thin shim over `hot-hook`, which does the actual work: it registers
- * an ESM loader that tracks the import graph, and when a file inside a declared
- * boundary changes it invalidates just that module instead of the process. The
- * `hotHook` key in the application's `package.json` configures it, exactly as
- * upstream reads it.
+ * It replaces a module that changed instead of the process that was serving it,
+ * so the container, the pools and the connections survive a save.
  *
- * NAMED DEVIATION — why this file exists at all.
+ * NAMED DEVIATION — this is ream's own, where AdonisJS uses `hot-hook`.
  *
- * Upstream's dev server is itself a Node process: it forks the app, so the two
- * talk over Node's IPC channel, and `hot-hook` reports a change it cannot swap
- * by calling `process.send({ type: 'hot-hook:full-reload' })`. Our dev server is
- * a Rust binary. A process it spawns has NO IPC channel, so `process.send` is
- * `undefined` and that message goes nowhere: the server would keep serving the
- * old module and say nothing.
+ * Upstream ships that package in its starter kit, which means every application
+ * installs it, and one created before the convention existed silently loses hot
+ * reloading. The parts that once justified a library are now in Node:
+ * `module.registerHooks` gives the import graph, `fs.watch` gives the changes.
+ * What is left is the decision of what to invalidate, which is this file and
+ * its three neighbours — and no entry in anyone's `package.json`.
  *
- * `hot.init()` takes an `onFullReloadAsked` callback for exactly this case, and
- * that is the whole of the shim: turn "I cannot hot-swap this" into an exit
- * code the Rust parent understands and restarts on. Everything else is
- * upstream's behaviour, unmodified.
+ * The graph comes from the resolver rather than from reading files: a resolve
+ * hook is handed the importer and the imported, which is exactly an edge, and
+ * it sees a dynamic import at the moment it happens rather than guessing at it
+ * from the source.
  */
 
+import { existsSync, writeSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { registerHooks } from 'node:module'
+import { dirname, relative, resolve as resolvePath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { fullReloadNotice } from './dev/fullReload.js'
 import { hotReloadHappened } from './dev/hmr.js'
-import { type HotHookConfig, readHotHookConfig } from './dev/hotConfig.js'
+import { readHotHookConfig } from './dev/hotConfig.js'
+import { globMatcher } from './dev/hotGlob.js'
+import { HotGraph } from './dev/hotGraph.js'
+import { watchProject } from './dev/hotWatcher.js'
 import { envFileNames } from './env/loadEnvFiles.js'
 
 /** Exit code meaning "restart me" — see `EXIT_RESTART` in the CLI's dev module. */
 const FULL_RELOAD_EXIT_CODE = 75
 
-interface HotHook {
-  init(options: {
-    rootDirectory: string
-    root?: string
-    boundaries?: string[]
-    restart?: string[]
-    ignore?: string[]
-    throwWhenBoundariesAreNotDynamicallyImported?: boolean
-    onFullReloadAsked?: () => void
-  }): Promise<void>
-}
+/** The query parameter that makes the loader fetch a module again. */
+const VERSION_PARAM = 'ream_hot'
 
-const { existsSync, writeSync } = await import('node:fs')
-const { readFile } = await import('node:fs/promises')
-const { dirname, relative, resolve } = await import('node:path')
+/** Directories a project keeps its own code in — the CLI watches the same list. */
+const WATCH_DIRS = ['app', 'bin', 'config', 'start', 'database', 'providers', 'commands']
 
-const packageJsonPath = resolve(process.cwd(), 'package.json')
-let config: HotHookConfig = {}
+const packageJsonPath = resolvePath(process.cwd(), 'package.json')
+const root = dirname(packageJsonPath)
+
+let config = {}
 try {
   config = readHotHookConfig(JSON.parse(await readFile(packageJsonPath, 'utf8')))
 } catch {
-  // No package.json, or unreadable: fall through to the conventional
-  // boundaries below rather than stopping dev over it.
+  // No package.json, or unreadable: a project with no boundaries declared gets
+  // a working server that restarts on change, which is the old behaviour.
 }
+const { boundaries = [], restart = [] } = config as { boundaries?: string[]; restart?: string[] }
 
-// `hot-hook` is an optional peer, declared by the application because it is a
-// dev dependency there and has no business in a production install. Imported by
-// specifier built at runtime so a production bundle never resolves it.
-function isHotHook(value: unknown): value is HotHook {
-  return (
-    typeof value === 'object' && value !== null && typeof Reflect.get(value, 'init') === 'function'
-  )
-}
+// Env files are not modules: nothing imports one, so the graph never sees them
+// and an edit to `.env` did nothing at all — the values are read once, at boot.
+// They always restart.
+const restartFiles = new Set(
+  envFileNames()
+    .map((name) => resolvePath(root, name))
+    .filter((file) => existsSync(file)),
+)
 
-// `hot-hook` belongs to the APPLICATION: it is a dev dependency there and has
-// no business in a production install of the framework. So it is resolved from
-// the project directory rather than from this file — under pnpm's strict layout
-// a bare `import("hot-hook")` here looks inside @c9up/ream and finds nothing.
-// It is the same reason upstream passes `hot-hook/register` from the app's own
-// cwd instead of re-exporting it from the framework.
-const { createRequire } = await import('node:module')
-const { pathToFileURL } = await import('node:url')
+const relativeToRoot = (file: string): string => relative(root, file).replace(/\\/g, '/')
+const matchesBoundary = globMatcher(boundaries)
+const matchesRestartGlob = globMatcher(restart)
 
-let hot: HotHook | undefined
-try {
-  const resolved = createRequire(packageJsonPath).resolve('hot-hook')
-  const module: unknown = await import(pathToFileURL(resolved).href)
-  const candidate =
-    typeof module === 'object' && module !== null ? Reflect.get(module, 'hot') : undefined
-  if (!isHotHook(candidate)) {
-    throw new Error('hot-hook did not expose a `hot` object with init()')
-  }
-  hot = candidate
-} catch (error) {
-  // Loud, and it names the fix. Silence here would start a perfectly healthy
-  // server that never picks up an edit, which reads as "HMR is broken" rather
-  // than "HMR is not installed".
-  //
-  // It does NOT throw: a dev server that refuses to start is worse than one
-  // without hot reloading, and the CLI only loads this file when it has
-  // already seen hot-hook in the project — so reaching here means it went
-  // missing under a running session.
-  console.error(
-    `[ream] hot module replacement is unavailable: ${error instanceof Error ? error.message : String(error)}\n` +
-      '[ream] Install it with: pnpm add -D hot-hook, then restart `ream dev`.\n' +
-      '[ream] Until then the server runs, but an edit will not be picked up.',
-  )
-}
+const graph = new HotGraph({
+  isBoundary: (file) => matchesBoundary(relativeToRoot(file)),
+  isRestart: (file) => restartFiles.has(file) || matchesRestartGlob(relativeToRoot(file)),
+})
 
-// Impersonate the IPC channel upstream's dev server provides.
-//
-// hot-hook reports BOTH of its outcomes through `process.send`: a change it
-// swapped in place (`hot-hook:invalidated`) and one it could not
-// (`hot-hook:full-reload`). Under a Node parent that function exists and both
-// arrive; under our Rust parent it is `undefined` and both are dropped —
-// `onFullReloadAsked` alone recovers only half of that, leaving a hot swap
-// invisible to the very process it happened in, and so to the browser.
-//
-// This is not a trick played on hot-hook: it is exactly the contract it
-// expects, provided by us instead of by Node.
-const previousSend = process.send
-process.send = (message: unknown, ...rest: unknown[]): boolean => {
-  const type =
-    typeof message === 'object' && message !== null ? Reflect.get(message, 'type') : undefined
-  if (type === 'hot-hook:invalidated') {
-    hotReloadHappened()
-  }
-  const notice = fullReloadNotice(message, (file) => relative(process.cwd(), file))
-  if (notice !== undefined) {
-    // Written synchronously because the very next thing hot-hook does is call
-    // `onFullReloadAsked`, which exits: a piped stdout — what `ream dev` hands
-    // this process when it runs an asset watcher alongside — is asynchronous,
-    // and the line would be dropped on the way out.
-    try {
-      writeSync(1, `${notice}\n`)
-    } catch {
-      // The parent can close the pipe first on Ctrl-C. Losing the line is
-      // fine; throwing here would break the message hot-hook is delivering.
+/**
+ * Track every edge the resolver reports, and hand back a versioned URL for a
+ * module that has been invalidated.
+ *
+ * The version travels in the URL because that is the only handle V8 offers: a
+ * module is keyed by its URL, so a different one is a different module. The
+ * parameter is stripped off the importer before delegating, or a relative
+ * specifier would be resolved against a URL that does not name a directory.
+ */
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    let parentURL = context.parentURL
+    let parentPath: string | undefined
+    if (typeof parentURL === 'string' && parentURL.startsWith('file:')) {
+      const url = new URL(parentURL)
+      if (url.searchParams.has(VERSION_PARAM)) {
+        url.searchParams.delete(VERSION_PARAM)
+        parentURL = url.href
+      }
+      parentPath = fileURLToPath(url)
     }
+
+    const result = nextResolve(specifier, { ...context, parentURL })
+    if (!result.url.startsWith('file:')) return result
+
+    const resolved = new URL(result.url)
+    resolved.searchParams.delete(VERSION_PARAM)
+    const file = fileURLToPath(resolved)
+    graph.link(file, parentPath)
+
+    const version = graph.version(file)
+    if (version === 0) return result
+    resolved.searchParams.set(VERSION_PARAM, String(version))
+    return { ...result, url: resolved.href }
+  },
+})
+
+/** Print a line that must survive the exit on the very next statement. */
+function sayNow(line: string): void {
+  // Synchronously: a piped stdout — what `ream dev` hands this process when it
+  // runs an asset watcher alongside — is asynchronous, and the line would be
+  // dropped on the way out.
+  try {
+    writeSync(1, `${line}\n`)
+  } catch {
+    // The parent can close the pipe first on Ctrl-C. Losing the line is fine.
   }
-  // If a real channel ever exists (embedded under a Node supervisor) it still
-  // gets its message: this observes, it does not intercept.
-  if (typeof previousSend === 'function') {
-    return Reflect.apply(previousSend, process, [message, ...rest]) === true
-  }
-  return true
 }
 
-// Env files are not modules: nothing imports one, so hot-hook's dependency
-// tree never sees them and an edit to `.env` did nothing at all until the next
-// manual restart — the values are read once, at boot. Upstream's dev server
-// watches them explicitly and treats a change as a full restart; `restart` is
-// where hot-hook takes the same list. Absolute, because chokidar 5 resolves a
-// relative path against the cwd rather than against hot-hook's root.
-const envFiles = envFileNames()
-  .map((name) => resolve(dirname(packageJsonPath), name))
-  .filter((file) => existsSync(file))
-
-await hot?.init({
-  ...config,
-  // After the spread: the application's own `restart` entries are kept, the
-  // env files are added to them.
-  restart: [...(config.restart ?? []), ...envFiles],
-  rootDirectory: dirname(packageJsonPath),
-  root: config.root ? resolve(dirname(packageJsonPath), config.root) : undefined,
-  // Exiting on a known code is how the Rust parent learns it must restart —
-  // see `EXIT_RESTART` in the CLI's dev module.
-  onFullReloadAsked: () => process.exit(FULL_RELOAD_EXIT_CODE),
+watchProject({
+  root,
+  directories: WATCH_DIRS,
+  files: [...restartFiles].map((file) => relative(root, file)),
+  onChange: (file) => {
+    const decision = graph.decide(file)
+    if (decision.kind === 'ignore') return
+    if (decision.kind === 'reload') {
+      sayNow(fullReloadNotice(decision.file, decision.reason, relativeToRoot))
+      // Exiting on a known code is how the Rust parent learns it must restart —
+      // see `EXIT_RESTART` in the CLI's dev module.
+      process.exit(FULL_RELOAD_EXIT_CODE)
+    }
+    // The router caches a promoted controller per route, and the kernel drops
+    // that cache when this counter moves. Without it the swap happens and the
+    // process keeps serving the class it promoted: a stable PID and stale
+    // output, which is exactly how it was first reported.
+    hotReloadHappened()
+    sayNow(`[ream] hot swap — ${relativeToRoot(file)}`)
+  },
 })
