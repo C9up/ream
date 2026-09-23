@@ -116,6 +116,7 @@ universe through the container, never via a static import.
 | [@c9up/helix](https://github.com/C9up/helix) | Framework-agnostic test runtime |
 | [@c9up/helix-plugin-ream](https://github.com/C9up/helix-plugin-ream) | The ream↔helix bridge (boots a Ream app under test) |
 | [@c9up/inker](https://github.com/C9up/inker) | Server-side templating |
+| [@c9up/lumen](https://github.com/C9up/lumen) | Terminal UI — colours, tables, spinners, task lists (what the console prints with) |
 | [@c9up/nebula](https://github.com/C9up/nebula) | shadcn/ui ported to Aurora, as atomic design |
 | [@c9up/nova](https://github.com/C9up/nova) | Web Push notifications (VAPID) |
 | [@c9up/parsec](https://github.com/C9up/parsec) | Metrics & telemetry (Prometheus exporter, optional OpenTelemetry) |
@@ -133,6 +134,7 @@ universe through the container, never via a static import.
 | [@c9up/station](https://github.com/C9up/station) | Admin scaffolding |
 | [@c9up/transit](https://github.com/C9up/transit) | Federated sign-in (SAML 2.0, LDAP, OpenID Connect, OAuth1, OAuth2) |
 | [@c9up/vellum](https://github.com/C9up/vellum) | PDF (render, read, reshape, stamp, forms, signing, verification) |
+| [@c9up/visa](https://github.com/C9up/visa) | OAuth 2.1 authorization server (PKCE, rotating refresh tokens, introspection) |
 | [@c9up/warden](https://github.com/C9up/warden) | Authentication |
 
 ## License
