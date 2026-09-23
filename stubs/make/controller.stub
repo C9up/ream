@@ -1,0 +1,30 @@
+---
+to: app/{{ module }}/{{ className }}.ts
+---
+import type { HttpContext } from '@c9up/ream'
+
+export class {{ className }} {
+  async index({ response }: HttpContext) {
+    response.status(200).json([])
+  }
+
+  async show({ params, response }: HttpContext) {
+    const { id } = params
+    response.status(200).json({ id })
+  }
+
+  async store({ request, response }: HttpContext) {
+    const data = request.body()
+    response.status(201).json({ created: true })
+  }
+
+  async update({ params, response }: HttpContext) {
+    const { id } = params
+    response.status(200).json({ id, updated: true })
+  }
+
+  async destroy({ params, response }: HttpContext) {
+    const { id } = params
+    response.status(204).send('')
+  }
+}

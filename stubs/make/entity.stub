@@ -1,0 +1,11 @@
+---
+to: app/{{ module }}/{{ name }}.ts
+---
+import { Entity, Column, PrimaryKey, BaseEntity } from '@c9up/atlas'
+
+@Entity('{{ tableName }}')
+export class {{ className }} extends BaseEntity {
+  @PrimaryKey() id!: string
+  @Column() createdAt!: string
+  @Column() updatedAt!: string
+}

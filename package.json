@@ -111,6 +111,10 @@
       "types": "./src/helpers/fs.ts",
       "import": "./src/helpers/fs.ts"
     },
+    "./stubs": {
+      "types": "./src/stubs/index.ts",
+      "import": "./src/stubs/index.ts"
+    },
     "./testing": {
       "types": "./src/testing/TestClient.ts",
       "import": "./src/testing/TestClient.ts"
@@ -216,6 +220,7 @@
     "LICENSE",
     "README.md",
     "dist",
+    "stubs",
     "index.*.node",
     "scheduler.*.node",
     "events.*.node",
@@ -386,6 +391,10 @@
       "./helpers/fs": {
         "types": "./dist/helpers/fs.d.ts",
         "import": "./dist/helpers/fs.js"
+      },
+      "./stubs": {
+        "types": "./dist/stubs/index.d.ts",
+        "import": "./dist/stubs/index.js"
       },
       "./testing": {
         "types": "./dist/testing/TestClient.d.ts",

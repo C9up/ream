@@ -1,0 +1,13 @@
+---
+to: app/listeners/{{ fileName }}.ts
+---
+{{ importLine }}/**
+ * Register it with the emitter:
+ *   {{ registration }}
+ */
+export default class {{ className }} {
+  async handle(event: {{ eventType }}): Promise<void> {
+    // React to the event.
+    void event
+  }
+}

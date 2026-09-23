@@ -1,0 +1,13 @@
+---
+to: app/events/{{ fileName }}.ts
+---
+import { BaseEvent } from '@c9up/ream/events'
+
+export default class {{ className }} extends BaseEvent {
+  /** Name listeners subscribe to. Defaults to the class name when omitted. */
+  static eventName = '{{ fileName }}'
+
+  constructor(public payload: Record<string, unknown>) {
+    super()
+  }
+}

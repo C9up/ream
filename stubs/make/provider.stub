@@ -1,0 +1,26 @@
+---
+to: providers/{{ className }}.ts
+---
+import { Provider } from '@c9up/ream'
+
+export default class {{ className }} extends Provider {
+  register() {
+    // Register bindings in the container
+  }
+
+  async boot() {
+    // Connect and verify
+  }
+
+  async start() {
+    // Runs before HTTP server starts
+  }
+
+  async ready() {
+    // Application operational
+  }
+
+  async shutdown() {
+    // Cleanup
+  }
+}

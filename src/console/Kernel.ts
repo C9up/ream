@@ -18,6 +18,7 @@ import { buildFlag } from './decorators.js'
 import { ExceptionHandler } from './ExceptionHandler.js'
 import HelpCommand from './HelpCommand.js'
 import ListCommand from './ListCommand.js'
+import { MAKE_COMMANDS } from './make/commands.js'
 import { assignParsedValues, parseArgv, validateParsed } from './parser.js'
 import { Prompt } from './prompts.js'
 import { commandExec } from './tracing.js'
@@ -228,6 +229,14 @@ export class Kernel {
     // for a name only the dispatcher knows.
     this.register(HelpCommand)
     this.#defaults.add(HelpCommand.commandName)
+
+    // The generators. Registered as defaults, so an application that defines
+    // its own `make:controller` replaces this one rather than colliding with
+    // it — the same standing an app has over `list` and `help`.
+    for (const command of MAKE_COMMANDS) {
+      this.register(command)
+      this.#defaults.add(command.commandName)
+    }
 
     // Console's `--help`, a global flag whose listener runs the help command.
     this.defineFlag('help', {
@@ -460,7 +469,18 @@ export class Kernel {
       for (const metadata of await loader.getMetaData()) {
         // Metadata only — the class is imported by `find()`, when someone asks
         // for the command. `loading` / `loaded` belong there too.
-        if (!this.#commands.has(metadata.commandName)) {
+        //
+        // A name the kernel registered ITSELF gives way: `list`, `help` and
+        // the generators are defaults, and an application that ships its own
+        // `make:controller` must get it. Without this the application declared
+        // a command that silently never ran — the same rule `register()`
+        // applies, applied on the path an application actually uses.
+        const isDefault = this.#defaults.has(metadata.commandName)
+        if (!this.#commands.has(metadata.commandName) || isDefault) {
+          if (isDefault) {
+            this.#commands.delete(metadata.commandName)
+            this.#defaults.delete(metadata.commandName)
+          }
           this.#pending.set(metadata.commandName, { metadata, loader })
         }
         // The metadata is what a manifest-style loader publishes; its aliases

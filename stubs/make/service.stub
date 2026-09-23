@@ -1,0 +1,27 @@
+---
+to: app/{{ module }}/{{ className }}.ts
+---
+import { Service } from '@c9up/ream'
+
+@Service()
+export class {{ className }} {
+  async findAll() {
+    return []
+  }
+
+  async findById(id: string) {
+    return null
+  }
+
+  async create(data: Record<string, unknown>) {
+    return data
+  }
+
+  async update(id: string, data: Record<string, unknown>) {
+    return { id, ...data }
+  }
+
+  async delete(id: string) {
+    return { id }
+  }
+}

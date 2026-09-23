@@ -1,0 +1,29 @@
+---
+to: commands/{{ fileName }}.ts
+---
+import { BaseCommand, flags } from '@c9up/ream/console'
+import type { CommandOptions } from '@c9up/ream/console'
+
+export default class {{ className }} extends BaseCommand {
+  static commandName = '{{ name }}'
+  static description = 'TODO describe what this command does'
+
+  /**
+   * `startApp` boots providers and the container before `run()`. Off by
+   * default: a command that only touches the filesystem has no
+   * reason to open a database connection. Turn it on to reach `this.app`.
+   */
+  static options: CommandOptions = { startApp: false }
+
+  @flags.boolean({ description: 'Report what would happen without doing it' })
+  declare dryRun: boolean
+
+  async run(): Promise<void> {
+    if (this.dryRun) {
+      this.logger.info('Dry run — nothing was changed.')
+      return
+    }
+
+    this.logger.success('{{ name }} ran.')
+  }
+}

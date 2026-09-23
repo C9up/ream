@@ -198,24 +198,27 @@ describe('Kernel', () => {
     }
 
     const kernel = new Kernel().registerMany([Provision, MakeController, Zulu])
-    expect(kernel.getCommands().map((command) => command.commandName)).toEqual([
-      'alpha',
-      'help',
-      'list',
-      'make:controller',
-      'provision',
-    ])
+    const names = kernel.getCommands().map((command) => command.commandName)
+
+    // Sorted, whatever order they were registered in — which is the point,
+    // and is asserted without enumerating the generators the kernel ships.
+    expect(names).toEqual([...names].sort())
+    expect(names.indexOf('alpha')).toBeLessThan(names.indexOf('provision'))
+    expect(names).toContain('make:controller')
   })
 
   it('exposes the namespaces, their commands and near-miss suggestions', () => {
     const kernel = new Kernel().registerMany([Provision, MakeController])
 
-    expect(kernel.getNamespaces()).toEqual(['make'])
-    expect(kernel.getNamespaceCommands('make').map((c) => c.commandName)).toEqual([
+    // The kernel ships `make:` and `stubs:` of its own; the app's command is
+    // in there with them.
+    expect(kernel.getNamespaces()).toEqual(expect.arrayContaining(['make']))
+    expect(kernel.getNamespaceCommands('make').map((c) => c.commandName)).toContain(
       'make:controller',
-    ])
+    )
     // No namespace given: the commands that have none, not all of them.
     expect(kernel.getNamespaceCommands().map((c) => c.commandName)).toEqual([
+      'eject',
       'help',
       'list',
       'provision',
@@ -255,9 +258,12 @@ describe('Kernel', () => {
     const output = captured.out()
     captured.restore()
 
-    expect(JSON.parse(output).map((entry: { commandName: string }) => entry.commandName)).toEqual([
-      'make:controller',
-    ])
+    const listed = JSON.parse(output).map((entry: { commandName: string }) => entry.commandName)
+    // Only the namespace asked for — the app's command among the generators
+    // the kernel ships, and nothing outside `make`.
+    expect(listed).toContain('make:controller')
+    expect(listed.every((name: string) => name.startsWith('make:'))).toBe(true)
+    expect(listed).not.toContain('provision')
   })
 
   it('reports an unknown namespace instead of printing an empty list', async () => {
@@ -284,11 +290,10 @@ describe('Kernel', () => {
     captured.restore()
 
     expect(command.exitCode).toBe(0)
-    expect(JSON.parse(output).map((entry: { commandName: string }) => entry.commandName)).toEqual([
-      'help',
-      'list',
-      'provision',
-    ])
+    const listed = JSON.parse(output).map((entry: { commandName: string }) => entry.commandName)
+    // The three a hand-rolled dispatcher could not produce: the built-ins and
+    // the app's own, all through the registry.
+    expect(listed).toEqual(expect.arrayContaining(['help', 'list', 'provision']))
   })
 
   it("lets the application's own `list` replace the built-in one", async () => {
@@ -945,14 +950,13 @@ describe('Kernel — Console lifecycle and contracts', () => {
     // commands nobody is going to execute.
     expect(imported).toBe(0)
     expect(kernel.hasCommand('provision')).toBe(true)
-    expect(kernel.getCommands().map((command) => command.commandName)).toEqual([
-      'help',
-      'list',
-      'make:controller',
-      'provision',
-    ])
+    expect(kernel.getCommands().map((command) => command.commandName)).toEqual(
+      expect.arrayContaining(['help', 'list', 'make:controller', 'provision']),
+    )
+    // The loader's metadata wins over the generator the kernel registered
+    // under the same name — replacing a built-in is the whole point.
     expect(kernel.getCommand('make:controller')?.description).toBe('Generate a controller')
-    expect(kernel.getNamespaces()).toEqual(['make'])
+    expect(kernel.getNamespaces()).toEqual(expect.arrayContaining(['make']))
     expect(imported).toBe(0)
 
     // Asked for: imported, once.

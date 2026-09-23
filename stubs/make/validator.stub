@@ -1,0 +1,10 @@
+---
+to: app/{{ module }}/{{ className }}.ts
+---
+import { rules, schema } from '@c9up/rune'
+
+export const {{ className }} = schema({
+  // Define validation rules
+  // name: rules.string().min(1).max(255),
+  // email: rules.string().email(),
+})

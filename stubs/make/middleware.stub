@@ -1,0 +1,16 @@
+---
+to: app/middleware/{{ fileName }}_middleware.ts
+---
+import type { HttpContext } from '@c9up/ream'
+
+/**
+ * Register it in `start/kernel.ts`:
+ *   {{ registration }}
+ */
+export default class {{ className }} {
+  async handle(ctx: HttpContext, next: () => Promise<void>) {
+    // Runs before the route handler.
+    await next()
+    // Runs after it — the response is available here.
+  }
+}

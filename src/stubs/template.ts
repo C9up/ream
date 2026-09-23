@@ -78,7 +78,7 @@ function asIs(value: unknown): string {
 }
 
 const CURLY = /{{{?\s*([\s\S]*?)\s*}}}?/g
-const BLOCK = /^#\s*(\w[\w\d]*)\s*([^]*)/
+const BLOCK = /^#\s*(\w[\w\d]*)\s*([\s\S]*)/
 const ARGS = /([a-zA-Z$_][^\s=]*)\s*=\s*((["`'])(?:(?=(\\?))\4.)*?\3|{[^}]*}|\[[^\]]*]|\S+)/g
 
 /**
@@ -238,7 +238,7 @@ export function compile(
   options: TemplateOptions = {},
 ): (state: StubState) => string {
   const source = generate(input, options)
-  let render: (escape: (value: unknown) => string, blocks: unknown, state: StubState) => string
+  let render: (escaper: (value: unknown) => string, blocks: unknown, state: StubState) => string
   try {
     // eslint-disable-next-line no-new-func -- the whole point of a compiler
     render = new Function('$$e', '$$b', '$$s', source) as typeof render
@@ -247,9 +247,9 @@ export function compile(
       `This stub does not compile: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-  const escape = options.escape ?? asIs
+  const escaper = options.escape ?? asIs
   const blocks = options.blocks ?? {}
-  return (state: StubState) => render(escape, blocks, state)
+  return (state: StubState) => render(escaper, blocks, state)
 }
 
 /** Compile and render in one go. */
