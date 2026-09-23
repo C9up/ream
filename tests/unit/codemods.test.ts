@@ -584,3 +584,126 @@ export default defineConfig({
     ).rejects.toThrow(/providers: \[/)
   })
 })
+
+describe('Codemods — makeUsingStub', () => {
+  it('renders a stub and writes it where its front matter says', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      fs.mkdirSync(path.join(stubs, 'config'), { recursive: true })
+      fs.writeFileSync(
+        path.join(stubs, 'config', 'visa.stub'),
+        '---\nto: config/{{ name }}.ts\n---\nexport default { issuer: "{{ issuer }}" }\n',
+      )
+
+      const codemods = createCodemods({ cwd: project })
+      const result = await codemods.makeUsingStub(stubs, 'config/visa.stub', {
+        name: 'visa',
+        issuer: 'https://auth.test',
+      })
+
+      // The destination is rendered too, which is what lets one stub serve
+      // several outputs.
+      expect(result.path).toBe('config/visa.ts')
+      expect(fs.readFileSync(path.join(project, 'config/visa.ts'), 'utf8')).toBe(
+        'export default { issuer: "https://auth.test" }\n',
+      )
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+
+  it("prefers the application's published copy over the package's", async () => {
+    // What lets someone change the config a package generates without forking
+    // it — the rule Adonis calls "searches in publishTarget first".
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      fs.mkdirSync(path.join(stubs, 'config'), { recursive: true })
+      fs.writeFileSync(
+        path.join(stubs, 'config', 'visa.stub'),
+        '---\nto: config/visa.ts\n---\nshipped\n',
+      )
+      fs.mkdirSync(path.join(project, 'stubs', 'config'), { recursive: true })
+      fs.writeFileSync(
+        path.join(project, 'stubs', 'config', 'visa.stub'),
+        '---\nto: config/visa.ts\n---\npublished\n',
+      )
+
+      await createCodemods({ cwd: project }).makeUsingStub(stubs, 'config/visa.stub')
+
+      expect(fs.readFileSync(path.join(project, 'config/visa.ts'), 'utf8')).toBe('published\n')
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves an unknown placeholder alone rather than blanking it', async () => {
+    // A stub that silently loses a line is worse than one that visibly kept
+    // a `{{ }}` for someone to notice.
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      fs.writeFileSync(
+        path.join(stubs, 'x.stub'),
+        '---\nto: out.ts\n---\n{{ known }} {{ missing }}\n',
+      )
+      await createCodemods({ cwd: project }).makeUsingStub(stubs, 'x.stub', { known: 'ok' })
+      expect(fs.readFileSync(path.join(project, 'out.ts'), 'utf8')).toBe('ok {{ missing }}\n')
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a stub with no destination, and an unclosed front matter', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      fs.writeFileSync(path.join(stubs, 'nowhere.stub'), 'just a body\n')
+      fs.writeFileSync(path.join(stubs, 'broken.stub'), '---\nto: out.ts\nstill open\n')
+      const codemods = createCodemods({ cwd: project })
+
+      await expect(codemods.makeUsingStub(stubs, 'nowhere.stub')).rejects.toThrow(
+        /declares no destination/,
+      )
+      await expect(codemods.makeUsingStub(stubs, 'broken.stub')).rejects.toThrow(/never closed/)
+      await expect(codemods.makeUsingStub(stubs, 'missing.stub')).rejects.toThrow(/Stub not found/)
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a stub path that would escape the stubs root', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      const codemods = createCodemods({ cwd: project })
+      await expect(codemods.makeUsingStub(stubs, '../outside.stub')).rejects.toThrow(
+        /Unsafe stub path/,
+      )
+      await expect(codemods.makeUsingStub(stubs, '/etc/passwd')).rejects.toThrow(/Unsafe stub path/)
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+
+  it('will not write outside the project, whatever the stub declares', async () => {
+    // The destination goes through the same guard every generated path does.
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      fs.writeFileSync(path.join(stubs, 'evil.stub'), '---\nto: ../escaped.ts\n---\nnope\n')
+      await expect(
+        createCodemods({ cwd: project }).makeUsingStub(stubs, 'evil.stub'),
+      ).rejects.toThrow(/outside project root/)
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+})

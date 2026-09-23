@@ -272,8 +272,12 @@ export type {
 
 // ─── Codemods ───────────────────────────────────────────────
 
-export type { Codemods } from './Codemods.js'
-export { createCodemods } from './Codemods.js'
+export {
+  type Codemods,
+  createCodemods,
+  type GeneratedStub,
+  type StubState,
+} from './Codemods.js'
 
 // ─── Errors ─────────────────────────────────────────────────
 
@@ -385,4 +389,4 @@ export {
   StatsTracker,
 } from './scheduler/index.js'
 
-export const VERSION = '0.2.25'
+export const VERSION = '0.2.26'

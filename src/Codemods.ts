@@ -6,8 +6,85 @@ export interface Codemods {
   addMetaFile(pattern: string, reloadServer?: boolean): Promise<void>
   addEnvVars(vars: Record<string, string>): Promise<void>
   writeFile(filePath: string, content: string, options?: { force?: boolean }): Promise<void>
+  makeUsingStub(
+    stubsRoot: string,
+    stubPath: string,
+    state?: StubState,
+    options?: { force?: boolean },
+  ): Promise<GeneratedStub>
   registerCommand(importPath: string): Promise<void>
   registerMiddleware(importPath: string, options?: { tier?: 'server' | 'router' }): Promise<void>
+}
+
+/** What a stub may interpolate. Scalars only — a stub is text, not a program. */
+export type StubState = Record<string, string | number | boolean>
+
+/** Where a stub landed, and what it wrote there. */
+export interface GeneratedStub {
+  /** Relative to the project root. */
+  path: string
+  contents: string
+}
+
+/**
+ * A stub, split into the destination it declares and the body it renders.
+ *
+ * The format is the one `ream-cli`'s generators already read, deliberately:
+ * two stub dialects in one framework is a worse tax than the feature is worth.
+ *
+ *     ---
+ *     to: config/visa.ts
+ *     ---
+ *     export default defineConfig({ ... })
+ *
+ * Adonis declares the same thing with `{{{ exports({ to: … }) }}}`, which is
+ * JavaScript we cannot evaluate here — the front matter is that line, written
+ * so a text substitution can read it.
+ */
+function splitFrontMatter(template: string): { to?: string; body: string } {
+  const trimmed = template.replace(/^[\uFEFF\r\n]+/, '')
+  if (!trimmed.startsWith('---')) return { body: template }
+
+  const after = trimmed.slice(3).replace(/^\r?\n/, '')
+  const end = after.indexOf('\n---')
+  if (end === -1) {
+    throw new Error('[configure] stub front matter opened with `---` but never closed')
+  }
+  const block = after.slice(0, end)
+  const body = after.slice(end + 4).replace(/^\r?\n/, '')
+
+  let to: string | undefined
+  for (const rawLine of block.split('\n')) {
+    const line = rawLine.trim()
+    if (line === '' || line.startsWith('#')) continue
+    const separator = line.indexOf(':')
+    if (separator === -1) {
+      throw new Error(`[configure] unreadable stub front-matter line: \`${line}\``)
+    }
+    const key = line.slice(0, separator).trim()
+    const value = line.slice(separator + 1).trim()
+    if (key === 'to') to = value
+    // Any other key is ignored rather than refused: a stub written for a
+    // later version of this loader must not break the current one.
+  }
+  return to === undefined ? { body } : { to, body }
+}
+
+/**
+ * Substitute `{{ name }}`.
+ *
+ * NAMED DEVIATION — Adonis renders stubs with tempura (loops, conditionals,
+ * partials). This is substitution only, matching what `ream-cli` does for the
+ * same reason on its side: a template engine in the configure path is a second
+ * language in the framework, and a stub that needs one is a stub doing too
+ * much. An unknown placeholder is left ALONE rather than blanked — a stub that
+ * silently loses a line is worse than one that visibly kept a `{{ }}`.
+ */
+function renderStub(template: string, state: StubState): string {
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, key: string) => {
+    const value = state[key]
+    return value === undefined ? match : String(value)
+  })
 }
 
 type MiddlewareTier = 'server' | 'router'
@@ -69,6 +146,55 @@ function assertCanonicallyInside(root: string, filePath: string, displayName: st
 export function createCodemods(options?: { force?: boolean; cwd?: string }): Codemods {
   const force = options?.force ?? false
   const root = path.resolve(options?.cwd ?? process.cwd())
+
+  /**
+   * The one place a file reaches the disk.
+   *
+   * Shared by `writeFile` and `makeUsingStub` rather than copied, because what
+   * it does is not writing — it is refusing to write outside the project, to
+   * follow a symlink out of it, or over something that already exists.
+   */
+  async function writeGuarded(
+    filePath: string,
+    content: string,
+    shouldOverwrite: boolean,
+  ): Promise<void> {
+    if (path.isAbsolute(filePath)) {
+      throw new Error(`[configure] Absolute paths not allowed: ${filePath}`)
+    }
+    const resolved = path.resolve(root, filePath)
+    if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+      throw new Error(`[configure] Refusing to write outside project root: ${filePath}`)
+    }
+
+    const shouldForce = shouldOverwrite
+    if (fs.existsSync(resolved) && !shouldForce) return
+
+    const dir = path.dirname(resolved)
+    fs.mkdirSync(dir, { recursive: true })
+
+    const canonRoot = fs.realpathSync(root)
+
+    if (fs.existsSync(dir)) {
+      const canonDir = fs.realpathSync(dir)
+      if (!canonDir.startsWith(canonRoot + path.sep) && canonDir !== canonRoot) {
+        throw new Error(
+          `[configure] Symlink escape detected: ${filePath} — directory resolves outside project root`,
+        )
+      }
+    }
+
+    if (fs.existsSync(resolved)) {
+      const canonFile = fs.realpathSync(resolved)
+      if (!canonFile.startsWith(canonRoot + path.sep)) {
+        throw new Error(
+          `[configure] Symlink escape detected: ${filePath} — file resolves outside project root`,
+        )
+      }
+    }
+
+    fs.writeFileSync(resolved, content)
+  }
 
   return {
     /**
@@ -192,41 +318,54 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     },
 
     async writeFile(filePath: string, content: string, opts?: { force?: boolean }): Promise<void> {
-      if (path.isAbsolute(filePath)) {
-        throw new Error(`[configure] Absolute paths not allowed: ${filePath}`)
-      }
-      const resolved = path.resolve(root, filePath)
-      if (!resolved.startsWith(root + path.sep) && resolved !== root) {
-        throw new Error(`[configure] Refusing to write outside project root: ${filePath}`)
-      }
+      return writeGuarded(filePath, content, opts?.force ?? force)
+    },
 
-      const shouldForce = opts?.force ?? force
-      if (fs.existsSync(resolved) && !shouldForce) return
-
-      const dir = path.dirname(resolved)
-      fs.mkdirSync(dir, { recursive: true })
-
-      const canonRoot = fs.realpathSync(root)
-
-      if (fs.existsSync(dir)) {
-        const canonDir = fs.realpathSync(dir)
-        if (!canonDir.startsWith(canonRoot + path.sep) && canonDir !== canonRoot) {
-          throw new Error(
-            `[configure] Symlink escape detected: ${filePath} — directory resolves outside project root`,
-          )
-        }
-      }
-
-      if (fs.existsSync(resolved)) {
-        const canonFile = fs.realpathSync(resolved)
-        if (!canonFile.startsWith(canonRoot + path.sep)) {
-          throw new Error(
-            `[configure] Symlink escape detected: ${filePath} — file resolves outside project root`,
-          )
-        }
+    /**
+     * Render a stub and write it where the stub says.
+     *
+     * The application's own copy wins: a stub published to `stubs/<stubPath>`
+     * is used instead of the package's, which is what lets someone change the
+     * config a package generates without forking it. Adonis calls the same
+     * thing "searches in publishTarget first"; `ream-cli` already does it for
+     * the `make:` generators, and this is the same rule on the configure side.
+     *
+     * A package therefore names its stub after itself — `config/visa.stub`,
+     * not `config.stub` — or two packages would publish to the same path.
+     */
+    async makeUsingStub(
+      stubsRoot: string,
+      stubPath: string,
+      state: StubState = {},
+      opts?: { force?: boolean },
+    ): Promise<GeneratedStub> {
+      if (stubPath.includes('..') || path.isAbsolute(stubPath)) {
+        throw new Error(`[configure] Unsafe stub path: ${stubPath}`)
       }
 
-      fs.writeFileSync(resolved, content)
+      const published = path.resolve(root, 'stubs', stubPath)
+      const shipped = path.resolve(stubsRoot, stubPath)
+      const source = fs.existsSync(published) ? published : shipped
+      if (!fs.existsSync(source)) {
+        throw new Error(`[configure] Stub not found: ${stubPath} (looked in ${stubsRoot})`)
+      }
+
+      const raw = fs.readFileSync(source, 'utf8')
+      const { to, body } = splitFrontMatter(raw)
+      if (to === undefined) {
+        // Without it there is nowhere to put the file, and guessing from the
+        // stub's own name would put a package's config wherever it was named.
+        throw new Error(
+          `[configure] Stub ${stubPath} declares no destination — add a \`to:\` front matter line.`,
+        )
+      }
+
+      // The destination is rendered too: `to: config/{{ name }}.ts` is the
+      // reason a single stub can serve several outputs.
+      const destination = renderStub(to, state)
+      const contents = renderStub(body, state)
+      await writeGuarded(destination, contents, opts?.force ?? force)
+      return { path: destination, contents }
     },
 
     /**
