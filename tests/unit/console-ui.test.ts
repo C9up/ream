@@ -29,10 +29,11 @@ describe('Ui — raw mode', () => {
 
   it('honours the logger prefix and suffix', () => {
     const ui = rawUi()
-    ui.logger.prefix('[app]').suffix('(v1)')
+    ui.logger.prefix('app').suffix('v1')
     ui.logger.info('booted')
-    // Prefix and suffix are dimmed, as Console shows them.
-    expect(ui.getLogs()).toEqual(['dim([app]) [ blue(info) ] booted dim((v1))'])
+    // The brackets and parentheses belong to the format, not to the value the
+    // caller passes — so a prefix reads the same wherever it comes from.
+    expect(ui.getLogs()).toEqual(['dim([app]) [ blue(info) ] booted dim(yellow((v1)))'])
   })
 })
 
@@ -43,17 +44,20 @@ describe('Ui — logger actions', () => {
     ui.logger.action('creating config/app.ts').skipped('already exists')
     ui.logger.action('creating config/db.ts').failed(new Error('permission denied'))
 
-    expect(ui.getLogs()).toEqual([
-      'green(DONE) creating config/auth.ts',
-      'yellow(SKIPPED) (already exists) creating config/app.ts',
-      'red(FAILED) permission denied creating config/db.ts',
-    ])
+    const logs = ui.getLogs()
+    // The labels are padded to the width of the longest one, so a column of
+    // actions lines up whatever the outcome.
+    expect(logs[0]).toBe('green(DONE:   ) creating config/auth.ts')
+    expect(logs[1]).toBe('cyan(SKIPPED:) creating config/app.ts dim((already exists))')
+    // A failure carries its stack, indented under the line.
+    expect(logs[2]?.startsWith('red(FAILED: ) creating config/db.ts\n')).toBe(true)
+    expect(logs[2]).toContain('red(Error: permission denied)')
   })
 
   it('appends a duration when asked', () => {
     const ui = rawUi()
     ui.logger.action('slow thing').displayDuration().succeeded()
-    expect(ui.getLogs()[0]).toMatch(/green\(DONE\) slow thing dim\(\(\d+m?s\)\)/)
+    expect(ui.getLogs()[0]).toMatch(/green\(DONE: +\) slow thing dim\(\(\d+m?s\)\)/)
   })
 })
 
@@ -89,17 +93,19 @@ describe('Ui — sticker and instructions', () => {
     ui.sticker().add('Started HTTP server').add('http://localhost:3333').render()
 
     const logs = ui.getLogs()
-    expect(logs).toHaveLength(4)
-    expect(logs[1]).toContain('Started HTTP server')
-    expect(logs[0]?.startsWith('dim(┌')).toBe(true)
+    // Border, a blank row, the two lines, a blank row, border — the padding
+    // is what keeps the text off the border.
+    expect(logs).toHaveLength(6)
+    expect(logs[2]).toContain('Started HTTP server')
+    expect(logs[0]?.startsWith('dim(╭')).toBe(true)
   })
 
   it('marks each instruction with a pointer', () => {
     const ui = rawUi()
     ui.instructions().add('cd my-app').add('ream dev').render()
 
-    expect(ui.getLogs()[1]).toContain('dim(>) cd my-app')
-    expect(ui.getLogs()[2]).toContain('dim(>) ream dev')
+    expect(ui.getLogs()[2]).toContain('dim(❯) cd my-app')
+    expect(ui.getLogs()[3]).toContain('dim(❯) ream dev')
   })
 })
 
@@ -118,7 +124,8 @@ describe('Ui — tasks', () => {
     expect(outcomes.map((o) => o.state)).toEqual(['succeeded', 'succeeded'])
     // Minimal mode (the default) does not print a line per progress message.
     expect(ui.getLogs()).not.toContain('  dim(clone repo: Downloaded 50%)')
-    expect(ui.getLogs()).toContain('green(✔) clone repo dim(Completed)')
+    // Each line ends with how long the task took.
+    expect(ui.getLogs()[0]).toMatch(/^green\(✔\) clone repo dim\(Completed\) dim\(\(\d+m?s\)\)$/)
   })
 
   it('stops at the first failure — later steps usually depend on it', async () => {
@@ -235,8 +242,8 @@ describe('Ui — Console option contracts', () => {
     ui.logger.info('starting', { prefix: 4242 })
 
     expect(ui.getLogs()).toEqual([
-      '[ blue(info) ] installing packages dim(npm i --production)',
-      'dim(4242) [ blue(info) ] starting',
+      '[ blue(info) ] installing packages dim(yellow((npm i --production)))',
+      'dim([4242]) [ blue(info) ] starting',
     ])
   })
 
@@ -248,7 +255,10 @@ describe('Ui — Console option contracts', () => {
     animation.stop()
 
     // No TTY: one line per state instead of a frame-per-tick flood.
-    expect(ui.getLogs()).toEqual(['installing packages dim(npm i)', 'unpacking packages'])
+    expect(ui.getLogs()).toEqual([
+      '[ cyan(wait) ] installing packages dim(yellow((npm i)))',
+      'unpacking packages',
+    ])
   })
 
   it('right-aligns a cell declared with hAlign', () => {
@@ -290,7 +300,7 @@ describe('Ui — Console option contracts', () => {
       })
       .run()
 
-    expect(ui.getLogs()).toContain('green(✔) sync dim(42 files)')
+    expect(ui.getLogs()[0]).toMatch(/^green\(✔\) sync dim\(42 files\) dim\(\(\d+m?s\)\)$/)
   })
 })
 
@@ -475,36 +485,24 @@ describe('BaseCommand — metadata and runtime declaration', () => {
 
 describe('Ui — fluid column', () => {
   it('grows the first column by default', () => {
-    const ui = new Ui()
-    const lines: string[] = []
-    Object.defineProperty(ui, 'write', {
-      value: (line: string) => {
-        lines.push(line)
-      },
-    })
+    const ui = rawUi()
     Object.defineProperty(process.stdout, 'columns', { value: 60, configurable: true })
 
     ui.table().fullWidth().head(['a', 'b']).row(['x', 'y']).render()
 
     // Here the effect IS visible on the data line: column 0 is padded out.
-    expect(lines[2]?.length).toBeGreaterThan(40)
+    expect(ui.getLogs()[2]?.length).toBeGreaterThan(40)
   })
 
   it('grows the column chosen by fluidColumnIndex', () => {
-    const ui = new Ui()
-    const lines: string[] = []
-    Object.defineProperty(ui, 'write', {
-      value: (line: string) => {
-        lines.push(line)
-      },
-    })
+    const ui = rawUi()
     Object.defineProperty(process.stdout, 'columns', { value: 60, configurable: true })
 
     ui.table().fullWidth().fluidColumnIndex(1).head(['a', 'b']).row(['x', 'y']).render()
 
     // The separator shows the allocated widths (data lines are trimEnd'ed, so
     // widening the LAST column has no visible effect on them).
-    const [, separator = ''] = lines
+    const [, separator = ''] = ui.getLogs()
     const [first = '', second = ''] = separator.split('  ')
     expect(first.length).toBe(1)
     expect(second.length).toBeGreaterThan(40)

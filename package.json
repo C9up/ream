@@ -241,6 +241,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
+    "@c9up/lumen": "^0.1.0",
     "file-type": "^22.0.2",
     "reflect-metadata": "^0.2.2"
   },
