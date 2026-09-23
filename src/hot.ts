@@ -184,9 +184,18 @@ watchProject({
     ...reloadPatterns.map(watchRootOf).filter((dir) => dir !== ''),
   ],
   files: [...restartFiles].map((file) => relative(root, file)),
+  // A watcher that quietly stops watching is how this went unnoticed for a
+  // release: the first save swapped, the rest did nothing at all.
+  onWarning: (message) => sayNow(`[ream] hot reload — ${message}`),
   onChange: (file) => {
     const decision = graph.decide(file)
-    if (decision.kind === 'ignore') return
+    if (decision.kind === 'ignore') {
+      // Said, not swallowed. A file the running process never imported cannot
+      // be swapped into it, and "I saved and nothing happened" is the same
+      // symptom as a broken watcher — the developer deserves to know which.
+      sayNow(`[ream] no reload — ${relativeToRoot(file)} is not imported by the running app`)
+      return
+    }
     if (decision.kind === 'reload') {
       sayNow(fullReloadNotice(decision.file, decision.reason, relativeToRoot))
       // Exiting on a known code is how the Rust parent learns it must restart —
