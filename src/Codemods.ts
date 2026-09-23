@@ -1,5 +1,8 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { render as renderTemplate, type StubState } from './stubs/template.js'
+
+export type { StubState }
 
 export interface Codemods {
   addProvider(importPath: string): Promise<void>
@@ -17,7 +20,6 @@ export interface Codemods {
 }
 
 /** What a stub may interpolate. Scalars only — a stub is text, not a program. */
-export type StubState = Record<string, string | number | boolean>
 
 /** Where a stub landed, and what it wrote there. */
 export interface GeneratedStub {
@@ -68,23 +70,6 @@ function splitFrontMatter(template: string): { to?: string; body: string } {
     // later version of this loader must not break the current one.
   }
   return to === undefined ? { body } : { to, body }
-}
-
-/**
- * Substitute `{{ name }}`.
- *
- * NAMED DEVIATION — Adonis renders stubs with tempura (loops, conditionals,
- * partials). This is substitution only, matching what `ream-cli` does for the
- * same reason on its side: a template engine in the configure path is a second
- * language in the framework, and a stub that needs one is a stub doing too
- * much. An unknown placeholder is left ALONE rather than blanked — a stub that
- * silently loses a line is worse than one that visibly kept a `{{ }}`.
- */
-function renderStub(template: string, state: StubState): string {
-  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, key: string) => {
-    const value = state[key]
-    return value === undefined ? match : String(value)
-  })
 }
 
 type MiddlewareTier = 'server' | 'router'
@@ -360,10 +345,10 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
         )
       }
 
-      // The destination is rendered too: `to: config/{{ name }}.ts` is the
-      // reason a single stub can serve several outputs.
-      const destination = renderStub(to, state)
-      const contents = renderStub(body, state)
+      // The destination goes through the engine too: `to: config/{{ name }}.ts`
+      // is the reason a single stub can serve several outputs.
+      const destination = renderTemplate(to, state)
+      const contents = renderTemplate(body, state)
       await writeGuarded(destination, contents, opts?.force ?? force)
       return { path: destination, contents }
     },

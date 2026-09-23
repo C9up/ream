@@ -278,6 +278,16 @@ export {
   type GeneratedStub,
   type StubState,
 } from './Codemods.js'
+export {
+  compile as compileStub,
+  escapeHtml,
+  generate as generateStub,
+  render as renderStub,
+  type StubBlock,
+  StubSyntaxError,
+  type StubValue,
+  type TemplateOptions,
+} from './stubs/template.js'
 
 // ─── Errors ─────────────────────────────────────────────────
 

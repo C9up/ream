@@ -62,22 +62,39 @@ describe('Ui — logger actions', () => {
 })
 
 describe('Ui — table', () => {
-  it('aligns columns on visible width, ignoring colour codes', () => {
+  it('joins the cells with a pipe in raw mode', () => {
+    // Raw mode is what a test asserts on: the cells, with no border, no
+    // colour and no alignment to break when a column grows.
     const ui = rawUi()
+    ui.table().head(['Migration', 'Status']).row(['1590591892626_tenants.ts', 'DONE']).render()
+
+    expect(ui.getLogs()).toEqual(['Migration|Status', '1590591892626_tenants.ts|DONE'])
+  })
+
+  it('draws a bordered table, aligned on the VISIBLE width', () => {
+    // Outside raw mode it is a real table. The invariant is that every line
+    // is the same width — a cell coloured green carries escape codes that
+    // occupy no columns, and counting them would bend the border.
+    const ui = new Ui()
+    const lines: string[] = []
+    ui.useRenderer({
+      log: (line: string) => lines.push(line),
+      logError: (line: string) => lines.push(line),
+      logUpdate: () => {},
+      logUpdatePersist: () => {},
+      getLogs: () => [],
+      flushLogs: () => {},
+    })
     ui.table()
       .head(['Migration', 'Status'])
       .row(['1590591892626_tenants.ts', ui.colors.green('DONE')])
       .row(['short.ts', 'PENDING'])
       .render()
 
-    const logs = ui.getLogs()
-    // The invariant is where the second column starts, not the line length:
-    // trailing padding is trimmed, so a short last cell yields a shorter line.
-    // (In raw mode `green(DONE)` is literal text and counts towards the width —
-    // fine, since nothing is displayed here.)
-    expect(logs[0]?.indexOf('bold(Status)')).toBe(logs[3]?.indexOf('PENDING'))
-    expect(logs[2]).toContain('1590591892626_tenants.ts  green(DONE)')
-    expect(logs[3]?.startsWith('short.ts ')).toBe(true)
+    const widths = new Set(lines.map((line) => stripAnsi(line).length))
+    expect(widths.size).toBe(1)
+    expect(stripAnsi(lines[0] ?? '').startsWith('┌')).toBe(true)
+    expect(stripAnsi(lines.at(-1) ?? '').startsWith('└')).toBe(true)
   })
 
   it('renders nothing when it has no rows', () => {
@@ -197,12 +214,9 @@ describe('Ui — inside a command', () => {
     const command = await kernel.exec('report')
 
     expect(command.exitCode).toBe(0)
-    expect(kernel.ui.getLogs()).toEqual([
-      'bold(Name)',
-      '──────────',
-      'green(Ada)',
-      '[ blue(info) ] done',
-    ])
+    // Raw mode: the table is its cells, one row per line, and the logger
+    // line keeps its spelled-out colour.
+    expect(kernel.ui.getLogs()).toEqual(['Name', 'green(Ada)', '[ blue(info) ] done'])
   })
 })
 
@@ -262,18 +276,28 @@ describe('Ui — Console option contracts', () => {
   })
 
   it('right-aligns a cell declared with hAlign', () => {
-    const ui = rawUi()
+    // Alignment is a property of the DRAWN table, so this one leaves raw
+    // mode: there is nothing to align in `a|b`.
+    const ui = new Ui()
+    const lines: string[] = []
+    ui.useRenderer({
+      log: (line: string) => lines.push(line),
+      logError: (line: string) => lines.push(line),
+      logUpdate: () => {},
+      logUpdatePersist: () => {},
+      getLogs: () => [],
+      flushLogs: () => {},
+    })
     ui.table()
       .head(['Migration', { content: 'Status', hAlign: 'right' }])
       .row(['a_very_long_migration.ts', { content: 'DONE', hAlign: 'right' }])
       .row(['b.ts', { content: 'PENDING', hAlign: 'right' }])
       .render()
 
-    const logs = ui.getLogs()
-    // Right-aligned cells end at the same column.
-    expect(logs[2]?.endsWith('DONE')).toBe(true)
-    expect(logs[3]?.endsWith('PENDING')).toBe(true)
-    expect(logs[2]?.length).toBe(logs[3]?.length)
+    // Both right-aligned cells end at the same column, padding then border.
+    const done = stripAnsi(lines[3] ?? '')
+    const pending = stripAnsi(lines[4] ?? '')
+    expect(done.indexOf('DONE') + 'DONE'.length).toBe(pending.indexOf('PENDING') + 'PENDING'.length)
   })
 
   it('prints every progress message in verbose mode', async () => {
@@ -485,27 +509,45 @@ describe('BaseCommand — metadata and runtime declaration', () => {
 
 describe('Ui — fluid column', () => {
   it('grows the first column by default', () => {
-    const ui = rawUi()
+    const ui = new Ui()
+    const lines: string[] = []
+    ui.useRenderer({
+      log: (line: string) => lines.push(line),
+      logError: (line: string) => lines.push(line),
+      logUpdate: () => {},
+      logUpdatePersist: () => {},
+      getLogs: () => [],
+      flushLogs: () => {},
+    })
     Object.defineProperty(process.stdout, 'columns', { value: 60, configurable: true })
 
     ui.table().fullWidth().head(['a', 'b']).row(['x', 'y']).render()
 
-    // Here the effect IS visible on the data line: column 0 is padded out.
-    expect(ui.getLogs()[2]?.length).toBeGreaterThan(40)
+    // The table now fills the terminal, and the slack went to column 0.
+    expect(stripAnsi(lines[0] ?? '').length).toBe(60)
+    expect(stripAnsi(lines[0] ?? '').indexOf('┬')).toBeGreaterThan(40)
   })
 
   it('grows the column chosen by fluidColumnIndex', () => {
-    const ui = rawUi()
+    const ui = new Ui()
+    const lines: string[] = []
+    ui.useRenderer({
+      log: (line: string) => lines.push(line),
+      logError: (line: string) => lines.push(line),
+      logUpdate: () => {},
+      logUpdatePersist: () => {},
+      getLogs: () => [],
+      flushLogs: () => {},
+    })
     Object.defineProperty(process.stdout, 'columns', { value: 60, configurable: true })
 
     ui.table().fullWidth().fluidColumnIndex(1).head(['a', 'b']).row(['x', 'y']).render()
 
-    // The separator shows the allocated widths (data lines are trimEnd'ed, so
-    // widening the LAST column has no visible effect on them).
-    const [, separator = ''] = ui.getLogs()
-    const [first = '', second = ''] = separator.split('  ')
-    expect(first.length).toBe(1)
-    expect(second.length).toBeGreaterThan(40)
+    // The top border shows the allocated widths: the divider sits early, so
+    // it is the SECOND column that took the slack.
+    const top = stripAnsi(lines[0] ?? '')
+    expect(top.length).toBe(60)
+    expect(top.indexOf('┬')).toBeLessThan(10)
   })
 })
 

@@ -640,9 +640,10 @@ describe('Codemods — makeUsingStub', () => {
     }
   })
 
-  it('leaves an unknown placeholder alone rather than blanking it', async () => {
-    // A stub that silently loses a line is worse than one that visibly kept
-    // a `{{ }}` for someone to notice.
+  it('names a value the stub reads and the caller did not pass', async () => {
+    // It used to leave `{{ missing }}` in the generated file — a bug that
+    // travels into someone's project and shows up as a syntax error there
+    // rather than here.
     const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
     const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
     try {
@@ -650,8 +651,29 @@ describe('Codemods — makeUsingStub', () => {
         path.join(stubs, 'x.stub'),
         '---\nto: out.ts\n---\n{{ known }} {{ missing }}\n',
       )
-      await createCodemods({ cwd: project }).makeUsingStub(stubs, 'x.stub', { known: 'ok' })
-      expect(fs.readFileSync(path.join(project, 'out.ts'), 'utf8')).toBe('ok {{ missing }}\n')
+      await expect(
+        createCodemods({ cwd: project }).makeUsingStub(stubs, 'x.stub', { known: 'ok' }),
+      ).rejects.toThrow(/missing is not defined/)
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(stubs, { recursive: true, force: true })
+    }
+  })
+
+  it('renders a conditional and a loop, not only a placeholder', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-project-'))
+    const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
+    try {
+      fs.writeFileSync(
+        path.join(stubs, 'list.stub'),
+        '---\nto: out.ts\n---\n{{#if items.length}}{{#each items as item}}- {{ item }}\n{{/each}}{{#else}}none{{/if}}',
+      )
+      const codemods = createCodemods({ cwd: project })
+      await codemods.makeUsingStub(stubs, 'list.stub', { items: ['a', 'b'] })
+      expect(fs.readFileSync(path.join(project, 'out.ts'), 'utf8')).toBe('- a\n- b\n')
+
+      await codemods.makeUsingStub(stubs, 'list.stub', { items: [] }, { force: true })
+      expect(fs.readFileSync(path.join(project, 'out.ts'), 'utf8')).toBe('none')
     } finally {
       fs.rmSync(project, { recursive: true, force: true })
       fs.rmSync(stubs, { recursive: true, force: true })
