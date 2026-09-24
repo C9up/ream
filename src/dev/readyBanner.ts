@@ -9,9 +9,8 @@
  *       .add(`Mode: ${colors.cyan(this.mode)}`)
  *       .add(`Ready in: ${colors.cyan(prettyHrtime(message.duration))}`)
  *
- * Ours says the same three things. What it does NOT say is upstream's fourth
- * line, `Press h to show help` — there are no keyboard shortcuts here, and
- * offering a key that does nothing is worse than not offering it.
+ * Ours says the same, `Press h to show help` included — the shortcuts are in
+ * `./shortcuts.ts`, so the line is an offer this process keeps.
  *
  * Printed from the application rather than from the `ream dev` parent, which
  * is where upstream prints it. The parent is a Rust process here and the port
@@ -39,21 +38,29 @@ export interface ReadyBanner {
 }
 
 /**
- * The lines of the sticker, so a test can read them without a terminal.
+ * The address to show for a bound host and port.
  *
- * `localhost` rather than `0.0.0.0` in the URL: a bound address of `0.0.0.0`
- * means every interface, and printing it gives you a link that does not open.
+ * `localhost` rather than `0.0.0.0`: bound to every interface is not a link
+ * that opens, and printing it sends you looking in the wrong place. Shared
+ * with the `o` shortcut so the browser goes where the sticker said.
  */
+export function devServerUrl(host: string, port: number): string {
+  const shown = host === '0.0.0.0' || host === '::' ? 'localhost' : host
+  return `http://${shown}:${port}`
+}
+
+/** The lines of the sticker, so a test can read them without a terminal. */
 export function readyBannerLines(banner: ReadyBanner): string[] {
   const ui = lumen()
-  const shown = banner.host === '0.0.0.0' || banner.host === '::' ? 'localhost' : banner.host
   const lines = [
-    `Server address: ${ui.colors.cyan(`http://${shown}:${banner.port}`)}`,
+    `Server address: ${ui.colors.cyan(devServerUrl(banner.host, banner.port))}`,
     `Mode: ${ui.colors.cyan(banner.mode)}`,
   ]
   if (banner.bootMs !== undefined) {
     lines.push(`Ready in: ${ui.colors.cyan(formatBootTime(banner.bootMs))}`)
   }
+  // Only where there is a keyboard: piped into a file, the offer is a lie.
+  if (process.stdin.isTTY) lines.push(`Press ${ui.colors.dim('h')} to show help`)
   return lines
 }
 

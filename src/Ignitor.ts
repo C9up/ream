@@ -18,7 +18,8 @@ import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
 import { hmrClientScript, hmrEndpoint } from './dev/hmr.js'
-import { inDevServer, printReadyBanner } from './dev/readyBanner.js'
+import { devServerUrl, inDevServer, printReadyBanner } from './dev/readyBanner.js'
+import { installShortcuts } from './dev/shortcuts.js'
 import type { DirectoriesNode } from './directories.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
@@ -346,6 +347,13 @@ export class Ignitor {
   #hotReloadCleanup?: () => void
   #shutdownHandle?: ShutdownHandle
   #host?: string
+  /**
+   * Stops listening for the dev-server keys. Only ever set under `ream dev`.
+   *
+   * Removed on shutdown, or a terminal left in raw mode would swallow the
+   * next command you type after the server exits.
+   */
+  #removeShortcuts?: () => void
   #console?: Console
 
   // Inline configuration (for simple use or testing)
@@ -999,12 +1007,16 @@ export class Ignitor {
     // because a port found by scanning past a taken 3000 is known only to the
     // process that bound it.
     if (inDevServer() && this.#host !== undefined && this.#_httpServer !== undefined) {
+      const port = await this.#_httpServer.port()
       printReadyBanner({
         host: this.#host,
-        port: await this.#_httpServer.port(),
+        port,
         mode: 'HMR',
         bootMs: performance.now(),
       })
+      // The keys upstream's dev server answers to. Installed here for the same
+      // reason the sticker is printed here: `o` needs the address.
+      this.#removeShortcuts = installShortcuts({ url: devServerUrl(this.#host, port) })
     }
   }
 
@@ -1167,6 +1179,11 @@ export class Ignitor {
    */
   async stop(): Promise<void> {
     const errors: unknown[] = []
+
+    // First: a terminal left in raw mode swallows the next command you type
+    // after the server exits, and that outlives the process.
+    this.#removeShortcuts?.()
+    this.#removeShortcuts = undefined
 
     // Release the consoleApp locator first — ownership-guarded, so a second Ignitor
     // having rebound it is left alone.
