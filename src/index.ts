@@ -249,6 +249,12 @@ export type {
   CommandOptions,
   FlagMetaData,
 } from './console/types.js'
+export {
+  parseStack,
+  type RenderOptions,
+  renderError,
+  type StackFrame,
+} from './errors/renderError.js'
 export type {
   HyperServerLike,
   IgnitorConfig,

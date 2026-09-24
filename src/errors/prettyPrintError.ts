@@ -7,14 +7,14 @@
  */
 
 import { ReamError } from './ReamError.js'
+import { renderError } from './renderError.js'
 
 export function prettyPrintError(error: unknown): void {
+  // A framework error already says what it is, what it was doing and what to
+  // try — printing a source excerpt under it would bury that.
   if (error instanceof ReamError) {
     console.error(error.toDevString())
-  } else if (error instanceof Error) {
-    console.error(`\n  ${error.message}\n`)
-    if (error.stack) console.error(error.stack)
-  } else {
-    console.error(error)
+    return
   }
+  console.error(renderError(error))
 }
