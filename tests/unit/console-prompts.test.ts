@@ -2,6 +2,53 @@ import { describe, expect, it, vi } from 'vitest'
 import { BaseCommand } from '../../src/console/BaseCommand.js'
 import { Kernel } from '../../src/console/Kernel.js'
 import { Prompt } from '../../src/console/prompts.js'
+import { runSelection } from '../../src/console/selection.js'
+
+const ENTER = '\r'
+const ARROW_DOWN = '\u001B[B'
+const SPACE = ' '
+const ESCAPE = '\u001B'
+
+/**
+ * A keyboard and a screen, so a list can be driven without a terminal.
+ *
+ * The real one needs raw mode, which a test process has no business turning
+ * on — and a pipe throws when asked for it.
+ */
+class FakeKeyboard {
+  readonly #listeners: Array<(chunk: string) => void> = []
+  readonly drawn: string[] = []
+
+  readonly stream = {
+    isTTY: true,
+    setRawMode: () => this.stream,
+    resume: () => this.stream,
+    pause: () => this.stream,
+    on: (event: string, listener: (chunk: string) => void) => {
+      if (event === 'data') this.#listeners.push(listener)
+      return this.stream
+    },
+    removeListener: (_event: string, listener: (chunk: string) => void) => {
+      const at = this.#listeners.indexOf(listener)
+      if (at !== -1) this.#listeners.splice(at, 1)
+      return this.stream
+    },
+  } as unknown as NodeJS.ReadStream
+
+  readonly output = {
+    write: (chunk: string) => {
+      this.drawn.push(chunk)
+      return true
+    },
+    columns: 80,
+  } as unknown as NodeJS.WriteStream
+
+  /** Send a key and let the loop react before the test looks. */
+  async press(key: string): Promise<void> {
+    for (const listener of [...this.#listeners]) listener(key)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+}
 
 function silence(): () => void {
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
@@ -191,34 +238,204 @@ class ScriptedPrompt extends Prompt {
 }
 
 describe('Prompt — default values on the interactive path', () => {
-  it('takes the default index when the answer is empty', async () => {
-    const restore = silence()
-    // An empty line means "accept the default" — it used to be reported as an
-    // invalid selection, so the default was shown and then refused.
-    const prompt = new ScriptedPrompt([''])
-    const picked = await prompt.choice('Driver', ['pg', 'mysql'], { default: 1 })
-    restore()
+  it('starts the pointer on the default, so enter takes it', async () => {
+    // A selection default is an index, and with arrow keys that means the
+    // pointer starts there — enter takes whatever it is on.
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'pg' }, { label: 'mysql' }],
+      selected: [1],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(ENTER)
 
-    expect(picked).toBe('mysql')
+    expect(await picked).toEqual({ kind: 'picked', indexes: [1] })
   })
 
-  it('takes several default indexes for multiple()', async () => {
-    const restore = silence()
-    const prompt = new ScriptedPrompt([''])
-    const picked = await prompt.multiple('Drivers', ['sqlite', 'mysql', 'pg'], { default: [0, 2] })
-    restore()
+  it('starts a multiple with the defaults already ticked', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Drivers',
+      items: [{ label: 'sqlite' }, { label: 'mysql' }, { label: 'pg' }],
+      many: true,
+      selected: [0, 2],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(ENTER)
 
-    expect(picked).toEqual(['sqlite', 'pg'])
+    expect(await picked).toEqual({ kind: 'picked', indexes: [0, 2] })
   })
 
-  it('shows the default option by name, not by index', async () => {
-    const restore = silence()
-    const prompt = new ScriptedPrompt([''])
-    await prompt.choice('Driver', [{ name: 'pg', message: 'PostgreSQL' }], { default: 0 })
-    restore()
+  it('walks the list with the arrow keys', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'pg' }, { label: 'mysql' }, { label: 'sqlite' }],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(ARROW_DOWN)
+    await keys.press(ARROW_DOWN)
+    await keys.press(ENTER)
 
-    // The label is built before the read, so it lands in the recorded query.
-    expect(prompt.asked.join(' ')).toContain('Select')
+    expect(await picked).toEqual({ kind: 'picked', indexes: [2] })
+  })
+
+  it('wraps round the ends rather than stopping', async () => {
+    // A pointer that sticks at the bottom of a long list makes the last items
+    // the hardest to reach, which is backwards.
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'pg' }, { label: 'mysql' }],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press('\u001B[A')
+    await keys.press(ENTER)
+
+    expect(await picked).toEqual({ kind: 'picked', indexes: [1] })
+  })
+
+  it('ticks with space, in the order they were ticked', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Drivers',
+      items: [{ label: 'pg' }, { label: 'mysql' }, { label: 'sqlite' }],
+      many: true,
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(ARROW_DOWN)
+    await keys.press(SPACE)
+    await keys.press(ARROW_DOWN)
+    await keys.press(SPACE)
+    await keys.press(ENTER)
+
+    // The order the user built, not the order of the list.
+    expect(await picked).toEqual({ kind: 'picked', indexes: [1, 2] })
+  })
+
+  it('unticks what was ticked', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Drivers',
+      items: [{ label: 'pg' }, { label: 'mysql' }],
+      many: true,
+      selected: [0],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(SPACE)
+    await keys.press(ENTER)
+
+    expect(await picked).toEqual({ kind: 'picked', indexes: [] })
+  })
+
+  it('narrows as you type, and answers what is left', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'postgres' }, { label: 'mysql' }, { label: 'sqlite' }],
+      filter: true,
+      input: keys.stream,
+      output: keys.output,
+    })
+    // `sq` would also match my-sq-l, which is the point of a substring filter.
+    await keys.press('s')
+    await keys.press('q')
+    await keys.press('l')
+    await keys.press('i')
+    await keys.press(ENTER)
+
+    expect(await picked).toEqual({ kind: 'picked', indexes: [2] })
+  })
+
+  it('takes a letter back with backspace', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'postgres' }, { label: 'mysql' }],
+      filter: true,
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press('z')
+    await keys.press('\u007F')
+    // Two characters in one chunk: what a fast typist and a paste both send.
+    await keys.press('my')
+    await keys.press(ENTER)
+
+    expect(await picked).toEqual({ kind: 'picked', indexes: [1] })
+  })
+
+  it('answers nothing on a filter that matches nothing', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'postgres' }],
+      filter: true,
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press('zzz')
+    await keys.press(ENTER)
+    // Still waiting: there is no line under the pointer to take.
+    await keys.press('\u007F')
+    await keys.press('\u007F')
+    await keys.press('\u007F')
+    await keys.press(ENTER)
+
+    expect(await picked).toEqual({ kind: 'picked', indexes: [0] })
+  })
+
+  it('cancels on escape, which is not an empty answer', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'pg' }],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(ESCAPE)
+
+    expect(await picked).toEqual({ kind: 'cancelled' })
+  })
+
+  it('cancels on Ctrl-C, which raw mode raises no signal for', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Driver',
+      items: [{ label: 'pg' }],
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press('\u0003')
+
+    expect(await picked).toEqual({ kind: 'cancelled' })
+  })
+
+  it('shows a window of a long list, around the cursor', async () => {
+    const keys = new FakeKeyboard()
+    const picked = runSelection({
+      title: 'Pick',
+      items: Array.from({ length: 30 }, (_, i) => ({ label: `option-${i}` })),
+      limit: 5,
+      input: keys.stream,
+      output: keys.output,
+    })
+    await keys.press(ARROW_DOWN)
+    const frame = keys.drawn.join('')
+    await keys.press(ENTER)
+    await picked
+
+    // Five lines, not thirty, and it says how many are left.
+    expect(frame).toContain('option-1')
+    expect(frame).not.toContain('option-20')
+    expect(frame).toContain('more')
   })
 
   it('still takes the default for a text prompt', async () => {

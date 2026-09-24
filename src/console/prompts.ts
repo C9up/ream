@@ -12,6 +12,7 @@
 import { stdin, stdout } from 'node:process'
 import { clearLine, createInterface, cursorTo } from 'node:readline'
 import { ReamError } from '../errors/ReamError.js'
+import { runSelection } from './selection.js'
 import { colourise } from './ui.js'
 
 /** A selectable option — a bare string, or a value with its display text. */
@@ -246,31 +247,18 @@ export class Prompt {
       return this.#applyResult(picked[0], options)
     }
 
-    const limit = options.limit ?? 10
-    for (;;) {
-      const typed = await this.readLine(this.#label(message, options, '(type to filter)'))
-      const matches = choices.filter((choice) =>
-        nameOf(choice).toLowerCase().includes(typed.toLowerCase()),
-      )
-
-      if (matches.length === 0) {
-        stdout.write(`${colourise('No match.', 'yellow')}\n`)
-        continue
-      }
-
-      const first = matches[0]
-      if (matches.length === 1 && first !== undefined) {
-        return this.#finish(nameOf(first), options)
-      }
-
-      const picked = await this.#select(
-        message,
-        matches.slice(0, limit),
-        { ...options, name: undefined },
-        false,
-      )
-      return picked[0]
-    }
+    // One list that narrows as you type, rather than a filter question
+    // followed by a list: upstream's autocomplete is a single prompt, and
+    // answering twice for one value is a different thing wearing its name.
+    const picked = await this.#select(
+      message,
+      choices,
+      { ...options, name: undefined },
+      false,
+      true,
+      options.limit ?? 10,
+    )
+    return picked[0]
   }
 
   // ─── internals ──────────────────────────────────────────────
@@ -299,6 +287,8 @@ export class Prompt {
     choices: readonly PromptChoice[],
     options: SelectPromptOptions | MultiplePromptOptions,
     many: boolean,
+    filter?: boolean,
+    limit?: number,
   ): Promise<unknown[]> {
     if (choices.length === 0) {
       throw new ReamError('E_CONSOLE_EMPTY_CHOICES', `"${message}" was asked with no options.`)
@@ -313,50 +303,41 @@ export class Prompt {
       return many ? picked : picked.map((value) => this.#applyResult(value, options))
     }
 
-    const defaultLabel =
-      options.default === undefined
-        ? undefined
-        : [options.default]
-            .flat()
-            .map((index) => {
-              const choice = choices[index]
-              return choice === undefined ? String(index) : displayOf(choice)
-            })
-            .join(', ')
-
+    // Arrow keys, as upstream's prompts navigate. The list redraws in place
+    // until the user answers; a cancel is no answer, not an empty one.
     for (;;) {
-      stdout.write(`${this.#label(message, { ...options, default: defaultLabel }).trimEnd()}\n`)
-      choices.forEach((choice, index) => {
-        const hint = typeof choice === 'string' ? undefined : choice.hint
-        stdout.write(
-          `  ${colourise(String(index + 1), 'cyan')}) ${displayOf(choice)}` +
-            `${hint === undefined ? '' : colourise(` — ${hint}`, 'dim')}\n`,
-        )
+      const outcome = await runSelection({
+        title: this.#label(message, { ...options, default: undefined }).trimEnd(),
+        items: choices.map((choice) => {
+          const hint = typeof choice === 'string' ? undefined : choice.hint
+          return hint === undefined
+            ? { label: displayOf(choice) }
+            : { label: displayOf(choice), hint }
+        }),
+        many,
+        ...(options.default === undefined
+          ? {}
+          : {
+              selected: [options.default]
+                .flat()
+                .filter(
+                  (index): index is number =>
+                    Number.isInteger(index) && index >= 0 && index < choices.length,
+                ),
+            }),
+        ...(filter === true ? { filter: true } : {}),
+        ...(limit === undefined ? {} : { limit }),
       })
 
-      const answer = await this.readLine(
-        many ? `Select (e.g. 1,3) from 1-${choices.length}: ` : `Select (1-${choices.length}): `,
-      )
-
-      // An empty answer takes the default — which for a selection prompt is an
-      // index, as Adonis spells it. Without this the default was shown in the
-      // label and then rejected as an invalid selection.
-      const indexes =
-        answer === '' && options.default !== undefined
-          ? [options.default]
-              .flat()
-              .filter((index) => Number.isInteger(index) && index >= 0 && index < choices.length)
-          : answer
-              .split(',')
-              .map((part) => Number(part.trim()) - 1)
-              .filter((index) => Number.isInteger(index) && index >= 0 && index < choices.length)
-
-      if (indexes.length === 0 || (!many && indexes.length !== 1)) {
-        stdout.write(`${colourise('Invalid selection.', 'yellow')}\n`)
-        continue
+      if (outcome.kind === 'cancelled') {
+        throw new ReamError('E_CONSOLE_PROMPT_CANCELLED', `"${message}" was cancelled.`, {
+          hint: 'Answer the prompt, or pass the value as a flag.',
+        })
       }
 
-      const picked = indexes.map((index) => nameOf(choices[index] as PromptChoice))
+      // A multiple with nothing ticked is an answer of none, which is only
+      // valid if the command says so — `validate` is where that is decided.
+      const picked = outcome.indexes.map((index) => nameOf(choices[index] as PromptChoice))
       const problem = await this.#selectionProblem(picked, options, many)
       if (problem !== undefined) {
         stdout.write(`${colourise(problem, 'yellow')}\n`)
