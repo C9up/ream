@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { dirname, relative, resolve as resolvePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { fullReloadNotice, invalidatedNotice } from './dev/fullReload.js'
+import { clearScreen, fullReloadNotice, invalidatedNotice } from './dev/fullReload.js'
 import { hotReloadHappened } from './dev/hmr.js'
 import { readHotHookConfig } from './dev/hotConfig.js'
 import { globMatcher } from './dev/hotGlob.js'
@@ -189,14 +189,15 @@ watchProject({
   onWarning: (message) => sayNow(`[ream] hot reload — ${message}`),
   onChange: (file) => {
     const decision = graph.decide(file)
-    if (decision.kind === 'ignore') {
-      // Said, not swallowed. A file the running process never imported cannot
-      // be swapped into it, and "I saved and nothing happened" is the same
-      // symptom as a broken watcher — the developer deserves to know which.
-      sayNow(`[ream] no reload — ${relativeToRoot(file)} is not imported by the running app`)
-      return
-    }
+    // Silent, as upstream is: a file the running process never imported has
+    // nothing to swap and nothing to restart for, and upstream's dev server
+    // returns without a word when its own inspection comes back empty.
+    if (decision.kind === 'ignore') return
     if (decision.kind === 'reload') {
+      // Upstream clears the terminal before this line, so the logs that follow
+      // the restart are the only ones on screen. `--no-clear` turns it off,
+      // which is the flag `ace serve` gives for the same thing.
+      clearScreen()
       sayNow(fullReloadNotice(decision.file, decision.reason, relativeToRoot))
       // Exiting on a known code is how the Rust parent learns it must restart —
       // see `EXIT_RESTART` in the CLI's dev module.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fullReloadNotice, invalidatedNotice } from '../../src/dev/fullReload.js'
+import { clearScreen, fullReloadNotice, invalidatedNotice } from '../../src/dev/fullReload.js'
 
 /**
  * What the dev server says when a file changed.
@@ -35,6 +35,47 @@ describe('dev > what a change prints', () => {
     expect(
       plain(fullReloadNotice('/project/app/x.ts', 'outside-boundaries', relativise)),
     ).not.toContain('/project/')
+  })
+
+  it('clears the terminal only when there is one, and not with --no-clear', () => {
+    // Upstream writes the reset before the restart line so what follows is the
+    // only thing on screen. Into a pipe it would just leave escape codes in
+    // the file, and `--no-clear` is the flag that says do not.
+    const written: string[] = []
+    const stdout = process.stdout
+    const restore = { isTTY: stdout.isTTY, write: stdout.write }
+    const previous = process.env.REAM_DEV_CLEAR_SCREEN
+
+    try {
+      Object.defineProperty(stdout, 'isTTY', { value: true, configurable: true })
+      Object.defineProperty(stdout, 'write', {
+        value: (chunk: string) => {
+          written.push(chunk)
+          return true
+        },
+        configurable: true,
+      })
+
+      delete process.env.REAM_DEV_CLEAR_SCREEN
+      clearScreen()
+      expect(written).toEqual(['\u001Bc'])
+
+      written.length = 0
+      process.env.REAM_DEV_CLEAR_SCREEN = 'false'
+      clearScreen()
+      expect(written).toEqual([])
+
+      written.length = 0
+      delete process.env.REAM_DEV_CLEAR_SCREEN
+      Object.defineProperty(stdout, 'isTTY', { value: false, configurable: true })
+      clearScreen()
+      expect(written).toEqual([])
+    } finally {
+      Object.defineProperty(stdout, 'isTTY', { value: restore.isTTY, configurable: true })
+      Object.defineProperty(stdout, 'write', { value: restore.write, configurable: true })
+      if (previous === undefined) delete process.env.REAM_DEV_CLEAR_SCREEN
+      else process.env.REAM_DEV_CLEAR_SCREEN = previous
+    }
   })
 
   it('leaves the path uncoloured, and colours only the word', () => {
