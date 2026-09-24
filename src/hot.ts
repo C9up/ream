@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { dirname, relative, resolve as resolvePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { fullReloadNotice } from './dev/fullReload.js'
+import { fullReloadNotice, invalidatedNotice } from './dev/fullReload.js'
 import { hotReloadHappened } from './dev/hmr.js'
 import { readHotHookConfig } from './dev/hotConfig.js'
 import { globMatcher } from './dev/hotGlob.js'
@@ -207,6 +207,6 @@ watchProject({
     // process keeps serving the class it promoted: a stable PID and stale
     // output, which is exactly how it was first reported.
     hotReloadHappened()
-    sayNow(`[ream] hot swap — ${relativeToRoot(file)}`)
+    sayNow(invalidatedNotice(file, relativeToRoot))
   },
 })

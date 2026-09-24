@@ -1,43 +1,48 @@
 import { describe, expect, it } from 'vitest'
-import { fullReloadNotice } from '../../src/dev/fullReload.js'
+import { fullReloadNotice, invalidatedNotice } from '../../src/dev/fullReload.js'
 
 /**
- * The line printed before the dev server restarts.
+ * What the dev server says when a file changed.
  *
- * Without it the only trace of a full reload was the boot banner appearing
- * twice, which reads as a server rebooting on its own rather than as a file
- * that fell outside the declared boundaries.
+ * Upstream's two words, read off `@adonisjs/assembler`'s build: a module
+ * swapped in place is `invalidated <path>`, one that forced a restart is
+ * `update <path>`. Without either, the only trace of a restart was the boot
+ * banner appearing twice, which reads as a server rebooting on its own.
  */
-describe('dev > the full reload notice', () => {
+describe('dev > what a change prints', () => {
   const relativise = (file: string) => file.replace('/project/', '')
+  const plain = (line: string) => line.replace(/\u001B\[\d+m/g, '')
 
-  it('names the file that could not be swapped', () => {
+  it('says `update` and the file, when the process must restart', () => {
     const notice = fullReloadNotice('/project/start/kernel.ts', 'outside-boundaries', relativise)
-    expect(notice).toContain('start/kernel.ts')
-    expect(notice).toContain('full reload')
+    expect(plain(notice)).toBe('update start/kernel.ts')
   })
 
-  it('says when nothing importing the file was inside a boundary', () => {
-    const notice = fullReloadNotice(
-      '/project/app/services/Mailer.ts',
-      'outside-boundaries',
-      relativise,
-    )
-    expect(notice).toContain('hotHook.boundaries')
-  })
-
-  it('distinguishes a file that always restarts', () => {
-    // `.env` is on the restart list: it is not a module, so no boundary could
-    // ever cover it, and blaming the boundaries would send the reader looking
-    // for a glob to fix.
+  it('says the same for a file on the restart list', () => {
+    // `.env` is not a module, so no boundary could ever cover it — but the
+    // developer is told the same thing either way: it changed, and the server
+    // came back.
     const notice = fullReloadNotice('/project/.env', 'restart-list', relativise)
-    expect(notice).toContain('hotHook.restart')
-    expect(notice).not.toContain('boundaries')
+    expect(plain(notice)).toBe('update .env')
+  })
+
+  it('says `invalidated` and the file, when the module was swapped', () => {
+    const notice = invalidatedNotice('/project/app/billing/InvoiceController.ts', relativise)
+    expect(plain(notice)).toBe('invalidated app/billing/InvoiceController.ts')
   })
 
   it('shows the path the editor shows, not the absolute one', () => {
-    expect(fullReloadNotice('/project/app/x.ts', 'outside-boundaries', relativise)).not.toContain(
-      '/project/',
-    )
+    expect(
+      plain(fullReloadNotice('/project/app/x.ts', 'outside-boundaries', relativise)),
+    ).not.toContain('/project/')
+  })
+
+  it('leaves the path uncoloured, and colours only the word', () => {
+    // Upstream colours the verb and nothing else, which is what makes a column
+    // of these scannable.
+    const notice = fullReloadNotice('/project/app/x.ts', 'outside-boundaries', relativise)
+    const [, path] = plain(notice).split(' ')
+    expect(path).toBe('app/x.ts')
+    expect(notice.endsWith('app/x.ts')).toBe(true)
   })
 })
