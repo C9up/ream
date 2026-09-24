@@ -18,6 +18,7 @@ import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
 import { hmrClientScript, hmrEndpoint } from './dev/hmr.js'
+import { inDevServer, printReadyBanner } from './dev/readyBanner.js'
 import type { DirectoriesNode } from './directories.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
@@ -992,6 +993,19 @@ export class Ignitor {
     // balancer at a process that cannot answer.
     this.#app.markReady()
     this.#phase = 'ready'
+
+    // The address, once there is one to print. Upstream's dev server prints
+    // this sticker when the child reports ready; here the child prints it,
+    // because a port found by scanning past a taken 3000 is known only to the
+    // process that bound it.
+    if (inDevServer() && this.#host !== undefined && this.#_httpServer !== undefined) {
+      printReadyBanner({
+        host: this.#host,
+        port: await this.#_httpServer.port(),
+        mode: 'HMR',
+        bootMs: performance.now(),
+      })
+    }
   }
 
   /**
