@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { clearScreen, fullReloadNotice, invalidatedNotice } from '../../src/dev/fullReload.js'
+import { plain } from '../__helpers__/ansi.js'
 
 /**
  * What the dev server says when a file changed.
@@ -11,7 +12,6 @@ import { clearScreen, fullReloadNotice, invalidatedNotice } from '../../src/dev/
  */
 describe('dev > what a change prints', () => {
   const relativise = (file: string) => file.replace('/project/', '')
-  const plain = (line: string) => line.replace(/\u001B\[\d+m/g, '')
 
   it('says `update` and the file, when the process must restart', () => {
     const notice = fullReloadNotice('/project/start/kernel.ts', 'outside-boundaries', relativise)

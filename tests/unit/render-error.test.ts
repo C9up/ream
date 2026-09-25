@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseStack, renderError } from '../../src/errors/renderError.js'
+import { hasColor } from '../__helpers__/ansi.js'
 
 /**
  * An error, rendered for someone reading a terminal.
@@ -126,8 +127,8 @@ describe('errors > the terminal renderer', () => {
 
   it('colours nothing when asked not to', () => {
     const { error } = thrown()
-    expect(renderError(error, { cwd: project, colors: false })).not.toMatch(/\u001B\[/)
-    expect(renderError(error, { cwd: project, colors: true })).toMatch(/\u001B\[/)
+    expect(hasColor(renderError(error, { cwd: project, colors: false }))).toBe(false)
+    expect(hasColor(renderError(error, { cwd: project, colors: true }))).toBe(true)
   })
 
   describe('parsing a stack', () => {

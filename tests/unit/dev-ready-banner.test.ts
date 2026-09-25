@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { inDevServer, readyBannerLines } from '../../src/dev/readyBanner.js'
+import { plain } from '../__helpers__/ansi.js'
 
 /**
  * The sticker printed once the dev server is listening.
@@ -10,7 +11,6 @@ import { inDevServer, readyBannerLines } from '../../src/dev/readyBanner.js'
  */
 describe('dev > the ready banner', () => {
   const previous = process.env.REAM_DEV
-  const plain = (line: string) => line.replace(/\u001B\[\d+m/g, '')
 
   afterEach(() => {
     if (previous === undefined) delete process.env.REAM_DEV
