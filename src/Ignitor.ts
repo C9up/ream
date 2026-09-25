@@ -40,6 +40,14 @@ import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import { MigrationRegistry } from './migrations/MigrationRegistry.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
+import {
+  createProfiler,
+  PROFILER_TOKEN_HEADER,
+  type Profiler,
+  profileRequest,
+  profilerEndpoint,
+  toolbarScript,
+} from './profiler/index.js'
 import { Router } from './router/Router.js'
 import { CookieSigner } from './security/CookieSigner.js'
 import { SignedUrl } from './security/SignedUrl.js'
@@ -821,6 +829,10 @@ export class Ignitor {
     // Boot the Server (resolves lazy error handler etc.)
     await this.#server.boot()
 
+    // Before the kernel: the kernel's server middleware and its dev script
+    // both read it.
+    await this.#startProfiler()
+
     // Start HTTP server if this process serves one
     if (this.#servesHttp() && this.#config.serverFactory) {
       // Build the HttpKernel with server middleware + router middleware.
@@ -839,7 +851,7 @@ export class Ignitor {
           ...this.#server.getServerMiddleware(),
         ],
         routerMiddleware: this.#router.getRouterMiddleware(),
-        devReloadScript: this.#devReloadScript(),
+        devScript: this.#devScript(),
         onError: (error, ctx) => {
           this.#errorBoundary.serviceError('HttpKernel', error, ctx.id)
         },
@@ -1327,7 +1339,7 @@ export class Ignitor {
         this.#server.getErrorHandler() ?? new ExceptionHandler(!this.#app.inProduction),
       serverMiddleware: this.#server.getServerMiddleware(),
       routerMiddleware: this.#router.getRouterMiddleware(),
-      devReloadScript: this.#devReloadScript(),
+      devScript: this.#devScript(),
     })
     return this.#kernel
   }
@@ -1339,29 +1351,67 @@ export class Ignitor {
   }
 
   /**
-   * The reload script, in development only.
+   * What development appends to an HTML page: the reload client, and the
+   * debug toolbar once a profile exists for the request.
    *
    * Gated on the environment rather than on `hot-hook` being present: the
-   * script is just as useful without it, since a restart is exactly what it
-   * detects. In production it is `undefined` and the response is untouched.
+   * reload script is just as useful without it, since a restart is exactly
+   * what it detects. In production this is `undefined` and the response is
+   * untouched.
+   *
+   * The token is read back off the response rather than passed along a side
+   * channel — the profiling middleware has already stamped it there, which is
+   * also where a client outside the page reads it (Symfony's `X-Debug-Token`).
    */
-  #devReloadScript(): ((nonce?: string) => string) | undefined {
-    return this.isDevMode() ? hmrClientScript : undefined
+  #devScript(): ((ctx: HttpContext) => string) | undefined {
+    if (!this.isDevMode()) return undefined
+    return (ctx) => {
+      const nonce = ctx.response.nonce
+      const reload = hmrClientScript(nonce)
+      const token = ctx.response.getHeader(PROFILER_TOKEN_HEADER)
+      return token === undefined ? reload : reload + toolbarScript(token, nonce)
+    }
   }
+
+  /**
+   * The profiler, in development only.
+   *
+   * It needs the application's emitter — `db:query` is where the database
+   * panel comes from — so it is built here rather than in a field initialiser,
+   * once the container has one. An application without an event bus still gets
+   * every other panel.
+   */
+  async #startProfiler(): Promise<void> {
+    if (!this.isDevMode() || this.#profiler !== undefined) return
+    const events = this.#app.container.has('events')
+      ? await this.#app.container.resolve<Emitter>('events')
+      : { on: () => undefined }
+    this.#profiler = createProfiler(events)
+  }
+
+  #profiler?: Profiler
 
   /**
    * The server middleware the framework itself contributes, ahead of the
    * application's.
    *
-   * Only the hot-reload token, and only in development. It answers first
-   * because the poll arrives once a second per open tab and its content
-   * depends on nothing — no user, no session, no body. Behind an application's
-   * middleware it paid for the whole stack each time, which for anything that
-   * resolves a user from a cookie meant a `SELECT` per second for a string
-   * holding a process id and a counter.
+   * Development only, and the order is the point:
+   *
+   *  1. the profiler's own pages, which must not appear in their own history;
+   *  2. the hot-reload stream, which answers first because it arrives once a
+   *     second per open tab and its content depends on nothing — no user, no
+   *     session, no body. Behind an application's middleware it paid for the
+   *     whole stack each time, which for anything that resolves a user from a
+   *     cookie meant a `SELECT` per second for a string holding a process id
+   *     and a counter. It is also open for as long as the tab is, so profiling
+   *     it would leave one profile unfinished forever;
+   *  3. everything else, wrapped in a profile.
    */
   #frameworkServerMiddleware(): MiddlewareFunction[] {
-    return this.isDevMode() ? [hmrEndpoint()] : []
+    if (!this.isDevMode()) return []
+    const profiler = this.#profiler
+    if (profiler === undefined) return [hmrEndpoint()]
+    return [profilerEndpoint(profiler), hmrEndpoint(), profileRequest(profiler)]
   }
 
   getPhase(): string {

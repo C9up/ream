@@ -111,7 +111,7 @@ describe('dev > injecting the script into a response', () => {
     const kernel = createHttpKernel({
       router,
       middleware: new MiddlewareRegistry(),
-      devReloadScript: devReloadScript === undefined ? undefined : () => devReloadScript,
+      devScript: devReloadScript === undefined ? undefined : () => devReloadScript,
     })
     return kernel(get('/page'))
   }
@@ -193,7 +193,7 @@ describe('dev > the headers still describe the body that is sent', () => {
     const kernel = createHttpKernel({
       router,
       middleware: new MiddlewareRegistry(),
-      devReloadScript: script === undefined ? undefined : () => script,
+      devScript: script === undefined ? undefined : () => script,
     })
     return kernel(get('/page'))
   }
@@ -274,7 +274,7 @@ describe('dev > every validator, not just the ones that came to mind', () => {
     const kernel = createHttpKernel({
       router,
       middleware: new MiddlewareRegistry(),
-      devReloadScript: () => '<script>RELOAD</script>',
+      devScript: () => '<script>RELOAD</script>',
     })
 
     const res = await kernel({ method: 'GET', path: '/page', query: '', headers: {}, body: '' })

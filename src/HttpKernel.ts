@@ -41,8 +41,12 @@ export interface HttpKernelConfig {
    * handler produced. It lives here rather than in a middleware because this
    * is the one place every response passes through on its way out, whichever
    * route or error handler produced it.
+   *
+   * It is handed the whole context, not just the nonce: the debug toolbar
+   * carries the profile token inline, and that token is only on the response
+   * by the time the body is serialised.
    */
-  devReloadScript?: (nonce?: string) => string
+  devScript?: (ctx: HttpContext) => string
   routerMiddleware?: MiddlewareFunction[]
   onError?: (error: unknown, ctx: HttpContext) => void
   debug?: boolean
@@ -375,7 +379,7 @@ export function createHttpKernel(
           correlationId,
         )
       }
-      const serialized = await serializeResponse(ctx, config.devReloadScript)
+      const serialized = await serializeResponse(ctx, config.devScript)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
       ctx.response.runFinishCallbacks()
@@ -431,7 +435,7 @@ export function createHttpKernel(
           correlationId,
         )
       }
-      const serialized = await serializeResponse(ctx, config.devReloadScript)
+      const serialized = await serializeResponse(ctx, config.devScript)
       // The body is built; anything registered with `response.onFinish()` runs
       // now — after the answer is ready, before we hand it back.
       ctx.response.runFinishCallbacks()
@@ -484,18 +488,18 @@ function readControllerGuardMetadata(
 
 async function serializeResponse(
   ctx: HttpContext,
-  devReloadScript?: (nonce?: string) => string,
+  devScript?: (ctx: HttpContext) => string,
 ): Promise<HttpKernelResponse> {
   // The terminal step, as AdonisJS' server calls `response.finish()`: it
   // stamps the request id and waits for a body still being produced.
   await ctx.response.finish()
   const streamId = ctx.response.getStreamId()
   const headers = ctx.response.getHeaders()
-  const body = withDevReloadScript(
+  const body = withDevScript(
     ctx.response.getBody(),
     headers,
     streamId,
-    devReloadScript === undefined ? undefined : devReloadScript(ctx.response.nonce),
+    devScript === undefined ? undefined : devScript(ctx),
   )
   return {
     status: ctx.response.getStatus(),
@@ -548,14 +552,14 @@ function reconcileRepresentation(
 }
 
 /**
- * Append the dev reload script to an HTML body.
+ * Append the development script to an HTML body.
  *
  * Only HTML, and never a stream: appending to an SSE or a download would
  * corrupt it, and a page is the only thing that can act on the script anyway.
  * Before `</body>` when there is one, so the script is inside the document
  * rather than trailing after it.
  */
-function withDevReloadScript(
+function withDevScript(
   body: string,
   headers: Record<string, string>,
   streamId: string | undefined,

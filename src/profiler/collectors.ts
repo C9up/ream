@@ -124,21 +124,59 @@ export interface ExceptionBag {
   code?: string
 }
 
-/** Lines logged while the request ran. */
-export function logCollector(): ProfilerCollector<LogBag> {
+/**
+ * Lines logged while the request ran.
+ *
+ * Same arrangement as the database panel, and for the same reason: a logger
+ * writes a line with no idea which request caused it. It comes off the
+ * application's emitter as `log:line`, which is what `@c9up/spectrum` bridges
+ * its own registry to (`onLog((entry) => emitter.emit('log:line', entry))`),
+ * so a project on another logger emits the same event and gets the same panel.
+ */
+export function logCollector(events: LogEventSource, read: () => LogBag | undefined) {
+  // Subscribed once, at construction, for the same reason as the queries: a
+  // listener per request leaks one per request.
+  events.on('log:line', (payload) => {
+    const bag = read()
+    if (bag === undefined) return
+    if (bag.lines.length < LINE_CAP) bag.lines.push(toLine(payload))
+    bag.total += 1
+  })
+
   return {
     name: 'logs',
     badge: (data) => {
-      const lines = Array.isArray(data.lines) ? data.lines.length : 0
-      return lines === 0 ? undefined : `${lines} ${lines === 1 ? 'log' : 'logs'}`
+      const total = typeof data.total === 'number' ? data.total : 0
+      return total === 0 ? undefined : `${total} ${total === 1 ? 'log' : 'logs'}`
     },
-    start: () => ({ lines: [] }),
-    finish: (bag) => ({ lines: bag?.lines ?? [] }),
-  }
+    start: () => ({ total: 0, lines: [] }),
+    // Nothing logged is nothing to show: an empty bag renders no panel at all,
+    // rather than a heading over an empty list.
+    finish: (bag) =>
+      bag === undefined || bag.total === 0 ? {} : { total: bag.total, lines: bag.lines },
+  } satisfies ProfilerCollector<LogBag>
 }
 
+/** What the emitter must give the log collector. Structural, as above. */
+export interface LogEventSource {
+  on(event: string, listener: (payload: unknown) => void): unknown
+}
+
+/** As many lines as are worth scrolling; the count stays true past it. */
+const LINE_CAP = 200
+
 export interface LogBag {
-  lines: Array<{ level: string; message: string; time: number }>
+  total: number
+  lines: Array<{ level: string; message: string; time?: string }>
+}
+
+function toLine(payload: unknown): LogBag['lines'][number] {
+  const entry = asRecord(payload)
+  return {
+    level: typeof entry.level === 'string' ? entry.level : 'info',
+    message: typeof entry.message === 'string' ? entry.message : String(entry.message ?? ''),
+    ...(typeof entry.timestamp === 'string' ? { time: entry.timestamp } : {}),
+  }
 }
 
 /** Peak heap while the request ran, which is what a leak shows up in. */

@@ -50,14 +50,20 @@ export class Profiler {
   /**
    * Run one request inside a profile.
    *
-   * `describe` is called AFTER the work, because the status and the final URL
-   * are only known then — asking for them up front would record the request as
-   * it arrived rather than as it was answered.
+   * `work` is handed the scope so it can stamp the token on the response
+   * before anything else runs: a request that throws unwinds past its caller,
+   * and a token written after the await would be missing on exactly the
+   * request worth looking at.
+   *
+   * `describe` is called AFTER the work, because the status is only known
+   * then — asking for it up front would record the request as it arrived
+   * rather than as it was answered. It is given whatever was thrown, since a
+   * handler that threw has not had its status written yet.
    */
   async profile<T>(
     request: { method: string; url: string },
-    work: () => Promise<T>,
-    describe: () => { status: number },
+    work: (scope: CollectionScope) => Promise<T>,
+    describe: (error?: unknown) => { status: number },
   ): Promise<{ result: T; token: string }> {
     const token = newToken()
     const startedAt = Date.now()
@@ -81,7 +87,7 @@ export class Profiler {
     let thrown: unknown
     let failed = false
     try {
-      result = await this.#storage.run(active, work)
+      result = await this.#storage.run(active, () => work(active.scope))
     } catch (error) {
       thrown = error
       failed = true
@@ -93,7 +99,7 @@ export class Profiler {
       time: startedAt,
       method: request.method,
       url: request.url,
-      status: safeStatus(describe),
+      status: safeStatus(describe, thrown),
       duration: performance.now() - started,
       data: {},
     }
@@ -166,9 +172,9 @@ function newToken(): string {
   return randomBytes(6).toString('hex')
 }
 
-function safeStatus(describe: () => { status: number }): number {
+function safeStatus(describe: (error?: unknown) => { status: number }, error: unknown): number {
   try {
-    const { status } = describe()
+    const { status } = describe(error)
     return Number.isInteger(status) ? status : 0
   } catch {
     return 0

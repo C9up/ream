@@ -140,7 +140,7 @@ describe('profiler', () => {
 
     const database = store.find(token)?.data.database
     expect(database?.total).toBe(600)
-    expect((database?.queries as unknown[]).length).toBe(500)
+    expect(database?.queries).toHaveLength(500)
     expect(database?.capped).toBe(true)
   })
 
