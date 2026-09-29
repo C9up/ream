@@ -1362,6 +1362,22 @@ export class Router extends Macroable {
   }
 
   /**
+   * Every NAMED route with its path pattern AND the HTTP methods it answers,
+   * e.g. `{ 'users.update': { path: '/users/:id', methods: ['PUT'] } }` — what
+   * a client needs to follow a route by name and pick its verb, the way
+   * AdonisJS's Tuyau registry gives `route` + `methods`. `namedManifest()`
+   * stays the lighter name → path map.
+   */
+  namedRoutes(): Record<string, { path: string; methods: string[] }> {
+    if (this.#indexDirty) this.#buildIndex()
+    const routes: Record<string, { path: string; methods: string[] }> = {}
+    for (const [name, route] of this.#nameIndex) {
+      routes[name] = { path: route.path, methods: [route.method] }
+    }
+    return routes
+  }
+
+  /**
    * Generate a TypeScript source string typing every named route and its
    * params (AdonisJS `generateTypes`) — a `RouteName` union plus a
    * `RouteParams` map inferred from each pattern's `:param` segments. Write it

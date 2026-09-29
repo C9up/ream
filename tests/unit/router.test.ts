@@ -254,6 +254,19 @@ describe('router > namedManifest', () => {
   })
 })
 
+describe('router > namedRoutes', () => {
+  it('gives every NAMED route its path and methods', () => {
+    const router = new Router()
+    router.get('/users/:id', async () => {}).as('users.show')
+    router.put('/users/:id', async () => {}).as('users.update')
+    router.post('/health', async () => {}) // unnamed — must NOT appear
+    expect(router.namedRoutes()).toEqual({
+      'users.show': { path: '/users/:id', methods: ['GET'] },
+      'users.update': { path: '/users/:id', methods: ['PUT'] },
+    })
+  })
+})
+
 describe('middleware > pipeline', () => {
   it('executes in onion order', async () => {
     const registry = new MiddlewareRegistry()
