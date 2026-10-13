@@ -113,6 +113,7 @@ universe through the container, never via a static import.
 | [@c9up/echo](https://github.com/C9up/echo) | Cache (memory + Redis drivers) |
 | [@c9up/eclipse](https://github.com/C9up/eclipse) | Distributed locks (owner-checked leases, memory + Redis stores) |
 | [@c9up/eon](https://github.com/C9up/eon) | Time-series data layer (TDengine-backed) |
+| [@c9up/ephemeris](https://github.com/C9up/ephemeris) | Structured data — schema.org JSON-LD, Google's rich-result requirements checked |
 | [@c9up/helix](https://github.com/C9up/helix) | Framework-agnostic test runtime |
 | [@c9up/helix-plugin-ream](https://github.com/C9up/helix-plugin-ream) | The ream↔helix bridge (boots a Ream app under test) |
 | [@c9up/inker](https://github.com/C9up/inker) | Server-side templating |
