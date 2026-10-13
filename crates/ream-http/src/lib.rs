@@ -8,6 +8,7 @@
 //! @implements FR23
 
 pub mod cookies;
+pub mod grpc;
 pub mod ip;
 pub mod multipart;
 pub mod ratelimit;
@@ -19,6 +20,7 @@ pub mod stream_registry;
 pub mod websocket;
 
 pub use cookies::parse_cookie_header;
+pub use grpc::{GrpcCall, GrpcHandler, GrpcReply};
 pub use ip::{ip_in_cidr, resolve_client_ip};
 pub use multipart::{
     extract_boundary, parse_multipart, MultipartField, MultipartFilePayload, MultipartPayload,

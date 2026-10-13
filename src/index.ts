@@ -220,6 +220,9 @@ export { createHttpKernel } from './HttpKernel.js'
 
 export type {
   ErrorHandlerClass,
+  GrpcCall,
+  GrpcHandler,
+  GrpcReply,
   LazyImport,
   MiddlewareClass,
   MiddlewareEntry,

@@ -51,7 +51,7 @@ import {
 import { Router } from './router/Router.js'
 import { CookieSigner } from './security/CookieSigner.js'
 import { SignedUrl } from './security/SignedUrl.js'
-import { Server } from './server/Server.js'
+import { type GrpcHandler, Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearEncryption, setEncryption } from './services/encryption.js'
 import { clearLogger, setLogger } from './services/logger.js'
@@ -268,6 +268,8 @@ export function defineConfig(config: ReamrcConfig): ReamrcConfig {
 /** Minimal interface for the HTTP server (NAPI or mock). */
 export interface HyperServerLike {
   onRequest(callback: (request: HttpKernelRequest) => Promise<HttpKernelResponse>): void
+  /** Optional — present on the real `HyperServer`; required once `server.grpc()` is used. */
+  onGrpc?(callback: GrpcHandler): void
   /**
    * Optional — present on the real `HyperServer` (Rust-backed), absent on
    * trivial test mocks. Ignitor only calls it when a shield config is set.
@@ -903,6 +905,17 @@ export class Ignitor {
         this.#config.host ?? process.env.HOST ?? (this.#app.inProduction ? '0.0.0.0' : 'localhost')
       this.#_httpServer = this.#config.serverFactory(availablePort, this.#host)
       this.#_httpServer.onRequest(kernel)
+      const grpc = this.#server.getGrpcHandler()
+      if (grpc) {
+        if (typeof this.#_httpServer.onGrpc !== 'function') {
+          throw new ReamError(
+            'E_IGNITOR_GRPC_UNSUPPORTED',
+            'A gRPC handler is registered, but this server cannot serve gRPC.',
+            { hint: 'Use the native HyperServer, or a test server that implements onGrpc().' },
+          )
+        }
+        this.#_httpServer.onGrpc(grpc)
+      }
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
       // listen. Security filtering itself lives in @c9up/blackhole.
       const trustedProxies = this.#server.getTrustedProxies()

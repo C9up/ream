@@ -4,13 +4,13 @@
 //!
 //! @implements FR23, FR52
 
-use napi::bindgen_prelude::{Function, Promise, Unknown};
+use napi::bindgen_prelude::{Function, Promise, Uint8Array, Unknown};
 use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMode};
 use napi::JsValue;
 use napi_derive::napi;
 use ream_http::{
-    RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig,
-    ShieldFilter, StreamRegistry,
+    GrpcCall, GrpcReply, RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer,
+    ShieldConfig, ShieldFilter, StreamRegistry,
 };
 use ream_napi_core::callback::FatalThreadsafeFunction;
 use ream_napi_core::catch_unwind_napi;
@@ -47,6 +47,47 @@ impl From<NapiResponse> for ReamResponse {
     }
 }
 
+/// One gRPC call, handed to the JS handler registered with `onGrpc`.
+///
+/// The message crosses as BYTES — never through the `String` (base64 for
+/// binary) body of the HTTP path.
+#[napi(object)]
+pub struct NapiGrpcCall {
+    /// `/package.Service/Method`.
+    pub path: String,
+    /// Request metadata, header names lowercased.
+    pub metadata: HashMap<String, String>,
+    /// The request message, still encoded.
+    pub message: Uint8Array,
+    /// Resolved client IP, by the same trusted-proxy rules as `request.ip`.
+    pub ip: String,
+}
+
+/// What the gRPC handler answers: a reply `message`, or a status `code`
+/// (with its `details`) instead of one.
+#[napi(object)]
+pub struct NapiGrpcReply {
+    pub message: Option<Uint8Array>,
+    pub code: Option<i32>,
+    pub details: Option<String>,
+}
+
+impl From<NapiGrpcReply> for GrpcReply {
+    fn from(reply: NapiGrpcReply) -> Self {
+        match (reply.message, reply.code) {
+            (Some(message), _) => GrpcReply::Message(message.to_vec().into()),
+            (None, Some(code)) => GrpcReply::Status {
+                code,
+                details: reply.details.unwrap_or_default(),
+            },
+            (None, None) => GrpcReply::Status {
+                code: 13,
+                details: "The handler answered neither a message nor a status".into(),
+            },
+        }
+    }
+}
+
 /// Configuration for the wire-level shield filter. Mirrors the Rust
 /// `ShieldConfig` shape; the JS layer constructs it from `ShieldMiddleware`
 /// options at boot and hands it off to `HyperServer.configureShield`.
@@ -71,6 +112,9 @@ pub struct HyperServer {
     port: u16,
     host: [u8; 4],
     handler: Arc<std::sync::Mutex<Option<ream_http::RequestHandler>>>,
+    /// Same lifecycle as `handler`: set before `listen()`, cleared by
+    /// `close()` so its threadsafe function stops pinning the event loop.
+    grpc_handler: Arc<std::sync::Mutex<Option<ream_http::GrpcHandler>>>,
     server: Arc<TokioMutex<Option<ream_http::ReamServer>>>,
     shield: Arc<std::sync::Mutex<Option<ShieldConfig>>>,
     trusted_proxies: Arc<std::sync::Mutex<Vec<String>>>,
@@ -119,6 +163,7 @@ impl HyperServer {
                 port,
                 host,
                 handler: Arc::new(std::sync::Mutex::new(None)),
+                grpc_handler: Arc::new(std::sync::Mutex::new(None)),
                 server: Arc::new(TokioMutex::new(None)),
                 shield: Arc::new(std::sync::Mutex::new(None)),
                 trusted_proxies: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -199,6 +244,56 @@ impl HyperServer {
         Ok(())
     }
 
+    /// Register the gRPC handler. From `listen()` on, `application/grpc`
+    /// requests on this port are gRPC calls handed to it; without it they stay
+    /// HTTP requests. Must be called BEFORE `listen()`.
+    ///
+    /// A rejected promise is answered `INTERNAL`, with nothing of the error
+    /// sent to the client.
+    #[napi]
+    pub fn on_grpc(
+        &self,
+        callback: Function<'static, NapiGrpcCall, Promise<NapiGrpcReply>>,
+    ) -> napi::Result<()> {
+        let tsfn: FatalThreadsafeFunction<GrpcCall, NapiGrpcCall, Promise<NapiGrpcReply>> =
+            callback
+                .build_threadsafe_function::<GrpcCall>()
+                .callee_handled::<false>()
+                .build_callback(|ctx: ThreadsafeCallContext<GrpcCall>| {
+                    let call = ctx.value;
+                    Ok(NapiGrpcCall {
+                        path: call.path,
+                        metadata: call.metadata,
+                        message: Uint8Array::from(call.message.to_vec()),
+                        ip: call.ip,
+                    })
+                })?;
+        let tsfn = Arc::new(tsfn);
+
+        let handler: ream_http::GrpcHandler = Arc::new(move |call: GrpcCall| {
+            let tsfn = tsfn.clone();
+            Box::pin(async move {
+                let internal = |details: &str| GrpcReply::Status {
+                    code: 13,
+                    details: details.into(),
+                };
+                match tsfn.call_async(call).await {
+                    Ok(promise) => match promise.await {
+                        Ok(reply) => reply.into(),
+                        Err(_) => internal("Internal error"),
+                    },
+                    Err(_) => internal("Failed to call the gRPC handler"),
+                }
+            })
+        });
+
+        let mut guard = self.grpc_handler.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "gRPC handler mutex poisoned")
+        })?;
+        *guard = Some(handler);
+        Ok(())
+    }
+
     /// Configure the trusted-proxy CIDR list used by `request.ip` resolution.
     /// Must be called BEFORE `listen()`. Empty list = legacy permissive mode
     /// (any peer can populate `X-Forwarded-For`).
@@ -270,6 +365,15 @@ impl HyperServer {
         // Create server, configure, and listen
         let mut srv = ReamServer::new(port).with_host(self.host);
         srv.on_request(handler);
+        let grpc_handler = {
+            let guard = self.grpc_handler.lock().map_err(|_| {
+                napi::Error::new(napi::Status::GenericFailure, "gRPC handler mutex poisoned")
+            })?;
+            guard.clone()
+        };
+        if let Some(grpc) = grpc_handler {
+            srv.on_grpc(grpc);
+        }
         srv.set_stream_registry(self.stream_registry.clone());
 
         // Wire the shield filter if the JS side configured it before boot.
@@ -395,6 +499,9 @@ impl HyperServer {
         // goes, the captured ThreadsafeFunction's refcount hits zero, and
         // napi-rs releases its libuv handle on Drop.
         if let Ok(mut guard) = self.handler.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.grpc_handler.lock() {
             *guard = None;
         }
         // Shared runtime is static — not dropped on close (reused by other crates)

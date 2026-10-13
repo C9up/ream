@@ -24,6 +24,35 @@ export interface NapiResponse {
 }
 
 /**
+ * One gRPC call, handed to the JS handler registered with `onGrpc`.
+ *
+ * The message crosses as BYTES — never through the `String` (base64 for
+ * binary) body of the HTTP path.
+ */
+
+export interface NapiGrpcCall {
+  /** `/package.Service/Method`. */
+  path: string
+  /** Request metadata, header names lowercased. */
+  metadata: Record<string, string>
+  /** The request message, still encoded. */
+  message: Uint8Array
+  /** Resolved client IP, by the same trusted-proxy rules as `request.ip`. */
+  ip: string
+}
+
+/**
+ * What the gRPC handler answers: a reply `message`, or a status `code`
+ * (with its `details`) instead of one.
+ */
+
+export interface NapiGrpcReply {
+  message?: Uint8Array
+  code?: number
+  details?: string
+}
+
+/**
  * Configuration for the wire-level shield filter. Mirrors the Rust
  * `ShieldConfig` shape; the JS layer constructs it from `ShieldMiddleware`
  * options at boot and hands it off to `HyperServer.configureShield`.
@@ -95,6 +124,15 @@ export declare class HyperServer {
    * this comment described until the boundary stopped carrying them.
    */
   onRequest(callback: (request: Record<string, unknown>) => Promise<NapiResponse>): void
+  /**
+   * Register the gRPC handler. From `listen()` on, `application/grpc`
+   * requests on this port are gRPC calls handed to it; without it they stay
+   * HTTP requests. Must be called BEFORE `listen()`.
+   *
+   * A rejected promise is answered `INTERNAL`, with nothing of the error
+   * sent to the client.
+   */
+  onGrpc(callback: (arg: NapiGrpcCall) => Promise<NapiGrpcReply>): void
   /**
    * Configure the trusted-proxy CIDR list used by `request.ip` resolution.
    * Must be called BEFORE `listen()`. Empty list = legacy permissive mode

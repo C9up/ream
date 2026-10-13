@@ -7,7 +7,7 @@ use crate::response::ReamResponse;
 use crate::stream_registry::StreamRegistry;
 use bytes::Bytes;
 use futures_util::StreamExt;
-use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Either, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -70,6 +70,9 @@ pub struct ReamServer {
     /// the response to streaming mode (SSE etc.). Always cloned out into the
     /// per-connection task so handlers / NAPI keep a coherent view.
     stream_registry: StreamRegistry,
+    /// gRPC handler. `None` (default) leaves `application/grpc` requests on
+    /// the HTTP path, exactly as before gRPC existed.
+    grpc_handler: Option<crate::GrpcHandler>,
 }
 
 impl ReamServer {
@@ -88,6 +91,7 @@ impl ReamServer {
             trusted_proxies: Arc::new(Vec::new()),
             rate_limiter: None,
             stream_registry: StreamRegistry::new(),
+            grpc_handler: None,
         }
     }
 
@@ -136,6 +140,12 @@ impl ReamServer {
         self.response_filter = Some(filter);
     }
 
+    /// Register the gRPC handler: from then on, `application/grpc` requests
+    /// are served as gRPC calls on this same port (see [`crate::grpc`]).
+    pub fn on_grpc(&mut self, handler: crate::GrpcHandler) {
+        self.grpc_handler = Some(handler);
+    }
+
     /// Register the request handler.
     pub fn on_request(&mut self, handler: RequestHandler) {
         self.handler = Some(handler);
@@ -159,6 +169,7 @@ impl ReamServer {
         let trusted_proxies = self.trusted_proxies.clone();
         let rate_limiter = self.rate_limiter.clone();
         let stream_registry = self.stream_registry.clone();
+        let grpc_handler = self.grpc_handler.clone();
 
         let addr = SocketAddr::from((self.host, self.port));
         let listener = TcpListener::bind(addr).await?;
@@ -192,6 +203,7 @@ impl ReamServer {
                                 let trusted = trusted_proxies.clone();
                                 let limiter = rate_limiter.clone();
                                 let registry = stream_registry.clone();
+                                let grpc = grpc_handler.clone();
 
                                 let res_filter = response_filter.clone();
                                 let mut conn_shutdown = conn_shutdown_rx.clone();
@@ -204,12 +216,22 @@ impl ReamServer {
                                         let trusted = trusted.clone();
                                         let limiter = limiter.clone();
                                         let registry = registry.clone();
+                                        let grpc = grpc.clone();
                                         async move {
+                                            if let Some(grpc) = grpc.filter(|_| crate::grpc::is_grpc(&req)) {
+                                                let guards = crate::grpc::Guards {
+                                                    peer_ip: &peer_ip,
+                                                    trusted_proxies: &trusted,
+                                                    rate_limiter: limiter.as_ref(),
+                                                    security_filter: filter.as_ref(),
+                                                };
+                                                return Ok(crate::grpc::serve(req, grpc, guards).await.map(Either::Right));
+                                            }
                                             let ream_req = match hyper_to_ream_request(req, peer_ip, &trusted).await {
                                                 Ok(r) => r,
                                                 Err(res) => {
                                                     // Body too large — return 413 from Rust, no NAPI crossing.
-                                                    return build_hyper_response(res, &registry).await;
+                                                    return build_hyper_response(res, &registry).await.map(|r| r.map(Either::Left));
                                                 }
                                             };
 
@@ -220,7 +242,7 @@ impl ReamServer {
                                                     crate::FilterResult::Sanitized(req) => req,
                                                     crate::FilterResult::Reject(res) => {
                                                         // Rejected — return directly from Rust, no NAPI crossing
-                                                        return build_hyper_response(res, &registry).await;
+                                                        return build_hyper_response(res, &registry).await.map(|r| r.map(Either::Left));
                                                     }
                                                 }
                                             } else {
@@ -239,7 +261,7 @@ impl ReamServer {
                                                         rate_limited_response(outcome),
                                                         &registry,
                                                     )
-                                                    .await;
+                                                    .await.map(|r| r.map(Either::Left));
                                                 }
                                             }
 
@@ -261,7 +283,7 @@ impl ReamServer {
                                                 attach_rate_limit_headers(&mut ream_res, outcome);
                                             }
 
-                                            build_hyper_response(ream_res, &registry).await
+                                            build_hyper_response(ream_res, &registry).await.map(|r| r.map(Either::Left))
                                         }
                                     });
 

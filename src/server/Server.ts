@@ -6,6 +6,7 @@
  * - server.errorHandler(() => import('#exceptions/handler')) — custom exception handler
  */
 
+import { ReamError } from '../errors/ReamError.js'
 import type { ExceptionHandler } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
@@ -32,12 +33,30 @@ export type MiddlewareClassConstructor = new (...args: never[]) => MiddlewareCla
 /** What server.use() and router.use() accept: lazy imports or direct functions. */
 export type MiddlewareEntry = LazyImport<MiddlewareClassConstructor> | MiddlewareFunction
 
+/** One unary gRPC call, as the native server hands it over. */
+export interface GrpcCall {
+  /** `/package.Service/Method`, as it arrived. */
+  path: string
+  /** Request metadata, header names lowercased. */
+  metadata: Record<string, string>
+  /** The request message, still encoded. */
+  message: Uint8Array
+  /** Resolved client IP, by the same trusted-proxy rules as `request.ip()`. */
+  ip: string
+}
+
+/** A reply message, still encoded — or a gRPC status code instead of one. */
+export type GrpcReply = { message: Uint8Array } | { code: number; details: string }
+
+export type GrpcHandler = (call: GrpcCall) => Promise<GrpcReply>
+
 export class Server {
   #router: Router
   #serverMiddleware: MiddlewareFunction[] = []
   #errorHandlerImporter?: LazyImport<ErrorHandlerClass>
   #resolvedErrorHandler?: ExceptionHandler
   #trustedProxies: string[] = []
+  #grpcHandler?: GrpcHandler
 
   constructor(router: Router) {
     this.#router = router
@@ -63,6 +82,36 @@ export class Server {
   /** Read the current trusted-proxy list (consumed by Ignitor at boot). */
   getTrustedProxies(): readonly string[] {
     return this.#trustedProxies
+  }
+
+  /**
+   * Serve gRPC on the HTTP port. Once a handler is set, a request whose
+   * content-type is `application/grpc*` is a gRPC call handed to it — ahead
+   * of the router and the middleware, which never see it. The native server
+   * still applies its rate limiter and security filter first. Without a
+   * handler such a request stays an ordinary HTTP request.
+   *
+   * No AdonisJS counterpart: it serves on Node's `http.Server`, where gRPC
+   * would attach a library of its own. Here the native server owns the
+   * socket, so the gRPC branch is part of it, and this is how a package
+   * reaches it — `@c9up/neutrino` registers its dispatcher here.
+   *
+   * One handler per server: a second one throws. Two packages both serving
+   * gRPC is a conflict to resolve, not to settle by load order.
+   */
+  grpc(handler: GrpcHandler): this {
+    if (this.#grpcHandler) {
+      throw new ReamError('E_SERVER_GRPC_ALREADY_SET', 'A gRPC handler is already registered.', {
+        hint: 'Only one package can serve gRPC on the HTTP port.',
+      })
+    }
+    this.#grpcHandler = handler
+    return this
+  }
+
+  /** The gRPC handler, if one is set (consumed by Ignitor at boot). */
+  getGrpcHandler(): GrpcHandler | undefined {
+    return this.#grpcHandler
   }
 
   /**
