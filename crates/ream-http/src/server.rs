@@ -382,6 +382,12 @@ fn attach_rate_limit_headers(response: &mut ReamResponse, outcome: crate::RateLi
         .insert("x-ratelimit-reset".into(), reset_secs.to_string());
 }
 
+/// The request target as `/path?query`, whatever form the URI arrived in.
+pub(crate) fn origin_form(uri: &hyper::Uri) -> String {
+    uri.path_and_query()
+        .map_or_else(|| uri.path().to_string(), |pq| pq.as_str().to_string())
+}
+
 /// Convert a hyper Request to a ReamRequest, including the TCP peer IP and
 /// the resolved client IP (per the configured trusted-proxy CIDR list).
 async fn hyper_to_ream_request(
@@ -390,7 +396,10 @@ async fn hyper_to_ream_request(
     trusted_proxies: &[String],
 ) -> Result<ReamRequest, ReamResponse> {
     let method = req.method().to_string();
-    let uri = req.uri().to_string();
+    // Origin form (`/path?query`). Over HTTP/2 the URI is absolute — it
+    // carries `:scheme` and `:authority` — and `to_string()` handed the router
+    // `http://host:port/path` to match its routes against.
+    let uri = origin_form(req.uri());
 
     let mut headers = HashMap::new();
     for (name, value) in req.headers() {

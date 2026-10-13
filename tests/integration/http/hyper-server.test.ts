@@ -1,3 +1,4 @@
+import { connect } from 'node:http2'
 import { describe, expect, it } from 'vitest'
 import { HyperServer } from './loader.js'
 import { asRequest, type NapiRequest } from './napi-request.js'
@@ -215,5 +216,36 @@ describeIfNetwork('hyper-server > bind address', () => {
 
   it('rejects a host that is neither an IPv4 literal nor localhost', () => {
     expect(() => new HyperServer(0, 'not-a-host')).toThrow(/INVALID_HOST|not-a-host/)
+  })
+})
+
+describeIfNetwork('hyper-server > HTTP/2', () => {
+  it('hands the handler the path in origin form, as over HTTP/1.1', async () => {
+    // Over HTTP/2 the request URI is absolute (it carries :scheme and
+    // :authority). The handler used to receive `http://host:port/path`, so no
+    // route matched a direct HTTP/2 client.
+    const seen: NapiRequest[] = []
+    const { port, close } = await createServer(async (req) => {
+      seen.push(req)
+      return { status: 200, headers: {}, body: 'ok' }
+    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const session = connect(`http://127.0.0.1:${port}`)
+        session.on('error', reject)
+        const request = session.request({ ':path': '/users/42?tab=posts' })
+        request.on('error', reject)
+        request.resume()
+        request.on('end', () => {
+          session.close()
+          resolve()
+        })
+        request.end()
+      })
+      expect(seen[0]?.path).toBe('/users/42')
+      expect(seen[0]?.query).toBe('tab=posts')
+    } finally {
+      await close()
+    }
   })
 })
