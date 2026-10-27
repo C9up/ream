@@ -25,6 +25,23 @@ export class E_SESSION_NOT_READY extends Exception {
   }
 }
 
+/**
+ * A store with no `update()`: it cannot write a session back only while its
+ * entry still exists, so a request running across a logout could sign the
+ * user in again. Refused when the store is attached, not at the first race.
+ */
+export class E_SESSION_STORE_NOT_CONDITIONAL extends Exception {
+  static override status = 500
+  static override code = 'E_SESSION_STORE_NOT_CONDITIONAL'
+
+  constructor() {
+    super(
+      'This session store has no update(): it must write a session only over an entry that still exists, in one step. See "Writing a session store".',
+      { status: 500, code: 'E_SESSION_STORE_NOT_CONDITIONAL' },
+    )
+  }
+}
+
 /** The configured store cannot tag sessions (cookie and file stores cannot). */
 export class E_SESSION_TAGGING_NOT_SUPPORTED extends Exception {
   static override status = 500

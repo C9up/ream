@@ -6,7 +6,9 @@ function fakeClient() {
   return {
     store,
     get: vi.fn(async (key: string) => store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: string) => {
+    // Honours `XX`, as Redis does: no write, and a null reply, without the key.
+    set: vi.fn(async (key: string, value: string, ...args: unknown[]) => {
+      if (args.includes('XX') && !store.has(key)) return null
       store.set(key, value)
       return 'OK'
     }),
@@ -20,6 +22,30 @@ function fakeClient() {
 }
 
 describe('session RedisDriver', () => {
+  it('updates an existing session in one SET … XX', async () => {
+    const client = fakeClient()
+    const driver = new RedisDriver(client)
+    await driver.write('sid', { userId: 42 }, 120)
+
+    expect(await driver.update('sid', { userId: 42, theme: 'dark' }, 120)).toBe(true)
+    expect(client.set).toHaveBeenLastCalledWith(
+      'ream:session:sid',
+      '{"userId":42,"theme":"dark"}',
+      'EX',
+      120,
+      'XX',
+    )
+    expect(await driver.read('sid')).toEqual({ userId: 42, theme: 'dark' })
+  })
+
+  it('does not recreate a session destroyed meanwhile', async () => {
+    const client = fakeClient()
+    const driver = new RedisDriver(client)
+
+    expect(await driver.update('gone', { userId: 42 }, 120)).toBe(false)
+    expect(await driver.read('gone')).toBe(null)
+  })
+
   it('round-trips a session payload', async () => {
     const client = fakeClient()
     const driver = new RedisDriver(client)

@@ -6,7 +6,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseDriver } from '../../src/session/drivers/DatabaseDriver.js'
 import { FileDriver } from '../../src/session/drivers/FileDriver.js'
 import { defined } from '../__helpers__/defined.js'
@@ -18,6 +18,44 @@ describe('ream > file session driver', () => {
   })
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('updates a live file and leaves a missing or expired one alone', async () => {
+    const driver = new FileDriver({ location: dir })
+    await driver.write('sid', { user: 1 }, 3600)
+    expect(await driver.update('sid', { user: 1, theme: 'dark' }, 3600)).toBe(true)
+    expect(await driver.read('sid')).toEqual({ user: 1, theme: 'dark' })
+
+    expect(await driver.update('gone', { user: 1 }, 3600)).toBe(false)
+    expect(await driver.read('gone')).toBe(null)
+
+    // Expired, the file is dropped under the lock the update already holds.
+    await driver.write('old', { user: 1 }, -1)
+    expect(await driver.update('old', { user: 1 }, 3600)).toBe(false)
+    expect(fs.readdirSync(dir).filter((name) => name.endsWith('.lock'))).toEqual([])
+  })
+
+  it('keeps a logout that lands between the check and the write', async () => {
+    // The race the bug is about: a slow request writes its signed-in copy back
+    // while a logout destroys the file. The destroy waits for the update's
+    // lock, so it lands after it — and the session stays destroyed.
+    const driver = new FileDriver({ location: dir })
+    await driver.write('sid', { user: 7 }, 3600)
+    const writeFile = fs.promises.writeFile
+    let logout: Promise<void> | undefined
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation((...args) => {
+      logout ??= driver.destroy('sid')
+      return writeFile(...args)
+    })
+    try {
+      expect(await driver.update('sid', { user: 7, throttle: 1 }, 3600)).toBe(true)
+      await logout
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await driver.read('sid')).toBe(null)
+    expect(await driver.update('sid', { user: 7 }, 3600)).toBe(false)
+    expect(await driver.read('sid')).toBe(null)
   })
 
   it('round-trips a session across instances', async () => {
@@ -122,6 +160,17 @@ describe('ream > database session driver', () => {
     expect(
       () => new DatabaseDriver({ connection: fakeDb(), tableName: 's; DROP TABLE users' }),
     ).toThrow(/not a plain identifier/)
+  })
+
+  it('updates a live row and leaves a missing one missing', async () => {
+    const db = fakeDb()
+    const driver = new DatabaseDriver({ connection: db })
+    await driver.write('sid', { user: 1 }, 3600)
+
+    expect(await driver.update('sid', { user: 1, theme: 'dark' }, 3600)).toBe(true)
+    expect(await driver.read('sid')).toEqual({ user: 1, theme: 'dark' })
+    expect(await driver.update('gone', { user: 1 }, 3600)).toBe(false)
+    expect(db.rows.has('gone')).toBe(false)
   })
 
   it('destroys a session', async () => {

@@ -11,7 +11,11 @@
  */
 
 import type { SessionRedisClientSource } from './drivers/RedisDriver.js'
-import { E_SESSION_NOT_READY, E_SESSION_TAGGING_NOT_SUPPORTED } from './errors.js'
+import {
+  E_SESSION_NOT_READY,
+  E_SESSION_STORE_NOT_CONDITIONAL,
+  E_SESSION_TAGGING_NOT_SUPPORTED,
+} from './errors.js'
 import { ReadOnlyValuesStore } from './ReadOnlyValuesStore.js'
 
 export interface SessionDriver {
@@ -26,8 +30,27 @@ export interface SessionDriver {
    */
   read(sessionId: string): Promise<Record<string, unknown> | null>
   write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void>
+  /**
+   * Write only over an entry that is still there, in one step; `false` when it
+   * is gone, and nothing written.
+   *
+   * What `commit()` uses for a session that existed when the request came in.
+   * A request still running when the same session was logged out, rotated or
+   * destroyed everywhere would otherwise write its stale copy back — the user
+   * id included — and undo the logout. Upstream writes unconditionally and has
+   * that race; this is the named deviation that closes it.
+   *
+   * Required, and checked when the store is attached: a read followed by a
+   * write leaves the race open between the two calls.
+   */
+  update(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<boolean>
   destroy(sessionId: string): Promise<void>
   touch(sessionId: string, ttl: number): Promise<void>
+  /**
+   * The session lives with the client, not here: nothing on the server can
+   * delete a copy of it. Only the cookie store sets it.
+   */
+  readonly stateless?: boolean
 }
 
 /** One session belonging to a tagged user (AdonisJS `TaggedSession`). */
@@ -179,6 +202,8 @@ export class Session {
   #ttl = 0
   /** Whether {@link initiate} already ran, so a second call is a no-op. */
   #initiated = false
+  /** The entry vanished while this request ran — see {@link wasLost}. */
+  #lost = false
 
   constructor(sessionId: string, data: Record<string, unknown> = {}) {
     this.#sessionId = sessionId
@@ -226,6 +251,15 @@ export class Session {
   /** @internal — read by SessionMiddleware to detect a mid-request rotation. */
   wasRegenerated(): boolean {
     return this.#regenerated
+  }
+
+  /**
+   * @internal — the stored entry was gone by the time {@link commit} ran: it
+   * was logged out, rotated or destroyed by another request meanwhile. Nothing
+   * was written, and the middleware must not hand the browser this id again.
+   */
+  wasLost(): boolean {
+    return this.#lost
   }
 
   /** @internal — the id captured at request arrival; used to destroy the old driver entry post-regenerate. */
@@ -554,6 +588,11 @@ export class Session {
    * {@link initiate} / {@link commit} then have nothing to do.
    */
   setStore(driver: SessionDriver, options: { fresh: boolean; ttl: number }): void {
+    // A store written in JavaScript, or against the older contract, reaches
+    // here without the method the type requires.
+    if (typeof Reflect.get(driver, 'update') !== 'function') {
+      throw new E_SESSION_STORE_NOT_CONDITIONAL()
+    }
     this.#driver = driver
     this.#fresh = options.fresh
     this.#ttl = options.ttl
@@ -600,10 +639,25 @@ export class Session {
       return
     }
     if (this.#dirty) {
-      await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+      if (this.#fresh) {
+        await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+        return
+      }
+      this.#lost = !(await driver.update(this.#sessionId, this.toJSON(), this.#ttl))
       return
     }
     if (!this.#fresh) await driver.touch(this.#sessionId, this.#ttl)
+  }
+
+  /**
+   * Whether ending this session on the server ends every copy of it.
+   *
+   * False under the cookie store, where the session travels with the client:
+   * a logout replaces the cookie in one browser and cannot reach a copy. What
+   * an auth guard reads to refuse signing in on a store it cannot revoke.
+   */
+  get revocable(): boolean {
+    return this.#driver !== undefined && this.#driver.stateless !== true
   }
 
   /**

@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { MemoryDriver } from '../../src/session/drivers/MemoryDriver.js'
+import { E_SESSION_STORE_NOT_CONDITIONAL } from '../../src/session/errors.js'
 import { Session } from '../../src/session/Session.js'
 
 const TTL = 3600
@@ -65,12 +66,57 @@ describe('session > initiate', () => {
 describe('session > commit', () => {
   it('writes a modified session', async () => {
     const driver = new MemoryDriver()
-    const session = seated(driver)
+    const session = seated(driver, 'sess-1', true)
     session.put('user', 7)
 
     await session.commit()
 
     expect(await driver.read('sess-1')).toMatchObject({ user: 7 })
+  })
+
+  it('writes a modified pre-existing session over its entry', async () => {
+    const driver = new MemoryDriver()
+    await driver.write('sess-1', { user: 7 }, TTL)
+    const session = seated(driver)
+    await session.initiate()
+    session.put('theme', 'dark')
+
+    await session.commit()
+
+    expect(await driver.read('sess-1')).toMatchObject({ user: 7, theme: 'dark' })
+    expect(session.wasLost()).toBe(false)
+  })
+
+  it('does not write back a session destroyed while the request ran', async () => {
+    // A request still running when the user logged out elsewhere: writing its
+    // copy back would restore the user id the logout removed.
+    const driver = new MemoryDriver()
+    await driver.write('sess-1', { user: 7 }, TTL)
+    const session = seated(driver)
+    await session.initiate()
+    await driver.destroy('sess-1')
+    session.put('throttle', 1)
+
+    await session.commit()
+
+    expect(await driver.read('sess-1')).toBe(null)
+    expect(session.wasLost()).toBe(true)
+  })
+
+  it('refuses a store with no update(), where the race would stay open', () => {
+    const memory = new MemoryDriver()
+    const driver = {
+      read: (id: string) => memory.read(id),
+      write: (id: string, data: Record<string, unknown>, ttl: number) =>
+        memory.write(id, data, ttl),
+      destroy: (id: string) => memory.destroy(id),
+      touch: (id: string, ttl: number) => memory.touch(id, ttl),
+    }
+    const session = new Session('sess-1')
+    // What a store written in JavaScript, or against the older contract, hands in.
+    expect(() =>
+      Reflect.apply(Session.prototype.setStore, session, [driver, { fresh: false, ttl: TTL }]),
+    ).toThrowError(E_SESSION_STORE_NOT_CONDITIONAL)
   })
 
   it('touches an untouched pre-existing session instead of rewriting it', async () => {

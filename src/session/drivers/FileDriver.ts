@@ -16,6 +16,18 @@ export interface FileDriverOptions {
   location: string
 }
 
+/** How long a writer waits for a session's lock before giving up. */
+const LOCK_WAIT_MS = 2000
+/**
+ * A lock older than this was left by a process that died holding it. Every
+ * operation under the lock is one small file read or write, far below it.
+ */
+const LOCK_STALE_MS = 10_000
+
+function hasCode(error: unknown, code: string): boolean {
+  return error instanceof Error && Reflect.get(error, 'code') === code
+}
+
 export class FileDriver implements SessionDriver {
   readonly #location: string
 
@@ -37,6 +49,17 @@ export class FileDriver implements SessionDriver {
   }
 
   async read(sessionId: string): Promise<Record<string, unknown> | null> {
+    return this.#read(sessionId, () => this.destroy(sessionId))
+  }
+
+  /**
+   * Read, dropping an expired file through `drop`: `destroy()` from outside,
+   * a bare removal from inside the lock, which is already held there.
+   */
+  async #read(
+    sessionId: string,
+    drop: () => Promise<void>,
+  ): Promise<Record<string, unknown> | null> {
     let raw: string
     try {
       raw = await fs.promises.readFile(this.#pathFor(sessionId), 'utf8')
@@ -48,7 +71,7 @@ export class FileDriver implements SessionDriver {
       if (typeof parsed !== 'object' || parsed === null) return null
       const entry = parsed as { expiresAt?: number; data?: Record<string, unknown> }
       if (typeof entry.expiresAt === 'number' && entry.expiresAt < Date.now()) {
-        await this.destroy(sessionId)
+        await drop()
         return null
       }
       return entry.data ?? {}
@@ -60,6 +83,43 @@ export class FileDriver implements SessionDriver {
   }
 
   async write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void> {
+    await this.#locked(sessionId, () => this.#replace(sessionId, data, ttl))
+  }
+
+  /**
+   * Written only while the file is still there. A filesystem has no
+   * conditional write, so every change to a session's file — this, `write`,
+   * `destroy` and `touch` — runs under that session's lock: a `destroy` from a
+   * logout cannot land between the check and the write, in this process or in
+   * another one sharing the directory.
+   */
+  async update(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<boolean> {
+    return this.#locked(sessionId, async () => {
+      if ((await this.#read(sessionId, () => this.#remove(sessionId))) === null) return false
+      await this.#replace(sessionId, data, ttl)
+      return true
+    })
+  }
+
+  async destroy(sessionId: string): Promise<void> {
+    await this.#locked(sessionId, () => this.#remove(sessionId))
+  }
+
+  async #remove(sessionId: string): Promise<void> {
+    await fs.promises.rm(this.#pathFor(sessionId), { force: true })
+  }
+
+  async touch(sessionId: string, ttl: number): Promise<void> {
+    await this.#locked(sessionId, async () => {
+      const data = await this.#read(sessionId, () => this.#remove(sessionId))
+      // Nothing stored: there is no expiry to slide, and writing here would
+      // create the very session that was not there.
+      if (data === null || Object.keys(data).length === 0) return
+      await this.#replace(sessionId, data, ttl)
+    })
+  }
+
+  async #replace(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void> {
     const file = this.#pathFor(sessionId)
     const payload = JSON.stringify({ expiresAt: Date.now() + ttl * 1000, data })
     // Written to a temporary neighbour then renamed: a crash mid-write would
@@ -70,15 +130,35 @@ export class FileDriver implements SessionDriver {
     await fs.promises.rename(temp, file)
   }
 
-  async destroy(sessionId: string): Promise<void> {
-    await fs.promises.rm(this.#pathFor(sessionId), { force: true })
-  }
-
-  async touch(sessionId: string, ttl: number): Promise<void> {
-    const data = await this.read(sessionId)
-    // Nothing stored: there is no expiry to slide, and writing here would
-    // create the very session that was not there.
-    if (data === null || Object.keys(data).length === 0) return
-    await this.write(sessionId, data, ttl)
+  /**
+   * Run `fn` holding the session's lock: a directory beside its file, which
+   * `mkdir` creates atomically or refuses — the one exclusive primitive every
+   * filesystem gives, across processes too.
+   */
+  async #locked<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const lock = `${this.#pathFor(sessionId)}.lock`
+    const deadline = Date.now() + LOCK_WAIT_MS
+    for (;;) {
+      try {
+        await fs.promises.mkdir(lock)
+        break
+      } catch (error) {
+        if (!hasCode(error, 'EEXIST')) throw error
+        const held = await fs.promises.stat(lock).catch(() => null)
+        if (held !== null && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
+          await fs.promises.rm(lock, { recursive: true, force: true })
+          continue
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`Session file is locked: ${lock}`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+    }
+    try {
+      return await fn()
+    } finally {
+      await fs.promises.rmdir(lock).catch(() => {})
+    }
   }
 }

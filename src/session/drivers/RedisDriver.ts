@@ -142,6 +142,13 @@ export class RedisDriver implements SessionDriverWithTagging {
     await client.set(this.#key(sessionId), JSON.stringify(data), 'EX', ttl)
   }
 
+  /** `XX` makes the existence check and the write one command. */
+  async update(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<boolean> {
+    const client = await this.#client()
+    const reply = await client.set(this.#key(sessionId), JSON.stringify(data), 'EX', ttl, 'XX')
+    return reply !== null
+  }
+
   async destroy(sessionId: string): Promise<void> {
     const client = await this.#client()
     await client.del(this.#key(sessionId))

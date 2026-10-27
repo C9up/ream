@@ -57,6 +57,15 @@ export class MemoryDriver implements SessionDriverWithTagging {
     }
   }
 
+  /** Atomic by construction: nothing else runs between the check and the set. */
+  async update(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<boolean> {
+    const entry = this.#store.get(sessionId)
+    if (!entry || entry.expiresAt < Date.now()) return false
+    this.#store.delete(sessionId)
+    this.#store.set(sessionId, { data, expiresAt: Date.now() + ttl * 1000 })
+    return true
+  }
+
   async destroy(sessionId: string): Promise<void> {
     this.#store.delete(sessionId)
     // Drop the tags too: a destroyed session left in the index would be

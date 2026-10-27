@@ -143,6 +143,16 @@ export class DatabaseDriver implements SessionDriverWithTagging {
     }
   }
 
+  /** One UPDATE: a row deleted or expired meanwhile matches nothing. */
+  async update(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<boolean> {
+    const now = Date.now()
+    const updated = await this.#db.execute(
+      `UPDATE ${this.#table} SET data = ?, expires_at = ? WHERE id = ? AND expires_at >= ?`,
+      [JSON.stringify(data), now + ttl * 1000, sessionId, now],
+    )
+    return updated.rowsAffected > 0
+  }
+
   async destroy(sessionId: string): Promise<void> {
     await this.#db.execute(`DELETE FROM ${this.#table} WHERE id = ?`, [sessionId])
   }

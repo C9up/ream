@@ -79,7 +79,7 @@ export default class SessionMiddleware {
           'Cookie session driver requires a secret. Set session.secret in your config.',
         )
       }
-      this.#cookieDriver = new CookieDriver(config.secret)
+      this.#cookieDriver = new CookieDriver(config.secret, this.#config.cookieName)
       this.#driver = this.#cookieDriver
     } else if (this.#config.driver === 'memory') {
       this.#driver = new MemoryDriver()
@@ -163,7 +163,7 @@ export default class SessionMiddleware {
       // mid-session). Caller opts in via SessionConfig.rolling.
       const shouldEmit = session.isDirty() || (rolling && hadIncomingCookie)
       if (shouldEmit) {
-        const encoded = this.#cookieDriver.encode(session.toJSON())
+        const encoded = this.#cookieDriver.encode(session.toJSON(), maxAge)
         if (encoded.length > 4096) {
           process.stderr.write(
             `[session] Cookie session exceeds 4096 bytes (${encoded.length}). ` +
@@ -216,6 +216,10 @@ export default class SessionMiddleware {
     // no server-side row (touch() is a no-op without a backing entry),
     // defeats HTTP caching, and leaks a Set-Cookie to CDNs. This mirrors
     // the cookie-driver path above (which already omits `isNew`).
+    // A session logged out or rotated by another request while this one ran
+    // was not written back (see `Session.wasLost`); handing the browser its id
+    // again would only point it at nothing, over the cookie it got since.
+    if (session.wasLost()) return
     if (session.isDirty() || regenerated || (rolling && hadIncomingCookie)) {
       // SIGNED, as AdonisJS signs it (`response.cookie(cookieName, id, …)`).
       // The id is 192 bits of entropy, so it was never guessable — what the

@@ -5,23 +5,33 @@ import type { SessionDriver } from '../Session.js'
  * Cookie session driver — stores session data in an encrypted cookie (AES-256-GCM).
  * Stateless on the server. Limited by cookie size (~4KB).
  * Requires a secret for encryption.
+ *
+ * Sealed for the cookie's name, as upstream seals every encrypted cookie, so a
+ * value encrypted for another cookie under the same key cannot be presented as
+ * the session. And sealed with its expiry — the named deviation: upstream
+ * leaves expiry to the browser's `maxAge`, which a copied cookie does not
+ * obey, so a session lifted from a browser stayed valid for as long as the key
+ * did. Here a value older than the session's lifetime opens as nothing.
  */
 export class CookieDriver implements SessionDriver {
   #signer: CookieSigner
+  readonly #purpose: string
+  readonly stateless = true
 
-  constructor(secret: string) {
+  constructor(secret: string, cookieName = 'ream_session') {
     if (!secret) {
       throw new Error(
         'CookieDriver requires a secret for session encryption. Set session.secret in your config.',
       )
     }
     this.#signer = new CookieSigner(secret)
+    this.#purpose = cookieName
   }
 
   async read(sessionId: string): Promise<Record<string, unknown> | null> {
     if (!sessionId) return null
-    const decrypted = this.#signer.decrypt(sessionId)
-    if (!decrypted) return null
+    const decrypted = this.#signer.decrypt(sessionId, this.#purpose)
+    if (typeof decrypted !== 'string') return null
     try {
       return JSON.parse(decrypted)
     } catch {
@@ -33,6 +43,11 @@ export class CookieDriver implements SessionDriver {
     // Cookie driver writes via the response cookie — handled by middleware
   }
 
+  async update(_sessionId: string, _data: Record<string, unknown>, _ttl: number): Promise<boolean> {
+    // Cookie driver writes via the response cookie — handled by middleware
+    return true
+  }
+
   async destroy(_sessionId: string): Promise<void> {
     // Cookie deletion handled by middleware setting maxAge=0
   }
@@ -41,8 +56,8 @@ export class CookieDriver implements SessionDriver {
     // Cookie renewal handled by middleware
   }
 
-  /** Encode session data for cookie storage (encrypted). */
-  encode(data: Record<string, unknown>): string {
-    return this.#signer.encrypt(JSON.stringify(data))
+  /** Encode session data for cookie storage (encrypted), valid for `ttl` seconds. */
+  encode(data: Record<string, unknown>, ttl: number): string {
+    return this.#signer.encrypt(JSON.stringify(data), ttl * 1000, this.#purpose)
   }
 }
