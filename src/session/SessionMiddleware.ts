@@ -136,6 +136,9 @@ export default class SessionMiddleware {
 
     // Cookie driver: the cookie value IS the session data (encrypted)
     if (this.#cookieDriver) {
+      // When the data this request carries was last vouched for. See the
+      // re-emission below.
+      const readAt = Date.now()
       const data = await this.#driver.read(sessionId ?? '')
       sessionId = sessionId ?? generateSessionId()
       // `null` means the cookie carried nothing readable — an empty session,
@@ -162,8 +165,20 @@ export default class SessionMiddleware {
       // the cookie maxAge window slides forward (active users don't time out
       // mid-session). Caller opts in via SessionConfig.rolling.
       const shouldEmit = session.isDirty() || (rolling && hadIncomingCookie)
-      if (shouldEmit) {
-        const encoded = this.#cookieDriver.encode(session.toJSON(), maxAge)
+      // The re-emitted cookie lives `maxAge` from when this request READ the
+      // session, not from its response. Counted from the response, a request
+      // that outlasted a logout re-issued the signed-in data with a full new
+      // lifetime — past the window a revocation is kept for, after which the
+      // sign-in it carried was accepted again. Counted from the read, no cookie
+      // carrying a sign-in outlives the logout by more than `maxAge`. A session
+      // regenerated during the request (a login) is new data, so it counts from
+      // now; so does a session that came in with no cookie.
+      const issuedAt = hadIncomingCookie && !session.wasRegenerated() ? readAt : Date.now()
+      const remaining = issuedAt + maxAge * 1000 - Date.now()
+      // Expired while the request ran: nothing to hand back, and the browser
+      // keeps whatever cookie it was given since.
+      if (shouldEmit && remaining > 0) {
+        const encoded = this.#cookieDriver.encode(session.toJSON(), remaining / 1000)
         if (encoded.length > 4096) {
           process.stderr.write(
             `[session] Cookie session exceeds 4096 bytes (${encoded.length}). ` +
@@ -174,7 +189,7 @@ export default class SessionMiddleware {
           // Already encrypted by the cookie driver; packing it again would
           // only make the cookie bigger and change nothing.
           encode: false,
-          maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
+          maxAge: this.#config.clearWithBrowser ? undefined : Math.ceil(remaining / 1000),
           path: '/',
           httpOnly: true,
           sameSite: 'lax',

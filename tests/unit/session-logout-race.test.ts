@@ -176,6 +176,75 @@ describe('session > the cookie driver checks its own expiry', () => {
     expect(await userBehind(mw, lastCookie(active))).toBe(7)
   })
 
+  it('counts a re-emitted lifetime from when the request read the session', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-23T08:00:00Z'))
+    const mw = new SessionMiddleware({
+      driver: 'cookie',
+      secret: SECRET,
+      maxAge: 600,
+      rolling: true,
+    })
+    const login = makeCtx()
+    await mw.handle(login as never, async () => {
+      sessionOf(login).put('user', 7)
+    })
+
+    // Read at 08:01, answered at 08:06: the copy it hands back is good until
+    // 08:11, not 08:16.
+    vi.setSystemTime(new Date('2026-10-23T08:01:00Z'))
+    const slow = makeCtx(lastCookie(login))
+    await mw.handle(slow as never, async () => {
+      vi.setSystemTime(new Date('2026-10-23T08:06:00Z'))
+    })
+    vi.setSystemTime(new Date('2026-10-23T08:10:59Z'))
+    expect(await userBehind(mw, lastCookie(slow))).toBe(7)
+    vi.setSystemTime(new Date('2026-10-23T08:11:01Z'))
+    expect(await userBehind(mw, lastCookie(slow))).toBeUndefined()
+  })
+
+  it('re-sends nothing from a request that outlasted the session', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-23T08:00:00Z'))
+    const mw = new SessionMiddleware({
+      driver: 'cookie',
+      secret: SECRET,
+      maxAge: 600,
+      rolling: true,
+    })
+    const login = makeCtx()
+    await mw.handle(login as never, async () => {
+      sessionOf(login).put('user', 7)
+    })
+
+    const slow = makeCtx(lastCookie(login))
+    await mw.handle(slow as never, async () => {
+      vi.setSystemTime(new Date('2026-10-23T08:10:01Z'))
+      sessionOf(slow).put('throttle', 1)
+    })
+    // The browser keeps the cookie it holds — after a logout, the signed-out one.
+    expect(slow.response.cookies).toEqual([])
+  })
+
+  it('gives a session regenerated during the request its whole lifetime', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-23T08:00:00Z'))
+    const mw = new SessionMiddleware({ driver: 'cookie', secret: SECRET, maxAge: 600 })
+    const visit = makeCtx()
+    await mw.handle(visit as never, async () => {
+      sessionOf(visit).put('visited', true)
+    })
+
+    const login = makeCtx(lastCookie(visit))
+    await mw.handle(login as never, async () => {
+      vi.setSystemTime(new Date('2026-10-23T08:05:00Z'))
+      sessionOf(login).regenerate()
+      sessionOf(login).put('user', 7)
+    })
+    vi.setSystemTime(new Date('2026-10-23T08:14:00Z'))
+    expect(await userBehind(mw, lastCookie(login))).toBe(7)
+  })
+
   it('refuses a value encrypted for another cookie under the same key', async () => {
     const mw = new SessionMiddleware({ driver: 'cookie', secret: SECRET, maxAge: 600 })
     const forged = new CookieSigner(SECRET).encrypt(
