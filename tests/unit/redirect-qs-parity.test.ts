@@ -87,21 +87,30 @@ describe('ream > redirect().toIntended (AdonisJS parity)', () => {
       },
     }
     const response = new Response()
+    // What HttpContext passes: the path with its query, and the authority.
+    const url = new URL(requestUrl)
     const redirect = new RedirectBuilder(response, {
-      requestUrl,
+      requestUrl: `${url.pathname}${url.search}`,
+      requestAuthority: url.host,
       session,
       routeUrlResolver: (name) => `/${name}`,
     })
     return { response, redirect, session, read: () => intended }
   }
 
-  it('remembers a GET destination and redirects back to it after', () => {
-    const { redirect, response, read } = withSession()
+  it('remembers a GET destination, query included, and redirects back to it after', () => {
+    const { redirect, response, read } = withSession('http://app.test/admin/reports?year=2026')
     redirect.withIntendedUrl('GET')
-    expect(read()).toBe('http://app.test/admin/reports')
+    expect(read()).toBe('/admin/reports?year=2026')
 
     redirect.toIntended()
-    expect(location(response)).toBe('http://app.test/admin/reports')
+    expect(location(response)).toBe('/admin/reports?year=2026')
+  })
+
+  it('accepts a stored absolute URL on the request authority', () => {
+    const { redirect, response } = withSession('http://app.test/x', 'https://app.test/admin')
+    redirect.toIntended('/safe')
+    expect(location(response)).toBe('https://app.test/admin')
   })
 
   it('consumes the stored URL, so a second redirect falls back', () => {
@@ -119,7 +128,7 @@ describe('ream > redirect().toIntended (AdonisJS parity)', () => {
 
     const response = new Response()
     const xhr = new RedirectBuilder(response, {
-      requestUrl: 'http://app.test/x',
+      requestUrl: '/x',
       session: post.session,
       isAjax: true,
     })

@@ -452,8 +452,9 @@ export class HttpContext extends Macroable {
     this.response.setRedirectFactory(
       () =>
         new RedirectBuilder(this.response, {
-          requestUrl: this.request.url(),
+          requestUrl: this.request.url(true),
           requestReferer: this.request.header('referer'),
+          requestAuthority: this.request.authority() ?? undefined,
           routeUrlResolver: this.#routeUrlResolver,
         }),
     )

@@ -240,7 +240,12 @@ describe('Request.qs > nested and repeated keys', () => {
 
 describe('RedirectBuilder > members AdonisJS exposes', () => {
   function redirectFor(referer: string, requestUrl: string): RedirectBuilder {
-    return new RedirectBuilder(new Response(), { requestUrl, requestReferer: referer })
+    const url = new URL(requestUrl)
+    return new RedirectBuilder(new Response(), {
+      requestUrl: `${url.pathname}${url.search}`,
+      requestReferer: referer,
+      requestAuthority: url.host,
+    })
   }
 
   it('getPreviousUrl returns a same-origin referer', () => {

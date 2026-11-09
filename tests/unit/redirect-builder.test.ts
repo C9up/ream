@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { HttpContext } from '../../src/http/HttpContext.js'
 import { RedirectBuilder } from '../../src/http/RedirectBuilder.js'
 
 interface ResponseSpy {
@@ -107,5 +108,96 @@ describe('ream > RedirectBuilder > back', () => {
     // turning it into the protocol-relative "//evil.com". Must not be trusted.
     new RedirectBuilder(response, { requestReferer: '/\\evil.com' }).back('/safe')
     expect(spy.headers.location).toBe('/safe')
+  })
+})
+
+describe('ream > RedirectBuilder > back with an absolute Referer (bug 523)', () => {
+  function backFrom(
+    referer: string,
+    authority?: string,
+    fallback = '/fallback',
+  ): string | undefined {
+    const { response, spy } = makeResponseFake()
+    new RedirectBuilder(response, {
+      requestUrl: '/save',
+      requestReferer: referer,
+      requestAuthority: authority,
+    }).back(fallback)
+    return spy.headers.location
+  }
+
+  it('goes back to the path of a Referer on the request authority, as browsers send it', () => {
+    expect(backFrom('https://app.test/admin/users', 'app.test')).toBe('/admin/users')
+  })
+
+  it('compares the host with its port', () => {
+    expect(backFrom('http://localhost:3333/form', 'localhost:3333')).toBe('/form')
+    expect(backFrom('http://localhost:4444/form', 'localhost:3333')).toBe('/fallback')
+  })
+
+  it('drops the Referer query string unless withQs() forwards it', () => {
+    expect(backFrom('https://app.test/list?page=3', 'app.test')).toBe('/list')
+    const { response, spy } = makeResponseFake()
+    new RedirectBuilder(response, {
+      requestUrl: '/save?ignored=1',
+      requestReferer: 'https://app.test/list?page=3',
+      requestAuthority: 'app.test',
+    })
+      .withQs()
+      .withQs('flash', 'ok')
+      .back()
+    expect(spy.headers.location).toBe('/list?page=3&flash=ok')
+  })
+
+  it('refuses a foreign host, and an absolute Referer when no authority is known', () => {
+    expect(backFrom('https://evil.test/steal', 'app.test')).toBe('/fallback')
+    expect(backFrom('https://app.test/admin', undefined)).toBe('/fallback')
+  })
+
+  it('never lets the redirect leave the site, even through an allowed host', () => {
+    const { response, spy } = makeResponseFake()
+    const redirect = new RedirectBuilder(response, {
+      requestReferer: 'https://sso.test/done',
+      requestAuthority: 'app.test',
+    })
+    redirect.allowedHosts = ['sso.test']
+    redirect.back()
+    expect(spy.headers.location).toBe('/done')
+  })
+})
+
+describe('ream > HttpContext wires back() and withQs() to the real request (bug 523)', () => {
+  function contextFor(path: string, query: string, headers: Record<string, string>): HttpContext {
+    return new HttpContext(
+      'req-1',
+      { method: 'POST', path, query, headers, body: '' },
+      {},
+      { pattern: path, middleware: [] },
+    )
+  }
+
+  it('back() follows a same-host absolute Referer', () => {
+    const ctx = contextFor('/users', '', {
+      host: 'app.test',
+      referer: 'https://app.test/users/new',
+    })
+    ctx.response.redirect().back()
+    expect(ctx.response.getHeader('location')).toBe('/users/new')
+  })
+
+  it('back() ignores X-Forwarded-Host when validating the Referer', () => {
+    const ctx = contextFor('/users', '', {
+      host: 'app.test',
+      'x-forwarded-host': 'evil.test',
+      referer: 'https://evil.test/phish',
+    })
+    ctx.response.redirect().back('/home')
+    expect(ctx.response.getHeader('location')).toBe('/home')
+  })
+
+  it('withQs() forwards the current request query on toPath()', () => {
+    const ctx = contextFor('/search', 'q=ream&page=2', { host: 'app.test' })
+    ctx.response.redirect().withQs().toPath('/results')
+    expect(ctx.response.getHeader('location')).toBe('/results?q=ream&page=2')
   })
 })

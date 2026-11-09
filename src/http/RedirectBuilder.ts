@@ -13,30 +13,36 @@ import type { Response } from './Response.js'
 
 export type RouteUrlResolver = (name: string, params?: Record<string, string>) => string
 
-function isSameOriginOrRelative(
-  referer: string,
-  requestUrl?: string,
-  allowedHosts: readonly string[] = [],
+/**
+ * AdonisJS `isValidRedirectUrl`: a relative path, or an absolute URL whose host
+ * is the request authority or an allowed host.
+ */
+function isTrustedRedirect(
+  url: string,
+  authority: string | undefined,
+  allowedHosts: readonly string[],
 ): boolean {
   // A relative path is trusted only when it starts with a single "/" and has no
   // backslash: browsers normalise "\" to "/", so "/\evil.com" would become the
   // protocol-relative "//evil.com" that a lone `!startsWith("//")` check misses.
-  if (referer.startsWith('/') && !referer.startsWith('//') && !referer.includes('\\')) return true
-  let ref: URL
+  if (url.startsWith('/') && !url.startsWith('//') && !url.includes('\\')) return true
+  let parsed: URL
   try {
-    ref = new URL(referer)
+    parsed = new URL(url)
   } catch {
     return false
   }
-  // An explicitly allowed host is trusted whatever the request's own origin is
-  // — that is what the list is for (AdonisJS `allowedHosts`).
-  if (allowedHosts.includes(ref.host)) return true
-  if (!requestUrl) return false
-  try {
-    return ref.origin === new URL(requestUrl).origin
-  } catch {
-    return false
-  }
+  if (allowedHosts.includes(parsed.host)) return true
+  // Upstream accepts any absolute URL when it knows no host to compare with;
+  // refusing it is the safer reading of an attacker-controlled header.
+  return authority !== undefined && parsed.host === authority
+}
+
+/** The query string of a path or URL, without the "?". */
+function searchOf(url: string | undefined): string {
+  if (url === undefined) return ''
+  const index = url.indexOf('?')
+  return index === -1 ? '' : url.slice(index + 1)
 }
 
 /** The slice of the session the intended-URL methods use. */
@@ -60,6 +66,7 @@ export class RedirectBuilder {
   #forwardQs = false
   #requestUrl?: string
   #requestReferer?: string
+  #requestAuthority?: string
   #routeUrlResolver?: RouteUrlResolver
   #session?: IntendedUrlStore
   #isAjax = false
@@ -68,8 +75,14 @@ export class RedirectBuilder {
   constructor(
     response: Response,
     options?: {
+      /** The request path with its query string. */
       requestUrl?: string
       requestReferer?: string
+      /**
+       * The request authority (`:authority` or `Host`, never X-Forwarded-Host)
+       * an absolute redirect target must match.
+       */
+      requestAuthority?: string
       routeUrlResolver?: RouteUrlResolver
       /** The request session, for the intended-URL methods. */
       session?: IntendedUrlStore
@@ -82,6 +95,7 @@ export class RedirectBuilder {
     this.#response = response
     this.#requestUrl = options?.requestUrl
     this.#requestReferer = options?.requestReferer
+    this.#requestAuthority = options?.requestAuthority
     this.#routeUrlResolver = options?.routeUrlResolver
     this.#session = options?.session
     this.#isAjax = options?.isAjax ?? false
@@ -135,13 +149,9 @@ export class RedirectBuilder {
 
   #safeIntended<T extends string | null>(intended: string | null, fallback: T): string | T {
     if (!intended) return fallback
-    if (this.#requestUrl && !isSameOriginOrRelative(intended, this.#requestUrl)) {
-      return fallback
-    }
-    // A protocol-relative `//evil.com` is absolute to a browser even though it
-    // looks relative — reject it whether or not a request URL is known.
-    if (intended.startsWith('//')) return fallback
-    return intended
+    return isTrustedRedirect(intended, this.#requestAuthority, this.allowedHosts)
+      ? intended
+      : fallback
   }
 
   /** Set redirect status code. */
@@ -191,7 +201,12 @@ export class RedirectBuilder {
 
   /** Redirect to an absolute or relative path. */
   toPath(path: string): void {
-    const url = this.#appendQs(path)
+    this.#send(path, searchOf(this.#requestUrl))
+  }
+
+  /** Redirect with `withQs()` forwarding `forwardedSearch` (a query string without "?"). */
+  #send(path: string, forwardedSearch: string): void {
+    const url = this.#appendQs(path, forwardedSearch)
     this.#response.status(this.#status)
     this.#response.header('location', url)
     this.#response.setBody('')
@@ -207,12 +222,13 @@ export class RedirectBuilder {
   }
 
   /**
-   * Redirect back to the previous page (Referer header).
-   * Only trusts same-origin or relative referers — external URLs fall back
-   * to `fallback` to prevent open redirect attacks.
+   * Redirect back to the previous page (AdonisJS `back`): the path of
+   * {@link getPreviousUrl}, so the redirect never leaves the site; `withQs()`
+   * forwards the previous page's query string, not the current request's.
    */
   back(fallback = '/'): void {
-    this.toPath(this.getPreviousUrl(fallback))
+    const previous = new URL(this.getPreviousUrl(fallback), 'http://localhost')
+    this.#send(previous.pathname, previous.search.slice(1))
   }
 
   /**
@@ -225,7 +241,7 @@ export class RedirectBuilder {
    */
   getPreviousUrl(fallback = '/'): string {
     const referer = this.#requestReferer
-    if (referer && isSameOriginOrRelative(referer, this.#requestUrl, this.allowedHosts)) {
+    if (referer && isTrustedRedirect(referer, this.#requestAuthority, this.allowedHosts)) {
       return referer
     }
     return fallback
@@ -236,15 +252,10 @@ export class RedirectBuilder {
    * uses, so `withQs()` plus `withQs('page', 2)` overrides an inbound `page`
    * rather than being overridden by it.
    */
-  #appendQs(path: string): string {
+  #appendQs(path: string, forwardedSearch: string): string {
     const params = new URLSearchParams()
-    if (this.#forwardQs && this.#requestUrl) {
-      const qsIdx = this.#requestUrl.indexOf('?')
-      if (qsIdx !== -1) {
-        for (const [key, value] of new URLSearchParams(this.#requestUrl.slice(qsIdx + 1))) {
-          params.append(key, value)
-        }
-      }
+    if (this.#forwardQs) {
+      for (const [key, value] of new URLSearchParams(forwardedSearch)) params.append(key, value)
     }
     for (const [key, value] of Object.entries(this.#qs)) {
       if (value === undefined || value === null) continue
