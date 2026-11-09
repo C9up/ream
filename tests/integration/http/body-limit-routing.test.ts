@@ -2,9 +2,9 @@ import 'reflect-metadata'
 import { connect } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import BodyParserMiddleware from '../../../src/bodyparser/BodyParserMiddleware.js'
+import { createHyperServerFactory } from '../../../src/bootstrap/hyper-server.js'
 import type { HttpContext } from '../../../src/http/HttpContext.js'
 import { Ignitor } from '../../../src/index.js'
-import { HyperServer } from './loader.js'
 
 /**
  * An over-limit body over the real stack — native server, kernel, router, body
@@ -47,10 +47,13 @@ describeIfNetwork('over-limit body > routing first, 413 from the body parser', (
   let bodyReads = 0
 
   beforeAll(async () => {
+    const serverFactory = createHyperServerFactory()
+    if (serverFactory === undefined)
+      throw new Error('no prebuilt HyperServer binary for this platform')
     ignitor = await new Ignitor({
       port: 0,
       gracefulShutdown: false,
-      serverFactory: (p, host) => new HyperServer(p, host),
+      serverFactory,
     })
       .configure('bodyparser', { json: { limit: '1kb' }, raw: { limit: '1kb' } })
       .routes((router) => {
