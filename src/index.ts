@@ -285,7 +285,9 @@ export type {
 export {
   type Codemods,
   createCodemods,
+  type EnvValidationNode,
   type GeneratedStub,
+  type PreloadEnvironment,
   type StubState,
 } from './Codemods.js'
 export {

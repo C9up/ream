@@ -1,8 +1,35 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import {
+  appendToLiteral,
+  findCall,
+  findExportDefaultObject,
+  isSingleExpression,
+  matchClose,
+  properties,
+  segments,
+} from './codemods/source.js'
 import { render as renderTemplate, type StubState } from './stubs/template.js'
 
 export type { StubState }
+
+/** The environments a preload (or provider) entry can be scoped to. */
+export type PreloadEnvironment = 'web' | 'console' | 'test' | 'repl'
+
+const PRELOAD_ENVIRONMENTS: readonly PreloadEnvironment[] = ['web', 'console', 'test', 'repl']
+
+/** Validation rules a configure hook adds to `start/env.ts`. */
+export interface EnvValidationNode {
+  /** Written once, as a banner comment above the rules this call adds. */
+  leadingComment?: string
+  /** Variable name → rule source, e.g. `{ REDIS_PORT: 'Env.schema.number()' }`. */
+  variables: Record<string, string>
+  /**
+   * Replace a rule the file already has. Off by default, so a rule the user
+   * edited survives a re-run; configure hooks pass their `--force` flag.
+   */
+  overwrite?: boolean
+}
 
 export interface Codemods {
   addProvider(importPath: string): Promise<void>
@@ -17,6 +44,8 @@ export interface Codemods {
   ): Promise<GeneratedStub>
   registerCommand(importPath: string): Promise<void>
   registerMiddleware(importPath: string, options?: { tier?: 'server' | 'router' }): Promise<void>
+  defineEnvValidations(definition: EnvValidationNode): Promise<string[]>
+  addPreloadFile(modulePath: string, environments?: PreloadEnvironment[]): Promise<void>
 }
 
 /** What a stub may interpolate. Scalars only — a stub is text, not a program. */
@@ -126,6 +155,76 @@ function assertCanonicallyInside(root: string, filePath: string, displayName: st
       `[configure] Symlink escape detected: ${displayName} resolves outside project root`,
     )
   }
+}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * A module path goes between the quotes of an `import('...')`; anything that
+ * could close them, escape or end the line is refused rather than escaped.
+ */
+const SAFE_MODULE_PATH = /^[^'"`\\\r\n\u2028\u2029]+$/
+
+const BANNER_RULE = '|----------------------------------------------------------'
+
+/** The rules of `definition`, refused before anything is written when unsafe. */
+function assertEnvValidations(definition: EnvValidationNode): void {
+  const comment = definition.leadingComment
+  if (comment !== undefined && (/[\r\n\u2028\u2029]/.test(comment) || comment.includes('*/'))) {
+    throw new Error(
+      '[configure] defineEnvValidations: the leading comment must be one line without `*/`',
+    )
+  }
+  for (const [name, rule] of Object.entries(definition.variables)) {
+    if (!ENV_NAME.test(name)) {
+      throw new Error(
+        `[configure] defineEnvValidations: '${name}' is not an environment variable name`,
+      )
+    }
+    if (typeof rule !== 'string' || !isSingleExpression(rule)) {
+      throw new Error(
+        `[configure] defineEnvValidations: the rule for ${name} is not one complete expression: ${String(rule)}`,
+      )
+    }
+  }
+}
+
+/** The `{` and `}` of the schema object passed to `Env.create`. */
+function locateEnvSchema(content: string): { open: number; close: number } {
+  const paren = findCall(content, 'Env.create')
+  const parenClose = paren === -1 ? -1 : matchClose(content, paren)
+  if (paren === -1 || parenClose === -1) {
+    throw new Error(
+      '[configure] Could not find an Env.create(...) call in start/env.ts — add the validations by hand.',
+    )
+  }
+  const open = segments(content, paren + 1, parenClose)[1]?.codeStart ?? -1
+  const close = content[open] === '{' ? matchClose(content, open) : -1
+  if (close === -1) {
+    throw new Error(
+      '[configure] The second argument of Env.create in start/env.ts is not an object literal — add the validations by hand.',
+    )
+  }
+  return { open, close }
+}
+
+/** The `{` and `}` of the object `reamrc.ts` exports (through `defineConfig` or bare). */
+function locateRcObject(content: string): { open: number; close: number } | null {
+  const paren = findCall(content, 'defineConfig')
+  let open = -1
+  if (paren !== -1) {
+    const parenClose = matchClose(content, paren)
+    if (parenClose !== -1) open = segments(content, paren + 1, parenClose)[0]?.codeStart ?? -1
+  } else {
+    open = findExportDefaultObject(content)
+  }
+  const close = open !== -1 && content[open] === '{' ? matchClose(content, open) : -1
+  return close === -1 ? null : { open, close }
+}
+
+/** The module an rc array element lazily imports. */
+function importedModule(element: string): string | undefined {
+  return /import\s*\(\s*(['"])([^'"]*)\1\s*\)/.exec(element)?.[2]
 }
 
 export function createCodemods(options?: { force?: boolean; cwd?: string }): Codemods {
@@ -515,6 +614,172 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       const entry = `  () => import('${importPath}'),`
       content = `${content.slice(0, targetBlock.start)}${eol}${entry}${content.slice(targetBlock.start)}`
       fs.writeFileSync(kernelPath, content)
+    },
+
+    /**
+     * Add validation rules to the schema `start/env.ts` passes to
+     * `Env.create`, so the variables a package writes to `.env` are checked
+     * at boot like the app's own.
+     *
+     * A rule already in the file is left alone, unless `overwrite` is set:
+     * the user may have tightened it. Returns the variables kept that way
+     * with a rule different from the one asked for, so the caller can say
+     * so. The banner comment is written only when the first new rule comes
+     * before any variable the file already had.
+     */
+    async defineEnvValidations(definition: EnvValidationNode): Promise<string[]> {
+      const envPath = path.join(root, 'start', 'env.ts')
+      if (!fs.existsSync(envPath)) {
+        throw new Error(
+          `[configure] start/env.ts not found — cannot add the validations for ${Object.keys(definition.variables).join(', ')}.`,
+        )
+      }
+      assertCanonicallyInside(root, envPath, 'start/env.ts')
+      assertEnvValidations(definition)
+
+      const original = fs.readFileSync(envPath, 'utf8')
+      const eol = detectLineEnding(original)
+      let content = original
+      const schema = locateEnvSchema(content)
+      const existing = new Map(
+        properties(content, schema.open, schema.close).map((property) => [property.key, property]),
+      )
+
+      const kept: string[] = []
+      const replacements: Array<{ start: number; end: number; text: string }> = []
+      const additions: Array<[string, string]> = []
+      let shouldAddComment = true
+      let decorate = false
+      for (const [name, rule] of Object.entries(definition.variables)) {
+        const property = existing.get(name)
+        if (property === undefined) {
+          if (additions.length === 0) decorate = shouldAddComment
+          shouldAddComment = false
+          additions.push([name, rule])
+          continue
+        }
+        shouldAddComment = false
+        const current = content.slice(property.valueStart, property.valueEnd)
+        if (definition.overwrite) {
+          replacements.push({ start: property.valueStart, end: property.valueEnd, text: rule })
+        } else if (current.replace(/\s+/g, '') !== rule.replace(/\s+/g, '')) {
+          kept.push(name)
+        }
+      }
+
+      for (const { start, end, text } of replacements.sort((a, b) => b.start - a.start)) {
+        content = `${content.slice(0, start)}${text}${content.slice(end)}`
+      }
+
+      if (additions.length > 0) {
+        const { open, close } = locateEnvSchema(content)
+        const comment = definition.leadingComment
+        content = appendToLiteral(
+          content,
+          open,
+          close,
+          eol,
+          (indent) => [
+            ...(decorate && comment !== undefined
+              ? [
+                  `${indent}/*`,
+                  `${indent}${BANNER_RULE}`,
+                  `${indent}| ${comment}`,
+                  `${indent}${BANNER_RULE}`,
+                  `${indent}*/`,
+                ]
+              : []),
+            ...additions.map(([name, rule]) => `${indent}${name}: ${rule},`),
+          ],
+          decorate,
+        )
+      }
+
+      if (content !== original) fs.writeFileSync(envPath, content)
+      return kept
+    },
+
+    /**
+     * Register a preload file in `reamrc.ts`, appended to `preloads` (the
+     * array is created when absent). Listing only some environments writes
+     * a `{ file, environment }` entry; none, or all of them, a plain lazy
+     * import. A module already in `preloads` is left as it is.
+     */
+    async addPreloadFile(modulePath: string, environments?: PreloadEnvironment[]): Promise<void> {
+      if (!SAFE_MODULE_PATH.test(modulePath)) {
+        throw new Error(`[configure] Unsafe preload module path: ${JSON.stringify(modulePath)}`)
+      }
+      for (const environment of environments ?? []) {
+        if (!PRELOAD_ENVIRONMENTS.includes(environment)) {
+          throw new Error(
+            `[configure] Unknown environment '${String(environment)}' for preload ${modulePath}. Expected one of ${PRELOAD_ENVIRONMENTS.join(', ')}.`,
+          )
+        }
+      }
+
+      const rcPath = path.join(root, 'reamrc.ts')
+      if (!fs.existsSync(rcPath)) {
+        throw new Error(
+          `[configure] reamrc.ts not found — cannot register preload ${modulePath}. Run 'ream new' first.`,
+        )
+      }
+      assertCanonicallyInside(root, rcPath, 'reamrc.ts')
+
+      const content = fs.readFileSync(rcPath, 'utf8')
+      const eol = detectLineEnding(content)
+      const config = locateRcObject(content)
+      if (config === null) {
+        throw new Error(
+          `[configure] Could not find 'defineConfig({ ... })' in reamrc.ts — preload ${modulePath} not added.`,
+        )
+      }
+
+      // Scoped only when it actually leaves an environment out.
+      const scope = PRELOAD_ENVIRONMENTS.some(
+        (environment) => environments !== undefined && !environments.includes(environment),
+      )
+        ? environments
+        : undefined
+      const entry = (indent: string): string[] =>
+        scope
+          ? [
+              `${indent}{`,
+              `${indent}  file: () => import('${modulePath}'),`,
+              `${indent}  environment: [${scope.map((e) => `'${e}'`).join(', ')}],`,
+              `${indent}},`,
+            ]
+          : [`${indent}() => import('${modulePath}'),`]
+
+      const preloads = properties(content, config.open, config.close).find(
+        (property) => property.key === 'preloads',
+      )
+      if (preloads === undefined) {
+        fs.writeFileSync(
+          rcPath,
+          appendToLiteral(content, config.open, config.close, eol, (indent) => [
+            `${indent}preloads: [`,
+            ...entry(`${indent}  `),
+            `${indent}],`,
+          ]),
+        )
+        return
+      }
+
+      const arrayClose =
+        content[preloads.valueStart] === '[' ? matchClose(content, preloads.valueStart) : -1
+      if (arrayClose === -1) {
+        throw new Error(
+          `[configure] reamrc.ts declares preloads as something other than an array literal — add ${modulePath} by hand.`,
+        )
+      }
+      const registered = segments(content, preloads.valueStart + 1, arrayClose).some(
+        (element) => importedModule(content.slice(element.codeStart, element.end)) === modulePath,
+      )
+      if (registered) return
+      fs.writeFileSync(
+        rcPath,
+        appendToLiteral(content, preloads.valueStart, arrayClose, eol, entry),
+      )
     },
   }
 }
