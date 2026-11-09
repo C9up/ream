@@ -97,7 +97,10 @@ export async function runValidator(
     }
   }
 
-  throw new TypeError(
+  // A dedicated code, not a TypeError: callers tell this configuration
+  // mistake apart from a TypeError raised by a bug inside a rule.
+  throw new ReamError(
+    'E_VALIDATOR_UNUSABLE',
     'Route validator exposes none of validateResultAsync(), validateResult() or validate().',
   )
 }

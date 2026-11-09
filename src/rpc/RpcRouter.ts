@@ -15,11 +15,12 @@ import {
   buildSuccess,
   isNotification,
   isRpcShapedError,
+  type JsonRpcId,
   parseRequest as parseRpcRequest,
   buildError as rpcError,
 } from '@c9up/comet'
 import { currentNodeEnv } from '../env/nodeEnv.js'
-import { ReamError } from '../errors/ReamError.js'
+import { isReamError, ReamError } from '../errors/ReamError.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { holdsPermissions } from '../http/permissions.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
@@ -78,6 +79,14 @@ export class RpcMethodBuilder {
     this.#def.middleware.push(...names)
     return this
   }
+}
+
+/**
+ * A -32603 whose detail reaches the caller only outside production: an
+ * internal failure's message is where hosts, credentials and queries end up.
+ */
+function internalError(detail: string, id: JsonRpcId) {
+  return rpcError(-32603, currentNodeEnv() !== 'production' ? detail : 'Internal error', id)
 }
 
 /** The public method names of a controller instance type. */
@@ -353,8 +362,7 @@ export class RpcRouter {
       if (def.validator) {
         const token = `validator:${def.validator}`
         if (!this.#container?.has(token)) {
-          return rpcError(
-            -32603,
+          return internalError(
             `Validator '${def.validator}' is not registered (bind container.singleton('${token}', () => schema)).`,
             id,
           )
@@ -367,9 +375,11 @@ export class RpcRouter {
         try {
           outcome = await runValidator(validator, params)
         } catch (err) {
-          return rpcError(
-            -32603,
-            err instanceof TypeError
+          // Caught here rather than below so a validator's error is never
+          // honoured as a domain error: a rule hitting the database throws
+          // whatever the driver throws.
+          return internalError(
+            isReamError(err, 'E_VALIDATOR_UNUSABLE')
               ? `Validator '${def.validator}' exposes no usable validate method.`
               : `Validator '${def.validator}' failed: ${err instanceof Error ? err.message : String(err)}`,
             id,
@@ -389,10 +399,7 @@ export class RpcRouter {
         const message = typeof err.message === 'string' ? err.message : 'RPC error'
         return rpcError(err.code, message, id, err.data)
       }
-      // Otherwise don't leak internal error details to the caller.
-      const isDev = currentNodeEnv() !== 'production'
-      const message = isDev && err instanceof Error ? err.message : 'Internal error'
-      return rpcError(-32603, message, id)
+      return internalError(err instanceof Error ? err.message : 'Internal error', id)
     }
   }
 
