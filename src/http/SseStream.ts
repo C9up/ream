@@ -253,14 +253,13 @@ function encodeFrame(event: string, data: string, eventId?: string): string {
   const lines: string[] = []
   // `event:` and `id:` are single-line tokens — strip CR/LF so a
   // caller-supplied event name or id can't splice extra SSE frames
-  // (the same injection `comment()` guards against). `data` is safe:
-  // it's split on `\n` and each line re-prefixed, so newlines there
-  // stay inside one logical event.
+  // (the same injection `comment()` guards against).
   if (event) lines.push(`event: ${event.replace(/[\r\n]+/g, ' ')}`)
-  // Multi-line data is allowed by SSE but each line must repeat the
-  // `data: ` prefix. Splitting on `\n` keeps the browser's
-  // reassembly intact (it joins back with `\n`).
-  for (const line of data.split('\n')) {
+  // Multi-line data is allowed but each line must repeat the `data: `
+  // prefix. The event-stream parser ends a line on CRLF, LF AND a lone
+  // CR, so split on all three: a payload CR left in place would end the
+  // line and let the rest of the payload forge its own fields.
+  for (const line of data.split(/\r\n|\r|\n/)) {
     lines.push(`data: ${line}`)
   }
   if (eventId) lines.push(`id: ${eventId.replace(/[\r\n]+/g, ' ')}`)
