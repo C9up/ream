@@ -64,7 +64,7 @@ import { clearEncryption, setEncryption } from './services/encryption.js'
 import { clearLogger, setLogger } from './services/logger.js'
 import { clearRouter, setRouter } from './services/router.js'
 import { clearServer, setServer } from './services/server.js'
-import { registerSessionTemplateTags } from './session/templateTags.js'
+import { installSessionTemplateTags } from './session/templateTags.js'
 
 /** Application environment. */
 /**
@@ -695,26 +695,12 @@ export class Ignitor {
 
   /**
    * Give the template engine `@error` / `@errors` / `@inputError` /
-   * `@flashMessage`, as AdonisJS's session plugin does.
-   *
-   * The engine is duck-typed out of the container so ream carries no dependency
-   * on it, and an app with no template layer simply skips this.
+   * `@flashMessage`, as AdonisJS's session plugin does — through the engine
+   * package's module singleton, guarded by `usingInker` (see
+   * `installSessionTemplateTags`). An app with no template layer skips this.
    */
   async #registerSessionTemplateTags(): Promise<void> {
-    for (const token of ['inker', 'view']) {
-      if (!this.#app.container.has(token)) continue
-      const binding: unknown = await this.#app.container.resolve(token)
-      for (const candidate of [binding, Reflect.get(Object(binding), '_templates')]) {
-        const register = Reflect.get(Object(candidate), 'registerTag')
-        if (typeof register !== 'function') continue
-        registerSessionTemplateTags({
-          registerTag: (tag) => {
-            register.call(candidate, tag)
-          },
-        })
-        return
-      }
-    }
+    await installSessionTemplateTags(this.#app.usingInker === true)
   }
 
   async #phaseRegister(): Promise<void> {

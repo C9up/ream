@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { ReadOnlyValuesStore } from '../../src/session/ReadOnlyValuesStore.js'
 import {
+  installSessionTemplateTags,
   registerSessionTemplateTags,
   type TemplateTagEngine,
 } from '../../src/session/templateTags.js'
@@ -123,5 +124,70 @@ describe('ream > session template tags', () => {
     expect((await run('errors', '')).rendered).toBe(false)
     expect((await run('flashMessage', "'x'")).rendered).toBe(false)
     expect((await run('inputError', "'email'")).rendered).toBe(false)
+  })
+})
+
+describe('installSessionTemplateTags — through the engine package singleton', () => {
+  type Plugin = (engine: unknown) => void
+
+  /** A registrar shaped like `@c9up/inker`'s default export: `use()` queues. */
+  function inkerLike() {
+    const queued: Plugin[] = []
+    const registrar = {
+      use(plugin: Plugin) {
+        queued.push(plugin)
+        return registrar
+      },
+    }
+    const tags = new Map<string, Parameters<TemplateTagEngine['registerTag']>[0]>()
+    const engine = {
+      registerTag: (tag: Parameters<TemplateTagEngine['registerTag']>[0]) => {
+        tags.set(tag.tagName, tag)
+      },
+    }
+    return {
+      load: async (): Promise<unknown> => ({ default: registrar }),
+      /** What the provider does when it builds its engine. */
+      boot: () => {
+        for (const plugin of queued) plugin(engine)
+      },
+      tags,
+    }
+  }
+
+  it('pushes the four tags through use(), never the container', async () => {
+    const inker = inkerLike()
+    expect(await installSessionTemplateTags(true, inker.load)).toBe(true)
+    expect(inker.tags.size).toBe(0) // queued, as upstream: nothing runs yet
+    inker.boot()
+    expect([...inker.tags.keys()].sort()).toEqual(['error', 'errors', 'flashMessage', 'inputError'])
+  })
+
+  it('skips an app with no template engine without importing anything', async () => {
+    let imported = false
+    const load = async (): Promise<unknown> => {
+      imported = true
+      return {}
+    }
+    expect(await installSessionTemplateTags(false, load)).toBe(false)
+    expect(imported).toBe(false)
+  })
+
+  it('fails loudly when the engine package has no use() — no silent skip', async () => {
+    await expect(
+      installSessionTemplateTags(true, async () => ({ default: {} })),
+    ).rejects.toMatchObject({ code: 'E_SESSION_TEMPLATE_ENGINE_UNUSABLE' })
+  })
+
+  it('fails loudly when the engine it is handed cannot register tags', async () => {
+    let plugin: Plugin | undefined
+    await installSessionTemplateTags(true, async () => ({
+      default: {
+        use(p: Plugin) {
+          plugin = p
+        },
+      },
+    }))
+    expect(() => plugin?.({})).toThrow(/registerTag/)
   })
 })
