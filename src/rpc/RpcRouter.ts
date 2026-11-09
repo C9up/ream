@@ -112,17 +112,28 @@ function isControllerMethod(proto: unknown, name: unknown): boolean {
 }
 
 /**
- * Unwrap the `{ _body: [...] }` envelope `request.body()` puts around a
- * top-level JSON array (it only treats plain objects as the body verbatim). A
- * JSON-RPC batch arrives this way; a single request is a plain object and is
- * returned unchanged.
+ * The JSON media types JSON-RPC over HTTP is sent with. None of them is a
+ * CORS-safelisted request type, so a foreign page cannot send one without a
+ * preflight.
  */
-function unwrapBatchBody(value: unknown): unknown {
-  if (typeof value === 'object' && value !== null && '_body' in value) {
-    const inner = value._body
-    if (Array.isArray(inner)) return inner
-  }
-  return value
+const DEFAULT_CONTENT_TYPES = [
+  'application/json',
+  'application/json-rpc',
+  'application/jsonrequest',
+]
+
+/** `Application/JSON; charset=utf-8` → `application/json`. */
+function mediaType(contentType: string | undefined): string {
+  return (contentType?.split(';')[0] ?? '').trim().toLowerCase()
+}
+
+export interface RpcRouterOptions {
+  /**
+   * Media types `handle()` accepts a request body under; anything else is
+   * answered 415 before the body is read. Default: `application/json`,
+   * `application/json-rpc`, `application/jsonrequest`.
+   */
+  contentTypes?: readonly string[]
 }
 
 /**
@@ -159,6 +170,13 @@ export class RpcRouter {
   #methods: Map<string, RpcMethodDefinition> = new Map()
   #groupConfig: { guards: string[]; roles: string[]; middleware: string[] } | null = null
   #container?: RpcContainer
+  readonly #contentTypes: ReadonlySet<string>
+
+  constructor(options: RpcRouterOptions = {}) {
+    this.#contentTypes = new Set(
+      (options.contentTypes ?? DEFAULT_CONTENT_TYPES).map((type) => mediaType(type)),
+    )
+  }
 
   /**
    * Set the IoC container used to resolve `namespace()` controllers — mirrors
@@ -264,10 +282,26 @@ export class RpcRouter {
 
   /** Handle an incoming JSON-RPC request. */
   async handle(ctx: HttpContext): Promise<void> {
-    // `request.body()` wraps a top-level JSON array — a JSON-RPC batch — as its
-    // non-object envelope `{ _body: [...] }`. Unwrap it so batch detection works;
-    // a single request is a plain object and passes through untouched.
-    const body = unwrapBatchBody(ctx.request.body())
+    // A form post, a text/plain body or one with no Content-Type is a CORS
+    // simple request: a foreign page sends it with the victim's cookies and
+    // no preflight. Refused before the body is read, as JSON-RPC servers
+    // answer 415 to anything but JSON.
+    if (!this.#contentTypes.has(mediaType(ctx.request.header('content-type')))) {
+      ctx.response.status(415).send('')
+      return
+    }
+
+    // Parsed here, not through `request.body()`, which turns malformed JSON
+    // into `{}` — and §5.1 answers invalid JSON with -32700, not -32600.
+    // `raw()` stays outside the try: its 413 is not a parse error.
+    const raw = ctx.request.raw()
+    let body: unknown
+    try {
+      body = JSON.parse(raw)
+    } catch {
+      ctx.response.status(200).json(rpcError(-32700, 'Parse error', null))
+      return
+    }
 
     // Batch support (max 50 to prevent DoS)
     if (Array.isArray(body)) {

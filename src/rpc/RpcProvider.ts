@@ -39,6 +39,12 @@ export interface RpcConfig {
    * it as public and never populates `ctx.auth` (every guarded method 401s).
    */
   guards?: string[]
+  /**
+   * Media types the endpoint accepts a request body under; any other is
+   * answered 415. Default: `application/json`, `application/json-rpc`,
+   * `application/jsonrequest`.
+   */
+  contentTypes?: string[]
 }
 
 export class RpcProvider extends Provider {
@@ -47,7 +53,10 @@ export class RpcProvider extends Provider {
 
   constructor(app: AppContext, options: RpcProviderOptions = {}) {
     super(app)
-    this.rpc = options.router ?? new RpcRouter()
+    // Config is loaded before providers are constructed.
+    this.rpc =
+      options.router ??
+      new RpcRouter({ contentTypes: app.config.get<RpcConfig>('rpc')?.contentTypes })
   }
 
   override register(): void {

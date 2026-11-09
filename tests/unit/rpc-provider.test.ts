@@ -7,6 +7,14 @@ import { RpcProvider } from '../../src/rpc/RpcProvider.js'
 import { RpcRouter } from '../../src/rpc/RpcRouter.js'
 import { defined } from '../__helpers__/defined.js'
 
+/** The request half of a ctx: a JSON body under a JSON Content-Type. */
+function jsonRequest(body: unknown) {
+  return {
+    raw: () => JSON.stringify(body),
+    header: (name: string) => (name === 'content-type' ? 'application/json' : undefined),
+  }
+}
+
 function buildApp(container: Container): AppContext {
   const config = { get: () => undefined, set: () => {} }
   return { container, config }
@@ -118,9 +126,7 @@ describe('RpcProvider > endpoint mount', () => {
     // Invoke the captured route handler with a minimal JSON-RPC request ctx.
     const out: unknown[] = []
     const ctx = {
-      request: {
-        body: () => ({ jsonrpc: '2.0', method: 'ping.echo', params: {}, id: 1 }),
-      },
+      request: jsonRequest({ jsonrpc: '2.0', method: 'ping.echo', params: {}, id: 1 }),
       response: {
         status(_code: number) {
           return this
@@ -160,9 +166,7 @@ describe('RpcProvider > endpoint mount', () => {
 
     const call = (id: number): Promise<void> =>
       defined(posted[0])({
-        request: {
-          body: () => ({ jsonrpc: '2.0', method: 'counter.bump', params: {}, id }),
-        },
+        request: jsonRequest({ jsonrpc: '2.0', method: 'counter.bump', params: {}, id }),
         response: {
           status(_code: number) {
             return this
@@ -197,7 +201,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
   function call(handler: (ctx: unknown) => Promise<void>, body: unknown, auth?: unknown) {
     const out: unknown[] = []
     return handler({
-      request: { body: () => body },
+      request: jsonRequest(body),
       response: {
         status(_code: number) {
           return this
@@ -229,21 +233,17 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     expect(out).toEqual([{ jsonrpc: '2.0', result: 'pong', id: 1 }])
   })
 
-  it('processes a batch wrapped by request.body() as { _body: [...] }', async () => {
+  it('processes a top-level JSON array as a batch', async () => {
     const container = new Container()
     const { provider, posted } = mount(container, (rpc) => {
       rpc.method('demo.echo', (_ctx, params) => params)
     })
     await provider.boot()
     await provider.start()
-    // A top-level JSON array (JSON-RPC batch) reaches the handler wrapped in the
-    // `{ _body: [...] }` envelope `request.body()` puts around non-objects.
-    const out = await call(defined(posted[0]), {
-      _body: [
-        { jsonrpc: '2.0', method: 'demo.echo', params: { x: 1 }, id: 0 },
-        { jsonrpc: '2.0', method: 'demo.echo', params: { y: 2 }, id: 1 },
-      ],
-    })
+    const out = await call(defined(posted[0]), [
+      { jsonrpc: '2.0', method: 'demo.echo', params: { x: 1 }, id: 0 },
+      { jsonrpc: '2.0', method: 'demo.echo', params: { y: 2 }, id: 1 },
+    ])
     expect(out).toEqual([
       [
         { jsonrpc: '2.0', result: { x: 1 }, id: 0 },
@@ -263,7 +263,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     // answered with a single Response object. 204 No Content is what this
     // replies when every call in a batch was a notification, so a client that
     // sent nothing was told its calls had run.
-    const out = await call(defined(posted[0]), { _body: [] })
+    const out = await call(defined(posted[0]), [])
     expect(out).toEqual([
       { jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' }, id: null },
     ])
@@ -411,7 +411,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     let sent: unknown
     const json: unknown[] = []
     await defined(posted[0])({
-      request: { body: () => ({ jsonrpc: '2.0', method: 'ping', params: {} }) },
+      request: jsonRequest({ jsonrpc: '2.0', method: 'ping', params: {} }),
       response: {
         status(c: number) {
           status = c

@@ -6,9 +6,9 @@ import { HttpContext } from '../../src/http/HttpContext.js'
 import { isReamError, type ReamError } from '../../src/index.js'
 import type { RpcRouter } from '../../src/rpc/RpcRouter.js'
 
-function makeCtx(body: string, contentType: string | undefined): HttpContext {
+function makeCtx(body: string, contentType: string | null): HttpContext {
   const headers: Record<string, string> = { 'content-length': String(Buffer.byteLength(body)) }
-  if (contentType !== undefined) headers['content-type'] = contentType
+  if (contentType !== null) headers['content-type'] = contentType
   return new HttpContext(
     'req-1',
     { method: 'POST', path: '/rpc', query: '', headers, body },
@@ -20,7 +20,8 @@ function makeCtx(body: string, contentType: string | undefined): HttpContext {
 export async function sendRpc(
   router: RpcRouter,
   body: string,
-  contentType: string | undefined = 'application/json',
+  /** `null` sends no Content-Type at all. */
+  contentType: string | null = 'application/json',
 ): Promise<{ status: number; payload: unknown }> {
   const ctx = makeCtx(body, contentType)
   await router.handle(ctx)
