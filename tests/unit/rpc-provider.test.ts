@@ -154,7 +154,7 @@ describe('RpcProvider > endpoint mount', () => {
 
     const provider = new RpcProvider(buildApp(container))
     provider.register() // wires rpc.useContainer(container)
-    provider.rpc.namespace('counter', Counter)
+    provider.rpc.namespace('counter', Counter, ['bump'])
     await provider.boot()
     await provider.start()
 

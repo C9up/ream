@@ -5,7 +5,7 @@
  *
  * Usage:
  *   rpc.method('task.validate', handler).guard('jwt').role('cs_member')
- *   rpc.namespace('task', TaskController)  // every public method, DI-resolved per call
+ *   rpc.namespace('task', TaskController, ['show', 'update'])  // listed methods, DI-resolved per call
  *   rpc.group({ guard: 'jwt' }, (r) => { r.method('user.find', handler) })
  *
  * @implements MISS-27
@@ -19,6 +19,7 @@ import {
   buildError as rpcError,
 } from '@c9up/comet'
 import { currentNodeEnv } from '../env/nodeEnv.js'
+import { ReamError } from '../errors/ReamError.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { holdsPermissions } from '../http/permissions.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
@@ -77,6 +78,28 @@ export class RpcMethodBuilder {
     this.#def.middleware.push(...names)
     return this
   }
+}
+
+/** The public method names of a controller instance type. */
+export type ControllerMethodName<T> = {
+  [K in keyof T]: T[K] extends (...args: never[]) => unknown ? K : never
+}[keyof T] &
+  string
+
+/**
+ * Whether `name` is a plain method of the controller's own class chain.
+ * The walk stops before `Object.prototype` and reads descriptors, so
+ * neither `toString` nor a getter (whose read would run code) qualifies.
+ */
+function isControllerMethod(proto: unknown, name: unknown): boolean {
+  if (typeof name !== 'string' || name === '' || name === 'constructor') return false
+  let current: unknown = proto
+  while (typeof current === 'object' && current !== null && current !== Object.prototype) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, name)
+    if (descriptor) return typeof descriptor.value === 'function'
+    current = Object.getPrototypeOf(current)
+  }
+  return false
 }
 
 /**
@@ -138,8 +161,23 @@ export class RpcRouter {
     this.#container = container
   }
 
-  /** Register an RPC method. */
+  /**
+   * Register an RPC method. JSON-RPC 2.0 §4 reserves names starting with
+   * `rpc.` for the protocol itself, so they are refused here, as an empty
+   * name is.
+   */
   method(name: string, handler: RpcHandler): RpcMethodBuilder {
+    if (typeof name !== 'string' || name === '') {
+      throw new ReamError(
+        'E_RPC_INVALID_METHOD_NAME',
+        'An RPC method name must be a non-empty string',
+      )
+    }
+    if (name.startsWith('rpc.')) {
+      throw new ReamError('E_RPC_RESERVED_METHOD_NAME', `'${name}' is a reserved RPC method name`, {
+        hint: 'JSON-RPC 2.0 reserves names starting with "rpc." for rpc-internal methods; pick another prefix.',
+      })
+    }
     const def: RpcMethodDefinition = {
       name,
       handler,
@@ -153,24 +191,28 @@ export class RpcRouter {
   }
 
   /**
-   * Register methods from a controller — auto-registers all public methods.
+   * Register the listed methods of a controller as `<prefix>.<method>`.
    *
-   * The parameter used to demand
-   * `new (...args: unknown[]) => Record<string, (...args: unknown[]) => unknown>`,
-   * which NO real controller satisfies: a class with any non-method property
-   * fails the `Record`, and a method declared `bump(): number` fails the
-   * `unknown[]` parameters, which are compared contravariantly. So the
-   * documented call — `rpc.namespace('task', TaskController)` — did not
-   * typecheck, and nothing noticed because the tests were outside `tsc`.
-   *
-   * Any class, then. The body already checks that what it found is callable
-   * and names the method when it is not.
+   * The list is explicit, like a route binding one `[Controller, 'method']`
+   * pair: TypeScript `private`/`protected` vanish at runtime, so a namespace
+   * that published "every method on the prototype" made helpers the author
+   * never meant to expose remotely callable. The type admits only public
+   * method names; the runtime check refuses a name with no plain method
+   * behind it (a getter, `constructor`, anything from `Object.prototype`).
    */
-  namespace(prefix: string, controller: abstract new (...args: never[]) => object): void {
-    const proto = controller.prototype
-    const methods = Object.getOwnPropertyNames(proto).filter(
-      (m) => m !== 'constructor' && typeof proto[m] === 'function',
-    )
+  namespace<T extends object>(
+    prefix: string,
+    controller: abstract new (...args: never[]) => T,
+    methods: ReadonlyArray<ControllerMethodName<T>>,
+  ): void {
+    for (const methodName of methods) {
+      if (!isControllerMethod(controller.prototype, methodName)) {
+        throw new ReamError(
+          'E_RPC_UNKNOWN_CONTROLLER_METHOD',
+          `${controller.name} has no method '${String(methodName)}' to expose as an RPC method`,
+        )
+      }
+    }
     for (const methodName of methods) {
       this.method(`${prefix}.${methodName}`, async (ctx, params) => {
         // Resolve through the container on every call (fresh DI per request,
