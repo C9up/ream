@@ -5,7 +5,7 @@
  * loopback, private and shared ranges, link-local (the cloud metadata
  * endpoint `169.254.169.254` lives there), documentation and benchmarking
  * ranges, multicast, and the IPv6 transition prefixes that tunnel to an IPv4
- * address (NAT64, 6to4, Teredo) — through those, a "public" IPv6 address can
+ * address (IPv4-compatible, NAT64, 6to4, Teredo) — through those, a "public" IPv6 address can
  * still reach `10.0.0.5`. An IPv4-mapped IPv6 address (`::ffff:10.0.0.5`) is
  * judged by the IPv4 rules.
  */
@@ -33,6 +33,7 @@ const NON_PUBLIC_V4: ReadonlyArray<readonly [string, number]> = [
 const NON_PUBLIC_V6: ReadonlyArray<readonly [string, number]> = [
   ['::', 128], // unspecified
   ['::1', 128], // loopback
+  ['::', 96], // IPv4-compatible (deprecated), embeds an IPv4 address
   ['64:ff9b::', 96], // NAT64, embeds an IPv4 address
   ['64:ff9b:1::', 48], // local-use NAT64
   ['100::', 64], // discard

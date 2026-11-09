@@ -86,6 +86,11 @@ describe('isPublicAddress', () => {
     'fd00::1',
     '::ffff:10.0.0.5',
     '::ffff:7f00:1',
+    // IPv4-compatible (deprecated ::/96): the IPv4 address sits in the low 32 bits
+    '::7f00:1',
+    '::a00:5',
+    '::127.0.0.1',
+    '::a9fe:a9fe',
     '64:ff9b::a00:5',
     '2002:a00:5::1',
     '2001:db8::1',
