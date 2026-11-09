@@ -67,12 +67,20 @@ export class RedisLockBackend implements LockBackend {
     this.#prefix = options.prefix ?? 'ream:schedule:lock:'
   }
 
-  /** The client, resolved once and kept. */
+  /**
+   * The client, resolved once and kept. Only a success is kept: a lookup
+   * that fails (the connection is not registered yet at boot, Redis is
+   * briefly down) is forgotten so the next task retries it, instead of
+   * every lock failing with the same error until the process restarts.
+   */
   #client(): Promise<LockRedisClient> {
     if (!this.#resolved) {
-      this.#resolved = Promise.resolve(
-        typeof this.#source === 'function' ? this.#source() : this.#source,
-      )
+      const source = this.#source
+      const pending = (async () => (typeof source === 'function' ? source() : source))()
+      this.#resolved = pending
+      pending.catch(() => {
+        if (this.#resolved === pending) this.#resolved = undefined
+      })
     }
     return this.#resolved
   }

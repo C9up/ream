@@ -140,6 +140,63 @@ describe('RedisLockBackend', () => {
 
     expect(resolve).toHaveBeenCalledTimes(1)
   })
+
+  it('retries the lookup after the resolver rejected once', async () => {
+    const redis = fakeRedis()
+    let calls = 0
+    const backend = new RedisLockBackend(async () => {
+      calls += 1
+      if (calls === 1) throw new Error('not ready')
+      return redis
+    })
+
+    await expect(backend.acquire('invoices', 60_000)).rejects.toThrow('not ready')
+    expect(await backend.acquire('invoices', 60_000)).toBe(true)
+    // The recovered client is kept: no third lookup.
+    await backend.release('invoices')
+    expect(calls).toBe(2)
+  })
+
+  it('retries the lookup after the resolver threw synchronously', async () => {
+    const redis = fakeRedis()
+    let calls = 0
+    const backend = new RedisLockBackend(() => {
+      calls += 1
+      if (calls === 1) throw new Error('no connection yet')
+      return redis
+    })
+
+    await expect(backend.acquire('invoices', 60_000)).rejects.toThrow('no connection yet')
+    expect(await backend.acquire('invoices', 60_000)).toBe(true)
+  })
+
+  it('surfaces the original error unchanged', async () => {
+    const failure = Object.assign(new Error('boom'), { code: 'E_REDIS_DOWN' })
+    const backend = new RedisLockBackend(async () => {
+      throw failure
+    })
+
+    await expect(backend.acquire('invoices', 60_000)).rejects.toBe(failure)
+  })
+
+  it('shares one lookup between tasks firing at once, and both see its failure', async () => {
+    let calls = 0
+    let fail: (error: Error) => void = () => {}
+    const backend = new RedisLockBackend(() => {
+      calls += 1
+      return new Promise<LockRedisClient>((_resolve, reject) => {
+        fail = reject
+      })
+    })
+
+    const first = backend.acquire('a', 60_000)
+    const second = backend.acquire('b', 60_000)
+    fail(new Error('down'))
+
+    await expect(first).rejects.toThrow('down')
+    await expect(second).rejects.toThrow('down')
+    expect(calls).toBe(1)
+  })
 })
 
 describe('locks', () => {
