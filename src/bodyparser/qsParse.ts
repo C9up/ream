@@ -11,7 +11,7 @@
  * dependency it can write in a screenful, and the limits below are easier to
  * defend when they are visible.
  *
- * Three guards, all of which `qs` also applies:
+ * Four guards, all of which `qs` also applies:
  *
  *  - **Prototype keys are dropped.** `__proto__[x]=1` in a form body is the
  *    classic prototype-pollution vector; the key never reaches an object.
@@ -19,11 +19,14 @@
  *    as a literal key rather than allocating unbounded nesting.
  *  - **Parameter count is capped** (`qs` defaults to 1000), so a body of a
  *    million `a[0]`, `a[1]`… cannot be turned into a million-entry object.
+ *  - **Explicit array indices are capped** (`qs` `arrayLimit`, default 20).
+ *    A larger index is an object key, so `ids[4294967294]=1` stays one entry.
  */
 
 /** `qs` defaults, reproduced so the behaviour is the same out of the box. */
 export const DEFAULT_DEPTH = 5
 export const DEFAULT_PARAMETER_LIMIT = 1000
+export const DEFAULT_ARRAY_LIMIT = 20
 
 export interface QsParseOptions {
   /**
@@ -34,6 +37,12 @@ export interface QsParseOptions {
   allowDots?: boolean
   depth?: number
   parameterLimit?: number
+  /**
+   * Highest explicit index + 1 that still builds an array (`qs` defaults to
+   * 20). `ids[25]=x` becomes `{ ids: { '25': 'x' } }`, so a 16-byte request
+   * cannot allocate a 100-million-slot array.
+   */
+  arrayLimit?: number
   /** Turn `''` into `null`, as AdonisJS' `convertEmptyStringsToNull` does. */
   convertEmptyStringsToNull?: boolean
   /** Trim surrounding whitespace, as AdonisJS' `trimWhitespaces` does. */
@@ -77,14 +86,52 @@ function isIndex(segment: string): boolean {
   return /^\d+$/.test(segment)
 }
 
-/** Assign `value` at `segments` inside `target`, creating containers as needed. */
-function assign(target: Record<string, unknown>, segments: string[], value: unknown): void {
-  let cursor: Record<string, unknown> | unknown[] = target
+type Container = Record<string, unknown> | unknown[]
+
+function isContainer(value: unknown): value is Container {
+  return typeof value === 'object' && value !== null
+}
+
+/** `{ '0': a, '1': b }` from `[a, b]`, holes left out — what `qs` produces on overflow. */
+function arrayToObject(array: unknown[]): Record<string, unknown> {
+  const object: Record<string, unknown> = {}
+  array.forEach((item, index) => {
+    object[String(index)] = item
+  })
+  return object
+}
+
+/**
+ * Assign `value` at `segments` inside `target`, creating containers as needed.
+ *
+ * An explicit index at or above `arrayLimit` never addresses an array: the
+ * container becomes (or is converted into) an object keyed by that index,
+ * as `qs` does. Without it, `ids[100000000]=1` allocates a sparse array whose
+ * iteration or serialisation blocks the event loop for seconds. Appends
+ * (`tags[]`, a repeated key) stay arrays — each one costs a parameter, so
+ * `parameterLimit` already bounds them, and a long checkbox group keeps the
+ * shape its handler expects (`qs` turns those into objects past the limit).
+ */
+function assign(
+  target: Record<string, unknown>,
+  segments: string[],
+  value: unknown,
+  arrayLimit: number,
+): void {
+  let cursor: Container = target
+  // Swaps `cursor` inside its parent when an array has to become an object.
+  let replace: (next: Container) => void = () => {}
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i] ?? ''
     const last = i === segments.length - 1
 
     if (FORBIDDEN_KEYS.has(segment)) return
+
+    if (Array.isArray(cursor) && isIndex(segment) && Number(segment) >= arrayLimit) {
+      const converted = arrayToObject(cursor)
+      replace(converted)
+      cursor = converted
+    }
 
     if (last) {
       if (segment === '') {
@@ -109,24 +156,31 @@ function assign(target: Record<string, unknown>, segments: string[], value: unkn
     }
 
     const nextSegment = segments[i + 1] ?? ''
-    const wantsArray = nextSegment === '' || isIndex(nextSegment)
+    const wantsArray =
+      nextSegment === '' || (isIndex(nextSegment) && Number(nextSegment) < arrayLimit)
 
     if (Array.isArray(cursor)) {
       if (!isIndex(segment)) return
+      const array: unknown[] = cursor
       const index = Number(segment)
-      const existing = cursor[index]
-      if (existing === undefined || typeof existing !== 'object' || existing === null) {
-        cursor[index] = wantsArray ? [] : {}
+      const existing: unknown = array[index]
+      const child: Container = isContainer(existing) ? existing : wantsArray ? [] : {}
+      array[index] = child
+      replace = (next) => {
+        array[index] = next
       }
-      cursor = cursor[index] as Record<string, unknown> | unknown[]
+      cursor = child
       continue
     }
 
-    const existing = cursor[segment]
-    if (existing === undefined || typeof existing !== 'object' || existing === null) {
-      cursor[segment] = wantsArray ? [] : {}
+    const object: Record<string, unknown> = cursor
+    const existing: unknown = object[segment]
+    const child: Container = isContainer(existing) ? existing : wantsArray ? [] : {}
+    object[segment] = child
+    replace = (next) => {
+      object[segment] = next
     }
-    cursor = cursor[segment] as Record<string, unknown> | unknown[]
+    cursor = child
   }
 }
 
@@ -155,6 +209,7 @@ export function parseQueryString(
 ): Record<string, unknown> {
   const depth = options.depth ?? DEFAULT_DEPTH
   const parameterLimit = options.parameterLimit ?? DEFAULT_PARAMETER_LIMIT
+  const arrayLimit = options.arrayLimit ?? DEFAULT_ARRAY_LIMIT
   const result: Record<string, unknown> = {}
   if (!body) return result
 
@@ -173,7 +228,7 @@ export function parseQueryString(
     if (options.trimWhitespaces && typeof value === 'string') value = value.trim()
     if (options.convertEmptyStringsToNull && value === '') value = null
 
-    assign(result, splitKey(key, depth, options.allowDots ?? true), value)
+    assign(result, splitKey(key, depth, options.allowDots ?? true), value, arrayLimit)
   }
   return result
 }

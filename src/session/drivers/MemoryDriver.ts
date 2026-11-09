@@ -9,8 +9,9 @@ const SWEEP_THRESHOLD = 1000
  * The sweep alone only removes EXPIRED entries, so within the TTL window
  * nothing bounded growth: anyone able to request a page could mint sessions
  * until the process ran out of memory, without ever logging in. Past the cap
- * the oldest sessions are dropped — a bounded store that forgets is strictly
- * better than an unbounded one that dies.
+ * the least recently used sessions are dropped (a write, an update or a
+ * touch moves a session to the back of the line) — a bounded store that
+ * forgets is strictly better than an unbounded one that dies.
  */
 const DEFAULT_MAX_ENTRIES = 10_000
 
@@ -78,9 +79,14 @@ export class MemoryDriver implements SessionDriverWithTagging {
 
   async touch(sessionId: string, ttl: number): Promise<void> {
     const entry = this.#store.get(sessionId)
-    if (entry) {
-      entry.expiresAt = Date.now() + ttl * 1000
-    }
+    if (!entry || entry.expiresAt < Date.now()) return
+    // Re-inserted, not updated in place: eviction drops the head of the map,
+    // so a session in use has to move to the tail. Updated in place, a
+    // signed-in user who keeps browsing stayed first in line, and ten
+    // thousand anonymous requests evicted them.
+    entry.expiresAt = Date.now() + ttl * 1000
+    this.#store.delete(sessionId)
+    this.#store.set(sessionId, entry)
   }
 
   async tag(sessionId: string, userId: string | number): Promise<void> {

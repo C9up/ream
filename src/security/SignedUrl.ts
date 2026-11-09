@@ -43,7 +43,12 @@ export class SignedUrl {
     if (!providedSig) return false
     const expires = url.searchParams.get('expires')
     if (expires && Math.floor(Date.now() / 1000) > parseInt(expires, 10)) return false
-    if (purpose && url.searchParams.get('purpose') !== purpose) return false
+    // Exact match both ways: a URL minted for `password-reset` must not pass a
+    // check that names no purpose (or another one), and a purpose-less URL
+    // must not pass a check that names one. An empty purpose is no purpose,
+    // as in `make`.
+    const signedPurpose = url.searchParams.get('purpose') || undefined
+    if (signedPurpose !== (purpose || undefined)) return false
 
     url.searchParams.delete('signature')
     const expectedSig = hmacSign(url.pathname + url.search, this.#secret)

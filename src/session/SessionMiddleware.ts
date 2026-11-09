@@ -10,15 +10,17 @@ import { readModuleConfig } from '../config/moduleConfig.js'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import { durationToSeconds } from '../helpers/duration.js'
 import type { HttpContext } from '../http/HttpContext.js'
+import type { CookieOptions } from '../http/Response.js'
 import type { SessionConfigInput } from './config.js'
 import { CookieDriver } from './drivers/CookieDriver.js'
 import { DatabaseDriver, type SessionDbConnection } from './drivers/DatabaseDriver.js'
 import { FileDriver } from './drivers/FileDriver.js'
 import { MemoryDriver } from './drivers/MemoryDriver.js'
 import { RedisDriver } from './drivers/RedisDriver.js'
+import { E_SESSION_COOKIE_NOT_HTTP_ONLY, E_SESSION_STORE_NOT_CONFIGURED } from './errors.js'
 import { quasarConnection } from './quasar.js'
 import { ReadOnlyValuesStore, type ValuePath } from './ReadOnlyValuesStore.js'
-import type { SessionDriver } from './Session.js'
+import type { SessionCookieOptions, SessionDriver } from './Session.js'
 import { Session } from './Session.js'
 
 interface ResolvedSessionConfig {
@@ -27,6 +29,7 @@ interface ResolvedSessionConfig {
   maxAge: number
   clearWithBrowser: boolean
   rolling: boolean
+  cookie: SessionCookieOptions
 }
 
 /** Duck-typed check for a connection the database store can drive. */
@@ -61,8 +64,15 @@ export default class SessionMiddleware {
     // `{ store: 'redis', stores: { redis: { driver: 'redis' } } }` works.
     const selected = config?.store ?? config?.driver
     const named = selected ? config?.stores?.[selected] : undefined
+    // No implicit store, in any environment — AdonisJS' session config
+    // refuses one without `store` too. The memory store lives in one process
+    // and is bounded: a restart, a second replica, or enough anonymous
+    // requests signs every user out, so it is used only when it is chosen
+    // (`store: 'memory'`).
+    if (!selected) throw new E_SESSION_STORE_NOT_CONFIGURED()
+    if (config?.cookie?.httpOnly === false) throw new E_SESSION_COOKIE_NOT_HTTP_ONLY()
     this.#config = {
-      driver: named?.driver ?? selected ?? 'memory',
+      driver: named?.driver ?? selected,
       cookieName: config?.cookieName ?? 'ream_session',
       // `age` is the AdonisJS key and accepts a duration string.
       maxAge:
@@ -71,6 +81,7 @@ export default class SessionMiddleware {
           : (config?.maxAge ?? 7200),
       clearWithBrowser: config?.clearWithBrowser ?? false,
       rolling: config?.rolling ?? false,
+      cookie: { ...config?.cookie },
     }
 
     if (this.#config.driver === 'cookie') {
@@ -189,11 +200,8 @@ export default class SessionMiddleware {
           // Already encrypted by the cookie driver; packing it again would
           // only make the cookie bigger and change nothing.
           encode: false,
+          ...this.#cookieAttributes(isProduction),
           maxAge: this.#config.clearWithBrowser ? undefined : Math.ceil(remaining / 1000),
-          path: '/',
-          httpOnly: true,
-          sameSite: 'lax',
-          secure: isProduction,
         })
       }
       return
@@ -242,12 +250,24 @@ export default class SessionMiddleware {
       // read, before any store lookup, and that an id from another deployment
       // (a different APP_KEY) cannot be presented here.
       ctx.response.cookie(cookieName, session.sessionId, {
+        ...this.#cookieAttributes(isProduction),
         maxAge: this.#config.clearWithBrowser ? undefined : maxAge,
-        path: '/',
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: isProduction,
       })
+    }
+  }
+
+  /**
+   * The session cookie's attributes: the configured `cookie` over the
+   * defaults. `secure` follows the environment unless the config sets it.
+   */
+  #cookieAttributes(isProduction: boolean): CookieOptions {
+    const configured = this.#config.cookie
+    return {
+      path: '/',
+      sameSite: 'lax',
+      ...configured,
+      httpOnly: true,
+      secure: configured.secure ?? isProduction,
     }
   }
 }

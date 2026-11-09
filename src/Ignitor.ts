@@ -14,6 +14,7 @@
  */
 
 import { Application } from './Application.js'
+import type { BodyParserConfig } from './bodyparser/BodyParserMiddleware.js'
 import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
@@ -51,6 +52,12 @@ import {
 import { Router } from './router/Router.js'
 import { CookieSigner } from './security/CookieSigner.js'
 import { SignedUrl } from './security/SignedUrl.js'
+import {
+  type NativeBodyLimits,
+  type NativeConnectionConfig,
+  nativeBodyLimits,
+  nativeConnectionConfig,
+} from './server/nativeLimits.js'
 import { type GrpcHandler, Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearEncryption, setEncryption } from './services/encryption.js'
@@ -279,6 +286,10 @@ export interface HyperServerLike {
   configureTrustedProxies?(cidrs: string[]): void
   /** Optional — same lifecycle as `configureShield`. */
   configureRateLimit?(config: { max: number; windowSecs: number } | null): void
+  /** Optional — same lifecycle as `configureShield`. */
+  configureBodyLimits?(config: NativeBodyLimits): void
+  /** Optional — same lifecycle as `configureShield`. */
+  configureConnections?(config: NativeConnectionConfig): void
   listen(): Promise<void>
   port(): Promise<number>
   close(): Promise<void>
@@ -924,6 +935,19 @@ export class Ignitor {
         typeof this.#_httpServer.configureTrustedProxies === 'function'
       ) {
         this.#_httpServer.configureTrustedProxies([...trustedProxies])
+      }
+      // Body limits from `config/bodyparser.ts`, enforced while the native
+      // server reads a body: nothing past them is ever buffered.
+      const bodyparser = this.#app.config.get<BodyParserConfig>('bodyparser')
+      if (bodyparser && typeof this.#_httpServer.configureBodyLimits === 'function') {
+        this.#_httpServer.configureBodyLimits(nativeBodyLimits(bodyparser))
+      }
+      // AdonisJS `config/app.ts` → `http: { headersTimeout, requestTimeout,
+      // keepAliveTimeout }`, plus `maxConnections`.
+      if (typeof this.#_httpServer.configureConnections === 'function') {
+        this.#_httpServer.configureConnections(
+          nativeConnectionConfig(this.#app.config.get<unknown>('app.http')),
+        )
       }
       await this.#_httpServer.listen()
 

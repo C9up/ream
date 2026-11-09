@@ -13,6 +13,7 @@
 //! never reaches the handler. The message is bounded by tonic's decode limit
 //! (4 MiB by default), not by the HTTP path's 100 MB.
 
+use crate::ip::TrustedProxies;
 use crate::ratelimit::RateLimiter;
 use crate::request::ReamRequest;
 use crate::security::{FilterResult, SecurityFilter};
@@ -64,7 +65,7 @@ pub fn is_grpc<B>(req: &Request<B>) -> bool {
 /// The protections the HTTP path applies, applied to a gRPC call.
 pub(crate) struct Guards<'a> {
     pub peer_ip: &'a str,
-    pub trusted_proxies: &'a [String],
+    pub trusted_proxies: &'a TrustedProxies,
     pub rate_limiter: Option<&'a Arc<RateLimiter>>,
     pub security_filter: Option<&'a Arc<dyn SecurityFilter>>,
 }
@@ -75,11 +76,7 @@ pub(crate) async fn serve(
     handler: GrpcHandler,
     guards: Guards<'_>,
 ) -> Response<tonic::body::Body> {
-    let headers: HashMap<String, String> = req
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = crate::server::collect_headers(req.headers());
     let ip = crate::ip::resolve_client_ip(guards.peer_ip, &headers, guards.trusted_proxies);
 
     if let Some(limiter) = guards.rate_limiter {

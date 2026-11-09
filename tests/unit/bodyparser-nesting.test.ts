@@ -97,4 +97,57 @@ describe('ream > form body nesting (qs parity)', () => {
       'user.name': 'ada',
     })
   })
+
+  describe('arrayLimit', () => {
+    it('turns an index past the limit into an object key instead of a huge sparse array', () => {
+      const out = parseQueryString('ids[100000000]=1')
+      expect(out).toEqual({ ids: { '100000000': '1' } })
+      expect(Array.isArray(out.ids)).toBe(false)
+    })
+
+    it('does the same for the largest array index JavaScript accepts', () => {
+      expect(parseQueryString('ids[4294967294]=1')).toEqual({ ids: { '4294967294': '1' } })
+    })
+
+    it('keeps an index below the limit as an array slot', () => {
+      expect(parseQueryString('ids[19]=x').ids).toHaveLength(20)
+    })
+
+    it('treats the limit itself as exclusive, like qs', () => {
+      expect(parseQueryString('ids[20]=x')).toEqual({ ids: { '20': 'x' } })
+    })
+
+    it('converts an array that already exists when a later index overflows it', () => {
+      expect(parseQueryString('ids[0]=a&ids[1]=b&ids[100]=c')).toEqual({
+        ids: { '0': 'a', '1': 'b', '100': 'c' },
+      })
+    })
+
+    it('converts a nested array in place, inside an object inside an array', () => {
+      expect(parseQueryString('rows[0][ids][0]=a&rows[0][ids][500]=b')).toEqual({
+        rows: [{ ids: { '0': 'a', '500': 'b' } }],
+      })
+    })
+
+    it('builds an object, not an array, for an intermediate index past the limit', () => {
+      expect(parseQueryString('items[50][sku]=A')).toEqual({ items: { '50': { sku: 'A' } } })
+    })
+
+    it('is configurable', () => {
+      expect(parseQueryString('ids[50]=x', { arrayLimit: 100 }).ids).toHaveLength(51)
+      expect(parseQueryString('ids[1]=x', { arrayLimit: 1 })).toEqual({ ids: { '1': 'x' } })
+    })
+
+    it('keeps appends as arrays, bounded by parameterLimit', () => {
+      const body = Array.from({ length: 40 }, (_, i) => `tags[]=${i}`).join('&')
+      expect(parseQueryString(body).tags).toHaveLength(40)
+      expect(parseQueryString(body, { parameterLimit: 25 }).tags).toHaveLength(25)
+    })
+
+    it('serialises an attacker-sized index instantly', () => {
+      const started = performance.now()
+      JSON.stringify(parseQueryString('a[99999999]=1&b[4294967294]=2'))
+      expect(performance.now() - started).toBeLessThan(50)
+    })
+  })
 })

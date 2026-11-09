@@ -9,9 +9,11 @@
 use cookie::Cookie;
 use std::collections::HashMap;
 
-/// Parse a `Cookie:` header value into a name → value map. Repeated names
-/// surface the LAST occurrence (matches the JS pre-migration semantics —
-/// browsers don't typically send duplicates anyway).
+/// Parse a `Cookie:` header value into a name → value map. A repeated name
+/// keeps its FIRST occurrence, as `cookie-es` (Adonis) does: browsers send the
+/// most specific path first, then the oldest cookie first, so a same-name
+/// cookie planted later by a sibling subdomain (`Domain=.example.com`) comes
+/// after the application's own and must not replace it.
 ///
 /// Malformed pairs are skipped, never thrown — a single bad cookie must not
 /// bring down the request handler.
@@ -26,7 +28,8 @@ pub fn parse_cookie_header(header: &str) -> HashMap<String, String> {
             continue;
         }
         if let Ok(cookie) = Cookie::parse(trimmed) {
-            map.insert(cookie.name().to_string(), cookie.value().to_string());
+            map.entry(cookie.name().to_string())
+                .or_insert_with(|| cookie.value().to_string());
         }
     }
     map
@@ -75,6 +78,19 @@ mod tests {
             parsed.get("session"),
             Some(&"eyJhbGc=.eyJzdWI=.SIGN==".to_string())
         );
+    }
+
+    #[test]
+    fn a_repeated_name_keeps_the_first_value() {
+        let parsed =
+            parse_cookie_header("session=legit-host-only; session=tossed-by-sibling-subdomain");
+        assert_eq!(parsed.get("session"), Some(&"legit-host-only".to_string()));
+    }
+
+    #[test]
+    fn a_malformed_first_occurrence_does_not_shadow_a_valid_one() {
+        let parsed = parse_cookie_header("bad-no-equals; csrf=first; csrf=second");
+        assert_eq!(parsed.get("csrf"), Some(&"first".to_string()));
     }
 
     #[test]

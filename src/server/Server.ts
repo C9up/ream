@@ -63,16 +63,24 @@ export class Server {
   }
 
   /**
-   * Configure the trusted-proxy CIDR list. The Rust HyperServer uses it to
-   * pre-resolve `request.ip` once per request — JS reads the field, no CIDR
-   * matching in TS.
+   * Configure the trusted proxies. The Rust HyperServer uses them to
+   * pre-resolve `request.ip()` / `request.ips()` once per request — JS reads
+   * the fields, no CIDR matching in TS.
    *
-   * Empty list (default, 2026-05+) is **strict fail-closed**: `X-Forwarded-For`
-   * and `X-Real-IP` are ignored entirely; only the socket peer is used.
-   * Apps deployed behind a reverse proxy must list the proxy's CIDR
-   * (`'10.0.0.0/8'`, `'192.0.2.0/24'`, etc.) or pass the `'*'` sentinel
-   * for permissive mode (accepts spoofing as the explicit trade-off when
-   * proxy CIDRs can't be enumerated).
+   * The chain is the socket peer, then the `X-Forwarded-For` entries read
+   * right to left; it stops at the first hop that is not a trusted proxy, and
+   * its last entry is the client IP. Proxies append what they saw, so the
+   * left-most entry — the one a client writes itself — is only reached when
+   * every hop after it is trusted. `X-Real-IP` is never read.
+   *
+   * Entries: addresses or CIDR ranges, IPv4 or IPv6 (`'10.0.0.0/8'`,
+   * `'fd00::/8'`), IPv4 netmasks (`'10.0.0.0/255.0.0.0'`), the named ranges
+   * `'loopback'`, `'linklocal'`, `'uniquelocal'`, or `'*'` to trust every hop
+   * (the left-most entry wins — any client can choose its IP). An entry that is
+   * none of these makes the server refuse to start.
+   *
+   * Empty list (default) is **strict fail-closed**: `X-Forwarded-For` is
+   * ignored and only the socket peer is used.
    */
   trustedProxies(cidrs: string[]): this {
     this.#trustedProxies = [...cidrs]

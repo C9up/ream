@@ -13,6 +13,7 @@ import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
 import { Macroable } from '../utils/Macroable.js'
 import { getPath, omitPaths, pickPaths } from '../utils/objectPath.js'
+import { Exception } from './Exception.js'
 import type {
   RequestAwareValidator,
   RequestValidationOptions,
@@ -37,6 +38,26 @@ export interface RawRequest {
    * `ip()` accessor falls back to legacy header parsing.
    */
   ip?: string
+  /**
+   * The trusted address chain, closest hop first — the socket peer, then each
+   * `X-Forwarded-For` entry the Rust layer walked right to left while the hop
+   * before it was a trusted proxy. Its last entry is {@link ip}. Absent in
+   * hand-built fixtures, where the chain is the peer alone.
+   */
+  ips?: string[]
+  /**
+   * Whether the socket peer is one of the trusted proxies configured with
+   * `server.trustedProxies()`, as the Rust layer decided against the same
+   * list that resolves {@link ip}. Absent in hand-built fixtures: untrusted.
+   */
+  peerTrusted?: boolean
+  /**
+   * The body was over its content type's limit (`config/bodyparser.ts`): the
+   * Rust layer did not keep it, and `body` is empty. Reading the body then
+   * throws `E_REQUEST_ENTITY_TOO_LARGE` instead of handing back nothing as if
+   * nothing had been sent.
+   */
+  bodyTooLarge?: boolean
   /**
    * Connection scheme as seen by the server (`http`/`https`), when the Rust
    * layer ships it. Defaults to `http` in `protocol()` when absent; the
@@ -72,7 +93,6 @@ export class Request extends Macroable {
   #cookieSigner?: CookieSigner
   #signedUrl?: SignedUrl
   #allowMethodSpoofing = false
-  #trustProxy = false
   #routeInfo?: { name?: string; pattern: string; reference?: string }
   #response?: { fresh(): boolean }
   #parsedBody: Dict<unknown> | undefined
@@ -245,13 +265,17 @@ export class Request extends Macroable {
   }
 
   /**
-   * Enable/disable trusting proxy headers (`X-Forwarded-Proto`/`-Host`/`-For`)
-   * for `protocol()`/`host()`/`ips()`. OFF by default — turning it on when the
-   * app is NOT behind a trusted proxy lets clients spoof their scheme/host/IP,
-   * so it's an explicit opt-in (same stance as {@link setMethodSpoofing}).
+   * Whether the socket peer is one of the trusted proxies configured with
+   * `server.trustedProxies()` — the condition under which `X-Forwarded-Proto`
+   * and `X-Forwarded-Host` are believed by {@link protocol} and {@link host}.
+   *
+   * The decision is the Rust layer's (`peerTrusted`), made once per request
+   * against the same list that resolves {@link ip}, so a trusted proxy that
+   * forwards the scheme or host without an `X-Forwarded-For` is believed too.
+   * A request without the flag — a hand-built fixture — is untrusted.
    */
-  setTrustProxy(enabled: boolean): void {
-    this.#trustProxy = enabled
+  #peerIsTrustedProxy(): boolean {
+    return this.#raw.peerTrusted === true
   }
 
   /**
@@ -272,11 +296,12 @@ export class Request extends Macroable {
 
   /**
    * The request host including port (AdonisJS `host`). Honours
-   * `X-Forwarded-Host` ONLY when trust-proxy is enabled; otherwise the `Host`
-   * header. Returns null when neither is present.
+   * `X-Forwarded-Host` ONLY when the request came through a trusted proxy (see
+   * `server.trustedProxies()`); otherwise the `Host` header. Returns null when
+   * neither is present.
    */
   host(): string | null {
-    if (this.#trustProxy) {
+    if (this.#peerIsTrustedProxy()) {
       const forwarded = this.#raw.headers['x-forwarded-host']
       // The first hop in the list, named rather than indexed: `split` always
       // yields one element, and saying so beats being told it might not.
@@ -287,12 +312,15 @@ export class Request extends Macroable {
   }
 
   /**
-   * The request protocol — `http` or `https` (AdonisJS `protocol`). Honours
-   * `X-Forwarded-Proto` only under trust-proxy; otherwise the connection scheme
-   * the Rust layer reported (defaulting to `http`).
+   * The request protocol — `http` or `https` (AdonisJS `protocol`). A TLS
+   * connection is `https` whatever the headers say. Otherwise
+   * `X-Forwarded-Proto` is honoured only when the request came through a
+   * trusted proxy (see `server.trustedProxies()`), and the connection scheme
+   * the Rust layer reported (defaulting to `http`) is used when it is not.
    */
   protocol(): string {
-    if (this.#trustProxy) {
+    if (this.#raw.scheme === 'https') return 'https'
+    if (this.#peerIsTrustedProxy()) {
       const forwarded = this.#raw.headers['x-forwarded-proto']
       const [first] = forwarded?.split(',') ?? []
       if (first !== undefined) return first.trim().toLowerCase()
@@ -306,20 +334,15 @@ export class Request extends Macroable {
   }
 
   /**
-   * The client IP chain (AdonisJS `ips`). Under trust-proxy, the parsed
-   * `X-Forwarded-For` list (left-most = original client); otherwise just the
-   * single resolved {@link ip}.
+   * The trusted address chain, closest hop first (AdonisJS `ips`): the socket
+   * peer, then each `X-Forwarded-For` hop a trusted proxy vouched for. The
+   * last entry is {@link ip}. Hops added by an untrusted peer are not in it —
+   * the Rust layer stops at the first address it does not trust, so the chain
+   * goes past the peer only when {@link peerTrusted} holds.
    */
   ips(): string[] {
-    if (this.#trustProxy) {
-      const forwarded = this.#raw.headers['x-forwarded-for']
-      if (forwarded) {
-        return forwarded
-          .split(',')
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0)
-      }
-    }
+    const chain = this.#raw.ips
+    if (chain && chain.length > 0 && this.#peerIsTrustedProxy()) return [...chain]
     return [this.ip()]
   }
 
@@ -477,17 +500,26 @@ export class Request extends Macroable {
     return this.#signedUrl.verify(this.url(true), purpose)
   }
 
-  /** Get the raw body as a string (decoded from base64 if binary). */
+  /**
+   * Get the raw body as a string (decoded from base64 if binary). Throws
+   * `E_REQUEST_ENTITY_TOO_LARGE` (413) when the body was over its limit: what
+   * the server kept of it is nothing, and nothing is not the body.
+   */
   raw(): string {
     if (this.#rawBodyOverride !== undefined) return this.#rawBodyOverride
+    this.#assertBodyKept()
     if (this.#raw.bodyEncoding === 'base64') {
       return Buffer.from(this.#raw.body, 'base64').toString('utf8')
     }
     return this.#raw.body
   }
 
-  /** Get the raw body as a Buffer (preserves binary integrity for file uploads). */
+  /**
+   * Get the raw body as a Buffer (preserves binary integrity for file uploads).
+   * Throws `E_REQUEST_ENTITY_TOO_LARGE` (413) when the body was over its limit.
+   */
   rawBuffer(): Buffer {
+    this.#assertBodyKept()
     if (this.#raw.bodyEncoding === 'base64') {
       return Buffer.from(this.#raw.body, 'base64')
     }
@@ -716,7 +748,8 @@ export class Request extends Macroable {
       id: this.id(),
       url: this.url(true),
       query: this.parsedUrl().search?.slice(1) ?? '',
-      body: this.body(),
+      // A dump must not throw: an over-limit body is reported as absent.
+      body: this.#bodyWasDropped() ? undefined : this.body(),
       params: this.params(),
       headers: this.headers(),
       method: this.method(),
@@ -1062,8 +1095,33 @@ export class Request extends Macroable {
     return this.#validated
   }
 
+  /** The body was over its limit and nothing has replaced it since. */
+  #bodyWasDropped(): boolean {
+    return (
+      this.#raw.bodyTooLarge === true &&
+      this.#parsedBody === undefined &&
+      this.#rawBodyOverride === undefined
+    )
+  }
+
+  /**
+   * Refuse to read a body the server did not keep. The same 413 the body
+   * parser raises, so a route without it still answers the client properly
+   * the moment it reaches for the body — and a route that never does is not
+   * charged for it.
+   */
+  #assertBodyKept(): void {
+    if (this.#raw.bodyTooLarge === true) {
+      throw new Exception('request entity too large', {
+        status: 413,
+        code: 'E_REQUEST_ENTITY_TOO_LARGE',
+      })
+    }
+  }
+
   #ensureParsedBody(): void {
     if (this.#parsedBody !== undefined) return
+    this.#assertBodyKept()
     const raw = this.#raw.body
     if (!raw || raw.length === 0) {
       this.#parsedBody = {}

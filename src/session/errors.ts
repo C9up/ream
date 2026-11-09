@@ -54,3 +54,34 @@ export class E_SESSION_TAGGING_NOT_SUPPORTED extends Exception {
     )
   }
 }
+
+/**
+ * A session config without a store (AdonisJS raises "Missing store" for the
+ * same config). There is no implicit fallback: the memory store is per
+ * process and bounded — a restart, a second replica or enough anonymous
+ * traffic signs every user out — so it is only used when it is chosen.
+ */
+export class E_SESSION_STORE_NOT_CONFIGURED extends Exception {
+  static override status = 500
+  static override code = 'E_SESSION_STORE_NOT_CONFIGURED'
+
+  constructor() {
+    super(
+      "No session store is configured. Set `store` in config/session.ts (redis, database, file or cookie), or `store: 'memory'` for sessions kept in this process only (tests, a single development instance).",
+      { status: 500, code: 'E_SESSION_STORE_NOT_CONFIGURED' },
+    )
+  }
+}
+
+/** `cookie.httpOnly: false` — the session id would be readable by any script on the page. */
+export class E_SESSION_COOKIE_NOT_HTTP_ONLY extends Exception {
+  static override status = 500
+  static override code = 'E_SESSION_COOKIE_NOT_HTTP_ONLY'
+
+  constructor() {
+    super(
+      'The session cookie must be httpOnly: a script able to read it turns any XSS into an account takeover. Remove `cookie.httpOnly: false` from the session config.',
+      { status: 500, code: 'E_SESSION_COOKIE_NOT_HTTP_ONLY' },
+    )
+  }
+}

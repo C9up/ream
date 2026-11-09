@@ -259,6 +259,12 @@ export type HttpError = {
   report?: (error: unknown, ctx: HttpContext) => Promise<void> | void
   /** A hint appended to the message, when the exception carries one. */
   help?: string
+  /**
+   * Set by a thrown value that is not an {@link Exception} but whose message is
+   * written for clients (the `http-errors` convention). Shown outside debug
+   * mode even on a 5xx.
+   */
+  expose?: boolean
 }
 
 /** Renders an HTML error page for a status (AdonisJS `StatusPageRenderer`). */
@@ -352,13 +358,22 @@ export class ExceptionHandler extends Macroable {
    * The message a client is allowed to see.
    *
    * DEVIATION (named): outside debug mode ream only echoes the message of a
-   * deliberate `Exception`; anything else collapses to a generic line. AdonisJS
+   * deliberate `Exception`, of a client error (status below 500, which a
+   * package raises on purpose: 401, 403, 413…), or of an error flagged
+   * `expose: true`; anything else collapses to a generic line. AdonisJS
    * echoes `error.message` whatever was thrown, which leaks the text of driver
    * and library errors to the client.
+   *
+   * A `code` is NOT a reason to show the message: Node system errors
+   * (`ECONNREFUSED`, `ENOENT`) and database drivers (`23505`) carry one, and
+   * their messages hold internal hosts, file paths, constraint names and
+   * stored values. The error itself is left untouched for reporting.
    */
   protected publicMessage(error: HttpError, ctx: HttpContext): string {
     if (this.isDebuggingEnabled(ctx)) return error.message
-    if (error.code !== 'E_UNKNOWN') return error.message
+    if (error instanceof Exception || error.status < 500 || error.expose === true) {
+      return error.message
+    }
     return 'An internal error occurred'
   }
 

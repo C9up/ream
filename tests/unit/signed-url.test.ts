@@ -113,9 +113,35 @@ describe('ream > SignedUrl > purpose binding', () => {
     expect(su.verify(signed, 'email-verify')).toBe(false)
   })
 
-  it('passes when no purpose is required, regardless of the embedded one', () => {
+  it('refuses a purposed URL when the check names no purpose', () => {
+    // A link minted for a narrow purpose must not pass every route that
+    // checks a signature without naming one.
     const su = new SignedUrl({ secret: SECRET })
-    const signed = su.make('/p', { purpose: 'x' })
+    const signed = su.make('/users/42/confirm', { purpose: 'password-reset' })
+    expect(su.verify(signed)).toBe(false)
+    expect(su.verify(signed, '')).toBe(false)
+  })
+
+  it('refuses a purpose-less URL when the check names a purpose', () => {
+    const su = new SignedUrl({ secret: SECRET })
+    const signed = su.make('/p')
+    expect(su.verify(signed, 'password-reset')).toBe(false)
     expect(su.verify(signed)).toBe(true)
+  })
+
+  it('treats an empty purpose as no purpose on both sides', () => {
+    const su = new SignedUrl({ secret: SECRET })
+    const signed = su.make('/p', { purpose: '' })
+    expect(su.verify(signed)).toBe(true)
+    expect(su.verify(signed, '')).toBe(true)
+  })
+
+  it('cannot be re-purposed by editing the query string', () => {
+    const su = new SignedUrl({ secret: SECRET })
+    const signed = su.make('/p', { purpose: 'email-verify' })
+    const edited = signed.replace('purpose=email-verify', 'purpose=password-reset')
+    expect(su.verify(edited, 'password-reset')).toBe(false)
+    const stripped = signed.replace('purpose=email-verify&', '')
+    expect(su.verify(stripped)).toBe(false)
   })
 })

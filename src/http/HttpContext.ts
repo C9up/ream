@@ -33,7 +33,14 @@ export interface AuthState {
     id: string
     email?: string
     roles?: string[]
+    /** The user's own permissions — never widened by a token's abilities. */
     permissions?: string[]
+    /**
+     * Set by a token guard (AdonisJS `user.currentAccessToken`): the token this
+     * request authenticated with. Its abilities restrict the user's
+     * permissions on every `.permission()` gate; they never add to them.
+     */
+    currentAccessToken?: AccessTokenAbilities
     [key: string]: unknown
   }
   roles?: string[]
@@ -63,6 +70,11 @@ export interface AuthState {
   }
   readonly authenticationAttempted?: boolean
   readonly authenticatedViaGuard?: string
+}
+
+/** What a permission gate needs from an access token: whether it allows an ability. */
+export interface AccessTokenAbilities {
+  allows(ability: string): boolean
 }
 
 /**

@@ -49,9 +49,12 @@ impl SecurityFilter for NoopFilter {
 /// keys without `[]` suffix).
 #[derive(Debug, Clone, Copy)]
 pub struct ShieldConfig {
-    /// Reject requests whose path contains `..` literal, `%2e%2e`
-    /// (case-insensitive percent-encoded `..`), or `%252e` (double-encoded
-    /// `.`). Defaults to true.
+    /// Reject requests whose path holds a `..` segment once decoded: literal,
+    /// percent-encoded in full or in part (`%2e%2e`, `.%2e`, `%2e.`),
+    /// double-encoded (`%252e%252e`), overlong UTF-8 (`%c0%ae`), or split by
+    /// an encoded separator (`..%2f`, `..%5c`, `\`). A double-encoded dot
+    /// (`%252e`) is refused wherever it appears. A dot run inside a name
+    /// (`a..b`) is not a traversal and passes. Defaults to true.
     pub path_traversal: bool,
     /// Reject requests whose query string carries the same key twice (after
     /// percent-decoding), unless the key ends with `[]` to opt into array
@@ -116,15 +119,114 @@ impl SecurityFilter for ShieldFilter {
     }
 }
 
-/// Whether the path matches one of the traversal patterns. Case-insensitive
-/// for percent-encoded forms — `%2E%2E`, `%2e%2e` and `%252e` all decode to
-/// `..` somewhere in the request pipeline.
+/// How many times the path is percent-decoded while looking for a `..`
+/// segment. Three rounds reach a triple-encoded dot (`%25252e`); anything
+/// deeper is still refused by the `%252e` rule.
+const TRAVERSAL_DECODE_ROUNDS: usize = 3;
+
+/// Whether the path climbs out of its directory once decoded. The raw path
+/// and each decoded form (up to [`TRAVERSAL_DECODE_ROUNDS`]) are split on `/`
+/// and `\\` — a decoded `%2f` / `%5c` becomes a separator — and refused when
+/// a segment is a dot-dot. Case-insensitive for the encoded forms.
 fn contains_traversal(path: &str) -> bool {
-    if path.contains("..") {
+    // A double-encoded dot has no legitimate use in a path: refused as such,
+    // whatever it decodes to.
+    if path.to_ascii_lowercase().contains("%252e") {
         return true;
     }
-    let lower = path.to_ascii_lowercase();
-    lower.contains("%2e%2e") || lower.contains("%252e")
+    let mut current = path.as_bytes().to_vec();
+    for _ in 0..=TRAVERSAL_DECODE_ROUNDS {
+        if has_dot_dot_segment(&current) {
+            return true;
+        }
+        let decoded = percent_decode(&current);
+        if decoded == current {
+            return false;
+        }
+        current = decoded;
+    }
+    false
+}
+
+/// A segment is a dot-dot when it is made of two or more dots, trailing
+/// spaces aside: Windows drops trailing dots and spaces from a path
+/// component, so `...` and `.. ` reach the file system as `..`.
+fn has_dot_dot_segment(path: &[u8]) -> bool {
+    path.split(|b| *b == b'/' || *b == b'\\').any(|segment| {
+        let trimmed = trim_trailing_spaces(segment);
+        trimmed.len() >= 2 && trimmed.iter().all(|b| *b == b'.')
+    })
+}
+
+fn trim_trailing_spaces(segment: &[u8]) -> &[u8] {
+    let end = segment
+        .iter()
+        .rposition(|b| *b != b' ')
+        .map_or(0, |last| last + 1);
+    &segment[..end]
+}
+
+/// Percent-decode bytes, leaving a malformed escape as it is, and fold the
+/// overlong UTF-8 encodings of ASCII (`%c0%ae` for `.`, `%c0%af` for `/`,
+/// `%e0%80%ae`...) to the character they spell, as lenient decoders do.
+fn percent_decode(input: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        let byte = input[i];
+        if byte == b'%' && i + 2 < input.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(input[i + 1]), hex_value(input[i + 2])) {
+                bytes.push(hi << 4 | lo);
+                i += 3;
+                continue;
+            }
+        }
+        bytes.push(byte);
+        i += 1;
+    }
+    fold_overlong_ascii(&bytes)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Replace two- and three-byte overlong encodings of an ASCII character
+/// (`C0 AE`, `E0 80 AE`) by that character. Every other byte is kept.
+fn fold_overlong_ascii(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        let continuation = |at: usize| bytes.get(at).filter(|b| **b & 0xC0 == 0x80).copied();
+        if b0 == 0xC0 || b0 == 0xC1 {
+            if let Some(b1) = continuation(i + 1) {
+                out.push(((b0 & 0x1F) << 6) | (b1 & 0x3F));
+                i += 2;
+                continue;
+            }
+        }
+        if b0 == 0xE0 {
+            if let (Some(0x80), Some(b2)) = (continuation(i + 1), continuation(i + 2)) {
+                out.push(b2 & 0x3F);
+                i += 3;
+                continue;
+            }
+            if let (Some(0x81), Some(b2)) = (continuation(i + 1), continuation(i + 2)) {
+                out.push(0x40 | (b2 & 0x3F));
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b0);
+        i += 1;
+    }
+    out
 }
 
 /// Walk the raw query string and surface the first duplicate key (after
@@ -218,6 +320,79 @@ mod tests {
             FilterResult::Reject(_) => {}
             _ => panic!("double-encoded `%252e` must be rejected"),
         }
+    }
+
+    fn assert_rejected(path: &str) {
+        match shield().check(req(path, "")) {
+            FilterResult::Reject(res) => {
+                assert_eq!(res.status, 400, "{path}");
+                assert!(res.body.contains("E_PATH_TRAVERSAL"), "{path}");
+            }
+            _ => panic!("`{path}` must be rejected as a traversal"),
+        }
+    }
+
+    fn assert_allowed(path: &str) {
+        match shield().check(req(path, "")) {
+            FilterResult::Allow(_) => {}
+            _ => panic!("`{path}` must be allowed"),
+        }
+    }
+
+    #[test]
+    fn shield_rejects_half_encoded_dot_dot() {
+        assert_rejected("/static/.%2e/etc/passwd");
+        assert_rejected("/static/%2e./etc/passwd");
+        assert_rejected("/static/.%2E/etc/passwd");
+        assert_rejected("/static/%2E.");
+    }
+
+    #[test]
+    fn shield_rejects_double_encoded_dot_dot_in_every_mix() {
+        assert_rejected("/static/%252e%252e/x");
+        assert_rejected("/static/.%252e/x");
+        assert_rejected("/static/%25252e%25252e/x");
+    }
+
+    #[test]
+    fn shield_rejects_dot_dot_split_by_an_encoded_separator() {
+        assert_rejected("/static/..%2fetc/passwd");
+        assert_rejected("/static/..%5cetc");
+        assert_rejected("/static/%2e%2e%5cetc");
+        assert_rejected("/static\\..\\etc");
+        assert_rejected("/static/x%2f..%2f..%2fetc");
+    }
+
+    #[test]
+    fn shield_rejects_overlong_utf8_dots() {
+        assert_rejected("/static/%c0%ae%c0%ae/etc");
+        assert_rejected("/static/%C0%AE./etc");
+        assert_rejected("/static/%e0%80%ae%e0%80%ae/etc");
+        assert_rejected("/static/..%c0%afetc");
+    }
+
+    #[test]
+    fn shield_rejects_dot_runs_windows_reads_as_dot_dot() {
+        assert_rejected("/static/.../etc");
+        assert_rejected("/static/..%20/etc");
+        assert_rejected("/static/..");
+    }
+
+    #[test]
+    fn shield_allows_dots_inside_a_name() {
+        assert_allowed("/files/a..b");
+        assert_allowed("/files/..hidden");
+        assert_allowed("/files/name..");
+        assert_allowed("/files/v1.2.3/./readme");
+        assert_allowed("/files/%2e/readme");
+        assert_allowed("/files/report%2epdf");
+        assert_allowed("/files/100%25");
+    }
+
+    #[test]
+    fn shield_tolerates_malformed_escapes() {
+        assert_allowed("/files/%zz/%2");
+        assert_allowed("/files/%");
     }
 
     #[test]

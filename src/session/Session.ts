@@ -10,6 +10,7 @@
  * Backed by pluggable drivers (cookie, memory, redis).
  */
 
+import type { CookieOptions } from '../http/Response.js'
 import type { SessionRedisClientSource } from './drivers/RedisDriver.js'
 import {
   E_SESSION_NOT_READY,
@@ -154,7 +155,22 @@ export interface SessionConfig {
   client?: SessionRedisClientSource
   /** `redis` driver only — key prefix. Defaults to `ream:session:`. */
   prefix?: string
+  /**
+   * Attributes of the session cookie, for every store. Defaults:
+   * `{ path: '/', httpOnly: true, sameSite: 'lax' }`, and `secure` on when
+   * `NODE_ENV` is production. Its lifetime comes from {@link age} and
+   * {@link clearWithBrowser}, not from here. `httpOnly: false` is refused: a
+   * script able to read the session cookie is what turns an XSS into an
+   * account takeover.
+   */
+  cookie?: SessionCookieOptions
 }
+
+/** The session cookie attributes an application may set. */
+export type SessionCookieOptions = Pick<
+  CookieOptions,
+  'path' | 'httpOnly' | 'secure' | 'sameSite' | 'domain' | 'partitioned' | 'priority'
+>
 
 /**
  * Generate a fresh session ID. Format mirrors AdonisJS / express-session —

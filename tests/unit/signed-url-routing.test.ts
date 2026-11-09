@@ -56,6 +56,13 @@ describe('router.makeSignedUrl + request.hasValidSignature (wiring)', () => {
     const url = router().makeSignedUrl('reset', { token: 'abc' }, { purpose: 'password-reset' })
     expect(requestFor(url).hasValidSignature('password-reset')).toBe(true)
     expect(requestFor(url).hasValidSignature('other')).toBe(false)
+    expect(requestFor(url).hasValidSignature()).toBe(false)
+  })
+
+  it('refuses a purpose-less signed URL on a purposed check', () => {
+    const url = router().makeSignedUrl('reset', { token: 'abc' })
+    expect(requestFor(url).hasValidSignature()).toBe(true)
+    expect(requestFor(url).hasValidSignature('password-reset')).toBe(false)
   })
 
   it('returns false without a signer or signature', () => {

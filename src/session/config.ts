@@ -13,6 +13,7 @@
  *   })
  */
 
+import { E_SESSION_STORE_NOT_CONFIGURED } from './errors.js'
 import type { SessionConfig } from './Session.js'
 
 /** What a session config file may declare. */
@@ -24,6 +25,12 @@ export type SessionConfigInput = SessionConfig & {
   secret?: string
 }
 
+/**
+ * Validate and return a session config. A config without `store` (or its
+ * older spelling `driver`) is refused here, at load time, as AdonisJS'
+ * `defineConfig` refuses it: there is no implicit store.
+ */
 export function defineConfig(config: SessionConfigInput): SessionConfigInput {
+  if (!config.store && !config.driver) throw new E_SESSION_STORE_NOT_CONFIGURED()
   return config
 }

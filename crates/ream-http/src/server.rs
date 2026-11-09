@@ -2,24 +2,30 @@
 //!
 //! @implements FR23
 
+use crate::ip::TrustedProxies;
+use crate::limits::{BodyLimits, ConnectionLimits};
 use crate::request::ReamRequest;
 use crate::response::ReamResponse;
 use crate::stream_registry::StreamRegistry;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Either, Full, StreamBody};
-use hyper::body::{Frame, Incoming};
+use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::net::TcpListener;
-use tokio::sync::{oneshot, watch, Mutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{oneshot, watch, Mutex, Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 
 /// Unified body type for hyper responses: either a fully buffered payload
@@ -37,6 +43,11 @@ pub type RequestHandler = Arc<
 
 /// Optional response filter applied after the handler returns, before Hyper sends.
 pub type ResponseFilter = Arc<dyn Fn(ReamResponse) -> ReamResponse + Send + Sync>;
+
+/// Pause after a failed `accept()` before trying again. The usual failure is
+/// running out of file descriptors (`EMFILE`); retrying at once would spin a
+/// core until a descriptor frees up.
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 /// Hyper-based HTTP server for the Ream framework.
 pub struct ReamServer {
@@ -60,11 +71,9 @@ pub struct ReamServer {
     /// (the watcher then sees the child exit instead of force-killing it).
     conn_shutdown_tx: Option<watch::Sender<bool>>,
     actual_port: Arc<Mutex<u16>>,
-    /// CIDR ranges (or bare IPs) of proxies whose `X-Forwarded-For` is honoured.
-    /// Empty = strict fail-closed (proxy headers ignored entirely; only the
-    /// socket peer is used). Use the `"*"` sentinel to opt into permissive
-    /// mode for deployments that can't enumerate proxy CIDRs.
-    trusted_proxies: Arc<Vec<String>>,
+    /// Proxies whose `X-Forwarded-For` hops are believed. Empty = strict
+    /// fail-closed (only the socket peer is used).
+    trusted_proxies: Arc<TrustedProxies>,
     rate_limiter: Option<Arc<crate::RateLimiter>>,
     /// Stream registry — populated by JS via NAPI when the handler upgrades
     /// the response to streaming mode (SSE etc.). Always cloned out into the
@@ -73,6 +82,10 @@ pub struct ReamServer {
     /// gRPC handler. `None` (default) leaves `application/grpc` requests on
     /// the HTTP path, exactly as before gRPC existed.
     grpc_handler: Option<crate::GrpcHandler>,
+    /// Request-body limits per content type, enforced while the body is read.
+    body_limits: Arc<BodyLimits>,
+    /// Header / body / keep-alive timeouts and the connection cap.
+    connection_limits: ConnectionLimits,
 }
 
 impl ReamServer {
@@ -88,10 +101,12 @@ impl ReamServer {
             accept_handle: None,
             conn_shutdown_tx: None,
             actual_port: Arc::new(Mutex::new(0)),
-            trusted_proxies: Arc::new(Vec::new()),
+            trusted_proxies: Arc::new(TrustedProxies::default()),
             rate_limiter: None,
             stream_registry: StreamRegistry::new(),
             grpc_handler: None,
+            body_limits: Arc::new(BodyLimits::default()),
+            connection_limits: ConnectionLimits::default(),
         }
     }
 
@@ -115,12 +130,22 @@ impl ReamServer {
         self.rate_limiter = limiter;
     }
 
-    /// Configure the trusted-proxy CIDR list used by `request.ip` resolution.
-    /// When empty, `X-Forwarded-For` is honoured unconditionally (legacy
-    /// permissive default). Apps that face the public internet should set
-    /// this to the LB / CDN ranges they sit behind.
-    pub fn set_trusted_proxies(&mut self, proxies: Vec<String>) {
+    /// Configure the trusted proxies used by `request.ip` resolution. Empty
+    /// (the default) ignores `X-Forwarded-For` entirely. See
+    /// [`TrustedProxies`] for the accepted entries.
+    pub fn set_trusted_proxies(&mut self, proxies: TrustedProxies) {
         self.trusted_proxies = Arc::new(proxies);
+    }
+
+    /// Configure the request-body limits. Defaults to the body parser's.
+    pub fn set_body_limits(&mut self, limits: BodyLimits) {
+        self.body_limits = Arc::new(limits);
+    }
+
+    /// Configure timeouts and the connection cap. Must be set before
+    /// `listen()`.
+    pub fn set_connection_limits(&mut self, limits: ConnectionLimits) {
+        self.connection_limits = limits;
     }
 
     /// Set the bind address (e.g., [0, 0, 0, 0] for all interfaces).
@@ -164,12 +189,18 @@ impl ReamServer {
             .handler
             .clone()
             .ok_or("No request handler registered")?;
-        let security_filter = self.security_filter.clone();
-        let response_filter = self.response_filter.clone();
-        let trusted_proxies = self.trusted_proxies.clone();
-        let rate_limiter = self.rate_limiter.clone();
-        let stream_registry = self.stream_registry.clone();
-        let grpc_handler = self.grpc_handler.clone();
+        let limits = self.connection_limits;
+        let context = Arc::new(ServeContext {
+            handler,
+            security_filter: self.security_filter.clone(),
+            response_filter: self.response_filter.clone(),
+            trusted_proxies: self.trusted_proxies.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            stream_registry: self.stream_registry.clone(),
+            grpc_handler: self.grpc_handler.clone(),
+            body_limits: self.body_limits.clone(),
+            limits,
+        });
 
         let addr = SocketAddr::from((self.host, self.port));
         let listener = TcpListener::bind(addr).await?;
@@ -188,143 +219,61 @@ impl ReamServer {
 
         let actual_port = self.actual_port.clone();
 
+        // Auto-detect HTTP/1.1 vs HTTP/2. hyper only enforces its header-read
+        // timeout when a timer is installed; without one a client that never
+        // finishes its headers holds the connection forever.
+        let mut builder = AutoBuilder::new(TokioExecutor::new());
+        builder
+            .http1()
+            .timer(TokioTimer::new())
+            .header_read_timeout(limits.headers_timeout);
+        builder.http2().timer(TokioTimer::new());
+
+        let connection_slots =
+            (limits.max_connections > 0).then(|| Arc::new(Semaphore::new(limits.max_connections)));
+
         self.accept_handle = Some(tokio::spawn(async move {
             let mut shutdown_rx = shutdown_rx;
 
             loop {
+                // Wait for a free slot BEFORE accepting: past the cap, new
+                // clients queue in the kernel's listen backlog instead of
+                // each costing a task and a descriptor here.
+                let slot = match &connection_slots {
+                    Some(slots) => tokio::select! {
+                        permit = slots.clone().acquire_owned() => match permit {
+                            Ok(permit) => Some(permit),
+                            Err(_) => break,
+                        },
+                        _ = &mut shutdown_rx => break,
+                    },
+                    None => None,
+                };
+
                 tokio::select! {
                     result = listener.accept() => {
                         match result {
                             Ok((stream, peer_addr)) => {
-                                let handler = handler.clone();
-                                let filter = security_filter.clone();
-                                let io = hyper_util::rt::TokioIo::new(stream);
-                                let peer_ip = peer_addr.ip().to_string();
-                                let trusted = trusted_proxies.clone();
-                                let limiter = rate_limiter.clone();
-                                let registry = stream_registry.clone();
-                                let grpc = grpc_handler.clone();
-
-                                let res_filter = response_filter.clone();
-                                let mut conn_shutdown = conn_shutdown_rx.clone();
-                                tokio::spawn(async move {
-                                    let service = service_fn(move |req: Request<Incoming>| {
-                                        let handler = handler.clone();
-                                        let filter = filter.clone();
-                                        let res_filter = res_filter.clone();
-                                        let peer_ip = peer_ip.clone();
-                                        let trusted = trusted.clone();
-                                        let limiter = limiter.clone();
-                                        let registry = registry.clone();
-                                        let grpc = grpc.clone();
-                                        async move {
-                                            if let Some(grpc) = grpc.filter(|_| crate::grpc::is_grpc(&req)) {
-                                                let guards = crate::grpc::Guards {
-                                                    peer_ip: &peer_ip,
-                                                    trusted_proxies: &trusted,
-                                                    rate_limiter: limiter.as_ref(),
-                                                    security_filter: filter.as_ref(),
-                                                };
-                                                return Ok(crate::grpc::serve(req, grpc, guards).await.map(Either::Right));
-                                            }
-                                            let ream_req = match hyper_to_ream_request(req, peer_ip, &trusted).await {
-                                                Ok(r) => r,
-                                                Err(res) => {
-                                                    // Body too large — return 413 from Rust, no NAPI crossing.
-                                                    return build_hyper_response(res, &registry).await.map(|r| r.map(Either::Left));
-                                                }
-                                            };
-
-                                            // Security filter check BEFORE NAPI crossing
-                                            let ream_req = if let Some(ref filter) = filter {
-                                                match filter.check(ream_req) {
-                                                    crate::FilterResult::Allow(req) => req,
-                                                    crate::FilterResult::Sanitized(req) => req,
-                                                    crate::FilterResult::Reject(res) => {
-                                                        // Rejected — return directly from Rust, no NAPI crossing
-                                                        return build_hyper_response(res, &registry).await.map(|r| r.map(Either::Left));
-                                                    }
-                                                }
-                                            } else {
-                                                ream_req
-                                            };
-
-                                            // Rate limit BEFORE NAPI crossing — blocked requests
-                                            // never pay the JS dispatch cost. The outcome is
-                                            // also stitched into the eventual response headers.
-                                            let rate_outcome = limiter.as_ref().map(|l| {
-                                                l.check(&ream_req.ip)
-                                            });
-                                            if let Some(outcome) = rate_outcome {
-                                                if !outcome.allowed {
-                                                    return build_hyper_response(
-                                                        rate_limited_response(outcome),
-                                                        &registry,
-                                                    )
-                                                    .await.map(|r| r.map(Either::Left));
-                                                }
-                                            }
-
-                                            let mut ream_res = (handler)(ream_req).await;
-
-                                            // Apply response filter (XSS sanitization for
-                                            // HTML/text) — skipped for streamed bodies. A
-                                            // sanitizer that scans an SSE wire (`event:
-                                            // foo\ndata: bar\n\n`) would butcher the framing.
-                                            if !ream_res.is_streaming() {
-                                                if let Some(ref rf) = res_filter {
-                                                    ream_res = (rf)(ream_res);
-                                                }
-                                            }
-
-                                            // Stitch rate-limit headers onto allowed responses
-                                            // so well-behaved clients can self-throttle.
-                                            if let Some(outcome) = rate_outcome {
-                                                attach_rate_limit_headers(&mut ream_res, outcome);
-                                            }
-
-                                            build_hyper_response(ream_res, &registry).await.map(|r| r.map(Either::Left))
-                                        }
-                                    });
-
-                                    // Auto-detect HTTP/1.1 vs HTTP/2 via ALPN
-                                    // (HTTP/2 requires TLS with ALPN negotiation;
-                                    // plain TCP falls back to HTTP/1.1 which is correct).
-                                    let builder = AutoBuilder::new(TokioExecutor::new());
-                                    let conn = builder.serve_connection(io, service);
-                                    tokio::pin!(conn);
-                                    tokio::select! {
-                                        res = conn.as_mut() => {
-                                            if let Err(_e) = res {
-                                                // Connection error — client disconnected, etc.
-                                            }
-                                        }
-                                        _ = conn_shutdown.changed() => {
-                                            // Server is shutting down: ask the connection to
-                                            // wind down (finish any in-flight request, stop
-                                            // reading new ones), then await its end. SSE bodies
-                                            // were EOF'd by the registry drain, so they finish
-                                            // here too — the task ends and drops its handler
-                                            // clone, releasing the tsfn that pins Node's loop.
-                                            conn.as_mut().graceful_shutdown();
-                                            let _ = conn.as_mut().await;
-                                        }
-                                    }
-                                });
+                                tokio::spawn(serve_connection(
+                                    stream,
+                                    Arc::from(peer_addr.ip().to_string()),
+                                    context.clone(),
+                                    builder.clone(),
+                                    conn_shutdown_rx.clone(),
+                                    slot,
+                                ));
                             }
                             Err(_e) => {
-                                // Accept error — continue listening
+                                tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                             }
                         }
                     }
-                    _ = &mut shutdown_rx => {
-                        // Shutdown signal received
-                        let mut port = actual_port.lock().await;
-                        *port = 0;
-                        break;
-                    }
+                    _ = &mut shutdown_rx => break,
                 }
             }
+
+            let mut port = actual_port.lock().await;
+            *port = 0;
         }));
 
         Ok(())
@@ -364,6 +313,279 @@ impl ReamServer {
             let _ = handle.await;
         }
     }
+}
+
+/// Everything a connection task needs, shared by every connection.
+struct ServeContext {
+    handler: RequestHandler,
+    security_filter: Option<Arc<dyn crate::SecurityFilter>>,
+    response_filter: Option<ResponseFilter>,
+    trusted_proxies: Arc<TrustedProxies>,
+    rate_limiter: Option<Arc<crate::RateLimiter>>,
+    stream_registry: StreamRegistry,
+    grpc_handler: Option<crate::GrpcHandler>,
+    body_limits: Arc<BodyLimits>,
+    limits: ConnectionLimits,
+}
+
+type ServiceBody = Either<ResponseBody, tonic::body::Body>;
+
+/// Serve one accepted connection until it closes, the server shuts down, or
+/// it sits idle past its bound. `_slot` is the connection-cap permit, released
+/// when this task ends.
+async fn serve_connection(
+    stream: TcpStream,
+    peer_ip: Arc<str>,
+    context: Arc<ServeContext>,
+    builder: AutoBuilder<TokioExecutor>,
+    mut conn_shutdown: watch::Receiver<bool>,
+    _slot: Option<OwnedSemaphorePermit>,
+) {
+    let activity = Arc::new(ConnActivity::new());
+    let service = {
+        let activity = activity.clone();
+        let context = context.clone();
+        service_fn(move |req: Request<Incoming>| {
+            let in_flight = activity.begin();
+            let context = context.clone();
+            let peer_ip = peer_ip.clone();
+            async move {
+                let response = handle_request(req, &peer_ip, &context).await?;
+                // The guard rides on the body: the request counts as in
+                // flight until its response — SSE included — is fully sent.
+                Ok::<_, hyper::Error>(response.map(|body| TrackedBody {
+                    inner: body,
+                    _in_flight: in_flight,
+                }))
+            }
+        })
+    };
+
+    let conn = builder.serve_connection(TokioIo::new(stream), service);
+    tokio::pin!(conn);
+    tokio::select! {
+        res = conn.as_mut() => {
+            if let Err(_e) = res {
+                // Connection error — client disconnected, header timeout, etc.
+            }
+        }
+        _ = conn_shutdown.changed() => {
+            // Server is shutting down: ask the connection to wind down (finish
+            // any in-flight request, stop reading new ones), then await its
+            // end. SSE bodies were EOF'd by the registry drain, so they finish
+            // here too — the task ends and drops its handler clone, releasing
+            // the tsfn that pins Node's loop.
+            conn.as_mut().graceful_shutdown();
+            let _ = conn.as_mut().await;
+        }
+        _ = activity.idle_expired(context.limits.headers_timeout, context.limits.keep_alive_timeout) => {
+            // Nothing in flight and nothing asked for in time: close. Graceful,
+            // so an HTTP/2 client gets its GOAWAY.
+            conn.as_mut().graceful_shutdown();
+            let _ = conn.as_mut().await;
+        }
+    }
+}
+
+/// What a connection is doing, for its idle bound.
+struct ConnActivity {
+    state: std::sync::Mutex<ActivityState>,
+    changed: Notify,
+}
+
+struct ActivityState {
+    in_flight: usize,
+    /// Whether a response has been completed on this connection: before it,
+    /// the idle bound is the header timeout; after it, the keep-alive one.
+    served: bool,
+    idle_since: Instant,
+}
+
+impl ConnActivity {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(ActivityState {
+                in_flight: 0,
+                served: false,
+                idle_since: Instant::now(),
+            }),
+            changed: Notify::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ActivityState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn begin(self: &Arc<Self>) -> InFlight {
+        self.lock().in_flight += 1;
+        InFlight(self.clone())
+    }
+
+    /// Resolves once the connection has had nothing in flight for longer
+    /// than its bound: `first_request` until a response has been completed
+    /// (a client that connects and sends nothing — not even the bytes
+    /// HTTP-version detection waits for — is closed like one that never
+    /// finishes its headers), `keep_alive` afterwards. A `None` bound never
+    /// expires.
+    async fn idle_expired(&self, first_request: Option<Duration>, keep_alive: Option<Duration>) {
+        loop {
+            let deadline = {
+                let state = self.lock();
+                if state.in_flight > 0 {
+                    None
+                } else {
+                    let bound = if state.served {
+                        keep_alive
+                    } else {
+                        first_request
+                    };
+                    bound.map(|bound| state.idle_since + bound)
+                }
+            };
+            match deadline {
+                Some(at) if at <= Instant::now() => return,
+                Some(at) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(at) => {}
+                        _ = self.changed.notified() => {}
+                    }
+                }
+                None => self.changed.notified().await,
+            }
+        }
+    }
+}
+
+/// One request in flight on a connection. Dropped when its response body is
+/// finished (or abandoned).
+struct InFlight(Arc<ConnActivity>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        {
+            let mut state = self.0.lock();
+            state.in_flight = state.in_flight.saturating_sub(1);
+            state.served = true;
+            if state.in_flight == 0 {
+                state.idle_since = Instant::now();
+            }
+        }
+        // `notify_one` keeps a permit when the watcher is not waiting yet, so
+        // the transition is never missed.
+        self.0.changed.notify_one();
+    }
+}
+
+/// A response body carrying the in-flight guard of its request.
+struct TrackedBody<B> {
+    inner: B,
+    _in_flight: InFlight,
+}
+
+impl<B: Body + Unpin> Body for TrackedBody<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+/// Route one request through the guards, then to the gRPC or HTTP handler.
+async fn handle_request(
+    req: Request<Incoming>,
+    peer_ip: &str,
+    context: &ServeContext,
+) -> Result<Response<ServiceBody>, hyper::Error> {
+    let registry = &context.stream_registry;
+    if let Some(grpc) = context
+        .grpc_handler
+        .clone()
+        .filter(|_| crate::grpc::is_grpc(&req))
+    {
+        let guards = crate::grpc::Guards {
+            peer_ip,
+            trusted_proxies: &context.trusted_proxies,
+            rate_limiter: context.rate_limiter.as_ref(),
+            security_filter: context.security_filter.as_ref(),
+        };
+        return Ok(crate::grpc::serve(req, grpc, guards)
+            .await
+            .map(Either::Right));
+    }
+    let ream_req = match hyper_to_ream_request(req, peer_ip, context).await {
+        Ok(r) => r,
+        Err(res) => {
+            // Body over its limit, too slow, or malformed — answered from
+            // Rust, no NAPI crossing.
+            return build_hyper_response(res, registry)
+                .await
+                .map(|r| r.map(Either::Left));
+        }
+    };
+
+    // Security filter check BEFORE NAPI crossing
+    let ream_req = if let Some(ref filter) = context.security_filter {
+        match filter.check(ream_req) {
+            crate::FilterResult::Allow(req) => req,
+            crate::FilterResult::Sanitized(req) => req,
+            crate::FilterResult::Reject(res) => {
+                // Rejected — return directly from Rust, no NAPI crossing
+                return build_hyper_response(res, registry)
+                    .await
+                    .map(|r| r.map(Either::Left));
+            }
+        }
+    } else {
+        ream_req
+    };
+
+    // Rate limit BEFORE NAPI crossing — blocked requests never pay the JS
+    // dispatch cost. The outcome is also stitched into the eventual response
+    // headers.
+    let rate_outcome = context.rate_limiter.as_ref().map(|l| l.check(&ream_req.ip));
+    if let Some(outcome) = rate_outcome {
+        if !outcome.allowed {
+            return build_hyper_response(rate_limited_response(outcome), registry)
+                .await
+                .map(|r| r.map(Either::Left));
+        }
+    }
+
+    let mut ream_res = (context.handler)(ream_req).await;
+
+    // Apply response filter (XSS sanitization for HTML/text) — skipped for
+    // streamed bodies. A sanitizer that scans an SSE wire (`event:
+    // foo\ndata: bar\n\n`) would butcher the framing.
+    if !ream_res.is_streaming() {
+        if let Some(ref rf) = context.response_filter {
+            ream_res = (rf)(ream_res);
+        }
+    }
+
+    // Stitch rate-limit headers onto allowed responses so well-behaved
+    // clients can self-throttle.
+    if let Some(outcome) = rate_outcome {
+        attach_rate_limit_headers(&mut ream_res, outcome);
+    }
+
+    build_hyper_response(ream_res, registry)
+        .await
+        .map(|r| r.map(Either::Left))
 }
 
 /// Build the 429 response for a blocked rate-limit outcome. Includes the
@@ -410,51 +632,195 @@ pub(crate) fn origin_form(uri: &hyper::Uri) -> String {
         .map_or_else(|| uri.path().to_string(), |pq| pq.as_str().to_string())
 }
 
+/// Flatten the request headers into a name → value map (names lowercase).
+/// Repeated `Cookie` lines are joined with `"; "` — HTTP/2 clients send one
+/// line per cookie — and repeated `X-Forwarded-For` lines with `", "`, as
+/// Node does, so neither loses entries. Any other repeated header keeps its
+/// last value.
+pub(crate) fn collect_headers(map: &hyper::HeaderMap) -> HashMap<String, String> {
+    let mut headers: HashMap<String, String> = HashMap::with_capacity(map.keys_len());
+    for (name, value) in map {
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        let separator = match name.as_str() {
+            "cookie" => Some("; "),
+            "x-forwarded-for" => Some(", "),
+            _ => None,
+        };
+        if let Some(separator) = separator {
+            if let Some(existing) = headers.get_mut(name.as_str()) {
+                existing.push_str(separator);
+                existing.push_str(value);
+                continue;
+            }
+        }
+        headers.insert(name.to_string(), value.to_string());
+    }
+    headers
+}
+
+/// The most of an over-limit body the server reads and throws away while the
+/// request is answered without it, so a client still uploading receives the
+/// answer instead of a reset connection (Node discards an unread body the
+/// same way). Past it, or past the request timeout, the connection is
+/// dropped.
+const DISCARD_LIMIT: u64 = 128 * 1024 * 1024;
+
+/// A rejection answered before the request body was fully read. The
+/// connection is not reused after it.
+fn early_rejection(status: u16, body: &'static str) -> ReamResponse {
+    let mut response = ReamResponse::json(status, body);
+    response.headers.insert("connection".into(), "close".into());
+    response
+}
+
+fn request_timeout() -> ReamResponse {
+    early_rejection(
+        408,
+        r#"{"error":{"code":"E_HTTP_REQUEST_TIMEOUT","message":"Request body not received in time"}}"#,
+    )
+}
+
+fn request_aborted() -> ReamResponse {
+    early_rejection(
+        400,
+        r#"{"error":{"code":"E_REQUEST_ABORTED","message":"request aborted"}}"#,
+    )
+}
+
+/// How the rest of a refused body is dealt with.
+#[derive(Clone, Copy)]
+struct Discard {
+    /// The client asked `Expect: 100-continue`: reading would invite the body
+    /// it has not sent yet, so nothing is read.
+    expects_continue: bool,
+    timeout: Option<Duration>,
+}
+
+impl Discard {
+    /// Read and drop what is left of `body` in the background, within
+    /// [`DISCARD_LIMIT`] and the request timeout. `already` bytes were read.
+    fn rest(self, body: Incoming, already: u64) {
+        let remaining = DISCARD_LIMIT.saturating_sub(already);
+        if self.expects_continue || body.size_hint().lower() > remaining {
+            return;
+        }
+        let drain = async move {
+            let mut body = body;
+            let mut seen = 0u64;
+            while let Some(Ok(frame)) = body.frame().await {
+                if let Some(data) = frame.data_ref() {
+                    seen += data.len() as u64;
+                    if seen > remaining {
+                        return;
+                    }
+                }
+            }
+        };
+        let timeout = self.timeout;
+        tokio::spawn(async move {
+            match timeout {
+                Some(timeout) => {
+                    let _ = tokio::time::timeout(timeout, drain).await;
+                }
+                None => drain.await,
+            }
+        });
+    }
+}
+
+/// Read the request body within its size limit and the request timeout.
+///
+/// `Ok(None)` means the body is over its limit: a declared `Content-Length`
+/// over it is not read at all, a chunked body stops being kept the moment it
+/// passes it. Either way nothing more is buffered — the rest is discarded
+/// (see [`Discard`]) — and the request still goes to the application, without
+/// a body, so routing answers first and the body parser raises the 413.
+async fn read_body(
+    body: Incoming,
+    limit: u64,
+    timeout: Option<Duration>,
+    discard: Discard,
+) -> Result<Option<Bytes>, ReamResponse> {
+    if body.size_hint().lower() > limit {
+        discard.rest(body, 0);
+        return Ok(None);
+    }
+    let read = async move {
+        let mut body = body;
+        let mut collected = BytesMut::new();
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|_| request_aborted())?;
+            if let Ok(data) = frame.into_data() {
+                let total = collected.len() as u64 + data.len() as u64;
+                if total > limit {
+                    discard.rest(body, total);
+                    return Ok(None);
+                }
+                collected.extend_from_slice(&data);
+            }
+        }
+        Ok(Some(collected.freeze()))
+    };
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, read)
+            .await
+            .map_err(|_| request_timeout())?,
+        None => read.await,
+    }
+}
+
 /// Convert a hyper Request to a ReamRequest, including the TCP peer IP and
-/// the resolved client IP (per the configured trusted-proxy CIDR list).
+/// the resolved client IP (per the configured trusted proxies).
 async fn hyper_to_ream_request(
     req: Request<Incoming>,
-    peer_ip: String,
-    trusted_proxies: &[String],
+    peer_ip: &str,
+    context: &ServeContext,
 ) -> Result<ReamRequest, ReamResponse> {
     let method = req.method().to_string();
     // Origin form (`/path?query`). Over HTTP/2 the URI is absolute — it
     // carries `:scheme` and `:authority` — and `to_string()` handed the router
     // `http://host:port/path` to match its routes against.
     let uri = origin_form(req.uri());
+    let headers = collect_headers(req.headers());
+    let content_type = headers.get("content-type").cloned().unwrap_or_default();
 
-    let mut headers = HashMap::new();
-    for (name, value) in req.headers() {
-        if let Ok(v) = value.to_str() {
-            headers.insert(name.to_string(), v.to_string());
-        }
-    }
-
-    // Hard body size limit at the Rust layer — prevents OOM before NAPI crossing.
-    // The TS BodyParserMiddleware enforces per-content-type limits, but it operates
-    // AFTER the body is already in memory. This is the last line of defense.
-    // 100 MB should accommodate large file uploads; the TS layer enforces stricter
-    // per-content-type limits (e.g., 1 MB for JSON).
-    const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
-    let limited = http_body_util::Limited::new(req.into_body(), MAX_BODY_BYTES);
-    let (body_bytes, oversized) = match http_body_util::BodyExt::collect(limited).await {
-        Ok(collected) => (collected.to_bytes(), false),
-        Err(_) => (bytes::Bytes::new(), true),
+    // The body-parser limit for this content type, applied while reading:
+    // nothing past it is ever buffered.
+    let discard = Discard {
+        expects_continue: headers
+            .get("expect")
+            .is_some_and(|v| v.eq_ignore_ascii_case("100-continue")),
+        timeout: context.limits.request_timeout,
     };
+    let body_bytes = read_body(
+        req.into_body(),
+        context.body_limits.limit_for(&content_type),
+        context.limits.request_timeout,
+        discard,
+    )
+    .await?;
 
-    // Reject oversized bodies with a proper 413 — never hand an empty body
-    // to the TS layer where it would produce a misleading 400 parse error.
-    if oversized {
-        return Err(ReamResponse::json(
-            413,
-            r#"{"error":{"code":"E_PAYLOAD_TOO_LARGE","message":"Request body exceeds the 100 MB server limit"}}"#,
-        ));
-    }
-
-    let resolved_ip = crate::ip::resolve_client_ip(&peer_ip, &headers, trusted_proxies);
+    let ips = crate::ip::resolve_client_ips(peer_ip, &headers, &context.trusted_proxies);
+    let resolved_ip = ips.last().cloned().unwrap_or_else(|| "127.0.0.1".into());
+    let peer_trusted = context.trusted_proxies.trusts(peer_ip);
     let cookie_header = headers.get("cookie").cloned().unwrap_or_default();
     let cookies = crate::cookies::parse_cookie_header(&cookie_header);
-    let content_type = headers.get("content-type").cloned().unwrap_or_default();
+    let peer_ip = peer_ip.to_string();
+
+    // Over the limit: no body at all, and the marker that says so. The body
+    // parser turns it into a 413 once the route is known.
+    let Some(body_bytes) = body_bytes else {
+        let mut req =
+            ReamRequest::from_hyper_with_addr(&method, &uri, headers, String::new(), peer_ip);
+        req.body_too_large = true;
+        req.ip = resolved_ip;
+        req.ips = ips;
+        req.peer_trusted = peer_trusted;
+        req.cookies = cookies;
+        return Ok(req);
+    };
 
     // Multipart: parse server-side via `multer`. Ship structured fields/files
     // to JS instead of the raw boundary-framed bytes. JS no longer parses.
@@ -482,6 +848,8 @@ async fn hyper_to_ream_request(
             ReamRequest::from_hyper_with_addr(&method, &uri, headers, String::new(), peer_ip);
         req.body_encoding = "multipart".to_string();
         req.ip = resolved_ip;
+        req.ips = ips;
+        req.peer_trusted = peer_trusted;
         req.multipart = payload;
         req.cookies = cookies;
         return Ok(req);
@@ -490,21 +858,21 @@ async fn hyper_to_ream_request(
     // Other binary content (`application/octet-stream`, etc.) still rides as
     // base64 — JS layer decodes via `Request.rawBuffer()`.
     let is_binary = content_type.starts_with("application/octet-stream");
-    if is_binary {
+    let mut req = if is_binary {
         use base64::Engine;
         let body = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
         let mut req = ReamRequest::from_hyper_with_addr(&method, &uri, headers, body, peer_ip);
         req.body_encoding = "base64".to_string();
-        req.ip = resolved_ip;
-        req.cookies = cookies;
-        Ok(req)
+        req
     } else {
-        let body = String::from_utf8_lossy(&body_bytes).to_string();
-        let mut req = ReamRequest::from_hyper_with_addr(&method, &uri, headers, body, peer_ip);
-        req.ip = resolved_ip;
-        req.cookies = cookies;
-        Ok(req)
-    }
+        let body = String::from_utf8_lossy(&body_bytes).into_owned();
+        ReamRequest::from_hyper_with_addr(&method, &uri, headers, body, peer_ip)
+    };
+    req.ip = resolved_ip;
+    req.ips = ips;
+    req.peer_trusted = peer_trusted;
+    req.cookies = cookies;
+    Ok(req)
 }
 
 /// Convert a `ReamResponse` to a hyper response. Dispatches between the
@@ -804,6 +1172,446 @@ mod tests {
         let hyper_res = build_buffered_response(ream_res);
         let values = hyper_res.headers().get_all("set-cookie");
         assert_eq!(values.iter().count(), 2);
+    }
+
+    // ─── End-to-end: proxies, cookies, shield, body limits, timeouts ───
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Start a server whose handler echoes what a test asks for and counts
+    /// its calls. `configure` adjusts the server before it listens.
+    async fn start(
+        echo: fn(&ReamRequest) -> String,
+        configure: impl FnOnce(&mut ReamServer),
+    ) -> (ReamServer, u16, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let mut server = ReamServer::new(0);
+        server.on_request(Arc::new(move |req| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let body = echo(&req);
+            Box::pin(async move { ReamResponse::text(200, body) })
+        }));
+        configure(&mut server);
+        server.listen().await.unwrap();
+        let port = server.actual_port().await;
+        (server, port, calls)
+    }
+
+    /// Send raw bytes, then read until the server closes (or `wait` passes).
+    async fn exchange(port: u16, raw: &[u8], wait: Duration) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream.write_all(raw).await.unwrap();
+        let mut response = Vec::new();
+        let _ = tokio::time::timeout(wait, stream.read_to_end(&mut response)).await;
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    /// Whether the server closes `stream` within `within`.
+    async fn closed_within(stream: &mut TcpStream, within: Duration) -> bool {
+        let mut buf = [0u8; 1024];
+        let deadline = Instant::now() + within;
+        loop {
+            match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) => return true,
+                Ok(Ok(_)) => continue,
+                Err(_) => return false,
+            }
+        }
+    }
+
+    fn body_of(response: &str) -> &str {
+        response.split("\r\n\r\n").nth(1).unwrap_or("")
+    }
+
+    #[tokio::test]
+    async fn client_ip_ignores_the_spoofed_left_most_forwarded_entry() {
+        let (mut server, port, _) = start(
+            |req| format!("{}|{}", req.ip, req.ips.join(",")),
+            |s| s.set_trusted_proxies(TrustedProxies::compile(&["127.0.0.1"]).unwrap()),
+        )
+        .await;
+        let response = exchange(
+            port,
+            b"GET / HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 6.6.6.6, 203.0.113.9\r\nConnection: close\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(body_of(&response), "203.0.113.9|127.0.0.1,203.0.113.9");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn repeated_forwarded_for_lines_are_read_as_one_list() {
+        let (mut server, port, _) = start(
+            |req| req.ip.clone(),
+            |s| s.set_trusted_proxies(TrustedProxies::compile(&["127.0.0.1"]).unwrap()),
+        )
+        .await;
+        // The client's own line first, the proxy's appended line last: the
+        // proxy's entry is the client IP, whatever the client wrote.
+        let response = exchange(
+            port,
+            b"GET / HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 203.0.113.9\r\nX-Forwarded-For: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(body_of(&response), "203.0.113.9");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_duplicated_cookie_name_keeps_the_first_value() {
+        let (mut server, port, _) = start(
+            |req| req.cookies.get("session").cloned().unwrap_or_default(),
+            |_| {},
+        )
+        .await;
+        let response = exchange(
+            port,
+            b"GET / HTTP/1.1\r\nHost: x\r\nCookie: session=legit-host-only; session=tossed-by-sibling-subdomain\r\nConnection: close\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(body_of(&response), "legit-host-only");
+
+        // Two Cookie lines (one per cookie, as HTTP/2 clients send them)
+        // keep their order instead of the last line replacing the first.
+        let response = exchange(
+            port,
+            b"GET / HTTP/1.1\r\nHost: x\r\nCookie: session=first\r\nCookie: session=second; other=1\r\nConnection: close\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(body_of(&response), "first");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shield_refuses_half_encoded_traversal_on_the_wire() {
+        let (mut server, port, calls) = start(
+            |req| req.path.clone(),
+            |s| s.set_security_filter(Arc::new(crate::ShieldFilter::new(Default::default()))),
+        )
+        .await;
+        for path in ["/static/.%2e/etc/passwd", "/static/%2e./etc/passwd"] {
+            let response = exchange(
+                port,
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+                Duration::from_secs(5),
+            )
+            .await;
+            assert!(response.starts_with("HTTP/1.1 400"), "{path}: {response}");
+            assert!(response.contains("E_PATH_TRAVERSAL"), "{path}");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    /// Read one response from `stream`: its head, then `content-length`
+    /// bytes of body — or whatever arrived before the server closed or five
+    /// seconds passed.
+    async fn read_response(stream: &mut TcpStream) -> String {
+        let mut response = Vec::new();
+        let mut buf = [0u8; 4096];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let text = String::from_utf8_lossy(&response).into_owned();
+            if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())?
+                    })
+                    .unwrap_or(0);
+                if body.len() >= length {
+                    return text;
+                }
+            }
+            match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => response.extend_from_slice(&buf[..n]),
+                _ => return text,
+            }
+        }
+    }
+
+    /// What the over-limit tests echo: the marker, then how much body JS got.
+    fn over_limit_echo(req: &ReamRequest) -> String {
+        format!("{}|{}", req.body_too_large, req.body.len())
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_limit_reaches_the_app_without_its_body() {
+        let (mut server, port, calls) = start(over_limit_echo, |_| {}).await;
+        // Headers only: the 40 MB body never leaves the client, and the
+        // application still answers — routing decides before any 413.
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"POST /does-not-exist HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nContent-Length: 41943040\r\n\r\n")
+            .await
+            .unwrap();
+        let response = read_response(&mut stream).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(body_of(&response), "true|0");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_client_still_uploading_receives_the_answer() {
+        let (mut server, port, _) = start(over_limit_echo, |_| {}).await;
+        let body = vec![b'a'; 3 * 1024 * 1024];
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "POST / HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        // The whole body goes out (the server discards it rather than
+        // resetting the connection under the client)...
+        tokio::time::timeout(Duration::from_secs(5), stream.write_all(&body))
+            .await
+            .expect("the server kept reading")
+            .expect("the connection was not reset");
+        // ...and the answer is there, without a byte of that body.
+        let response = read_response(&mut stream).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(body_of(&response), "true|0");
+        assert!(closed_within(&mut stream, Duration::from_secs(5)).await);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_expect_continue_client_is_answered_without_being_invited_to_send() {
+        let (mut server, port, _) = start(over_limit_echo, |_| {}).await;
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"POST / HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nContent-Length: 41943040\r\nExpect: 100-continue\r\n\r\n")
+            .await
+            .unwrap();
+        let response = read_response(&mut stream).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(!response.contains("100 Continue"));
+        assert_eq!(body_of(&response), "true|0");
+        assert!(closed_within(&mut stream, Duration::from_secs(5)).await);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_chunked_body_is_dropped_once_it_passes_the_limit() {
+        let (mut server, port, _) = start(over_limit_echo, |s| {
+            let mut limits = BodyLimits::default();
+            limits.json.limit = 16;
+            s.set_body_limits(limits);
+        })
+        .await;
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"POST / HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n")
+            .await
+            .unwrap();
+        // 8 bytes (under the limit), then past it, then the stream stays
+        // open: the app is called without waiting for the rest, and none of
+        // the bytes already read reach it.
+        stream.write_all(b"8\r\n{\"a\":\"xx\r\n").await.unwrap();
+        stream
+            .write_all(b"20\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\r\n")
+            .await
+            .unwrap();
+        let response = read_response(&mut stream).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(body_of(&response), "true|0");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn each_content_type_gets_its_own_limit() {
+        let (mut server, port, _) = start(
+            |req| format!("{}|{}", req.body_encoding, req.body_too_large),
+            |s| {
+                let mut limits = BodyLimits::default();
+                limits.json.limit = 64;
+                limits.multipart.limit = 4096;
+                s.set_body_limits(limits);
+            },
+        )
+        .await;
+        let part = format!(
+            "--b\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\n{}\r\n--b--\r\n",
+            "n".repeat(500)
+        );
+        let multipart = format!(
+            "POST / HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=b\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{part}",
+            part.len()
+        );
+        let response = exchange(port, multipart.as_bytes(), Duration::from_secs(5)).await;
+        assert_eq!(body_of(&response), "multipart|false");
+
+        let json = format!("{{\"note\":\"{}\"}}", "n".repeat(500));
+        let request = format!(
+            "POST / HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+            json.len()
+        );
+        let response = exchange(port, request.as_bytes(), Duration::from_secs(5)).await;
+        assert_eq!(body_of(&response), "utf8|true");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn peer_trust_is_reported_without_forwarded_for() {
+        for (trusted, expected) in [(vec!["127.0.0.1"], "true"), (vec!["10.0.0.0/8"], "false")] {
+            let (mut server, port, _) = start(
+                |req| req.peer_trusted.to_string(),
+                |s| s.set_trusted_proxies(TrustedProxies::compile(&trusted).unwrap()),
+            )
+            .await;
+            let response = exchange(
+                port,
+                b"GET / HTTP/1.1\r\nHost: x\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n",
+                Duration::from_secs(5),
+            )
+            .await;
+            assert_eq!(body_of(&response), expected, "{trusted:?}");
+            server.shutdown().await;
+        }
+    }
+
+    fn quick_limits() -> ConnectionLimits {
+        ConnectionLimits {
+            headers_timeout: Some(Duration::from_millis(300)),
+            request_timeout: Some(Duration::from_millis(300)),
+            keep_alive_timeout: Some(Duration::from_millis(300)),
+            max_connections: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_headers_are_closed_after_the_headers_timeout() {
+        let (mut server, port, _) =
+            start(|_| "ok".into(), |s| s.set_connection_limits(quick_limits())).await;
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nX-Slow: ")
+            .await
+            .unwrap();
+        assert!(closed_within(&mut stream, Duration::from_secs(5)).await);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_silent_connection_is_closed_after_the_headers_timeout() {
+        // Not a single byte: HTTP-version detection waits for the first ones,
+        // before hyper's own header timer has started.
+        let (mut server, port, _) =
+            start(|_| "ok".into(), |s| s.set_connection_limits(quick_limits())).await;
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(closed_within(&mut stream, Duration::from_secs(5)).await);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_slow_body_is_answered_408() {
+        let (mut server, port, calls) =
+            start(|_| "ok".into(), |s| s.set_connection_limits(quick_limits())).await;
+        let response = exchange(
+            port,
+            b"POST / HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nContent-Length: 100\r\n\r\nonly a few bytes",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 408"), "{response}");
+        assert!(response.contains("E_HTTP_REQUEST_TIMEOUT"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_idle_keep_alive_connection_is_closed() {
+        let mut limits = quick_limits();
+        limits.headers_timeout = Some(Duration::from_secs(30));
+        let (mut server, port, _) =
+            start(|_| "ok".into(), |s| s.set_connection_limits(limits)).await;
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 1024];
+        let n = stream.read(&mut buf).await.unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 200"));
+        // The keep-alive bound (300 ms) closes it long before the 30 s
+        // header timeout would.
+        assert!(closed_within(&mut stream, Duration::from_secs(5)).await);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_long_response_is_not_cut_by_the_keep_alive_bound() {
+        // A handler busy for three times the idle bound: the request is in
+        // flight, so the connection is not idle.
+        let mut server = ReamServer::new(0);
+        server.on_request(Arc::new(|_req| {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_millis(900)).await;
+                ReamResponse::text(200, "slow")
+            })
+        }));
+        server.set_connection_limits(quick_limits());
+        server.listen().await.unwrap();
+        let port = server.actual_port().await;
+        let response = exchange(
+            port,
+            b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(body_of(&response), "slow");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_connection_cap_holds_extra_clients_back() {
+        let limits = ConnectionLimits {
+            max_connections: 1,
+            ..ConnectionLimits::default()
+        };
+        let (mut server, port, _) =
+            start(|_| "ok".into(), |s| s.set_connection_limits(limits)).await;
+
+        let mut first = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        first
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 1024];
+        assert!(first.read(&mut buf).await.unwrap() > 0);
+
+        // The second client sits in the backlog while the first holds the
+        // only slot...
+        let mut second = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        second
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let waiting = tokio::time::timeout(Duration::from_millis(300), second.read(&mut buf)).await;
+        assert!(waiting.is_err(), "served past the connection cap");
+
+        // ...and is served once it frees up.
+        drop(first);
+        let n = tokio::time::timeout(Duration::from_secs(5), second.read(&mut buf))
+            .await
+            .expect("served once a slot freed")
+            .unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 200"));
+        server.shutdown().await;
     }
 
     /// Simple HTTP GET using raw TCP (no external deps needed).

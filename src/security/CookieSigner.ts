@@ -23,6 +23,11 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto'
 import { hmacSign, hmacVerify } from './crypto.js'
 
+/** The 96-bit nonce GCM is specified for. */
+const GCM_IV_BYTES = 12
+/** The full 128-bit authentication tag — never a truncated one. */
+const GCM_TAG_BYTES = 16
+
 /** Raised when no APP_KEY is configured (AdonisJS `E_MISSING_APP_KEY`). */
 export class E_MISSING_APP_KEY extends Error {
   readonly code = 'E_MISSING_APP_KEY' as const
@@ -217,8 +222,10 @@ export class CookieSigner {
   }
 
   encrypt(value: unknown, expiresIn?: number, purpose?: string): string {
-    const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', this.#keyBuffer, iv)
+    const iv = randomBytes(GCM_IV_BYTES)
+    const cipher = createCipheriv('aes-256-gcm', this.#keyBuffer, iv, {
+      authTagLength: GCM_TAG_BYTES,
+    })
     const sealed = this.#seal(value, expiresIn, purpose)
     const encrypted = Buffer.concat([cipher.update(sealed, 'utf8'), cipher.final()])
     const tag = cipher.getAuthTag()
@@ -242,7 +249,14 @@ export class CookieSigner {
       const iv = Buffer.from(ivPart, 'base64url')
       const data = Buffer.from(dataPart, 'base64url')
       const tag = Buffer.from(tagPart, 'base64url')
-      const decipher = createDecipheriv('aes-256-gcm', this.#keyBuffer, iv)
+      // GCM verifies only as many tag bytes as it is handed: a client that
+      // trims the tag to 4 bytes would cut forgery cost from 2^128 to 2^32
+      // guesses. Only what `encrypt` produces is accepted — a 12-byte IV and
+      // the full 16-byte tag — and the decipher is pinned to that length too.
+      if (iv.length !== GCM_IV_BYTES || tag.length !== GCM_TAG_BYTES) return null
+      const decipher = createDecipheriv('aes-256-gcm', this.#keyBuffer, iv, {
+        authTagLength: GCM_TAG_BYTES,
+      })
       decipher.setAuthTag(tag)
       const raw = Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')
       return this.#open(raw, purpose) as T | null

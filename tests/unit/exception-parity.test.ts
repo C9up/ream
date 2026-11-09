@@ -295,3 +295,102 @@ describe('ExceptionHandler > render hooks (AdonisJS override points)', () => {
     expect(normalised.message).toBe('just a string')
   })
 })
+
+/**
+ * Outside debug mode the client sees a message only when it was written for
+ * clients. A string `code` used to be enough to echo the message, and every
+ * Node system error and database driver error carries one.
+ */
+describe('ExceptionHandler > production messages', () => {
+  async function jsonError(error: unknown, debug = false): Promise<Record<string, unknown>> {
+    const ctx = ctxWith('application/json')
+    await new ExceptionHandler(debug).handle(error, ctx)
+    const raw = ctx.response.getBody()
+    const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (typeof parsed !== 'object' || parsed === null || !('error' in parsed)) {
+      throw new Error(`unexpected body: ${String(raw)}`)
+    }
+    const { error: payload } = parsed
+    if (typeof payload !== 'object' || payload === null) throw new Error('no error payload')
+    return { ...payload, status: ctx.response.getStatus() }
+  }
+
+  const leaky: Array<[string, Error]> = [
+    [
+      'a Node system error',
+      Object.assign(new Error('connect ECONNREFUSED 10.0.12.5:5432'), { code: 'ECONNREFUSED' }),
+    ],
+    [
+      'a Postgres driver error',
+      Object.assign(new Error('duplicate key value violates unique constraint "users_email_key"'), {
+        code: '23505',
+      }),
+    ],
+    [
+      'a file-system error',
+      Object.assign(new Error("ENOENT: no such file or directory, open '/srv/keys/private.pem'"), {
+        code: 'ENOENT',
+      }),
+    ],
+    [
+      'a duck-typed error with an E_ code and status 500',
+      Object.assign(new Error('pool exhausted on db-internal-3'), {
+        code: 'E_ATLAS_POOL',
+        status: 500,
+      }),
+    ],
+    ['a plain Error', new Error('secret detail')],
+  ]
+
+  for (const [label, error] of leaky) {
+    it(`hides the message of ${label}`, async () => {
+      const original = error.message
+      const payload = await jsonError(error)
+      expect(payload.message).toBe('An internal error occurred')
+      expect(payload.status).toBe(500)
+      // The thrown error keeps its text for reporting.
+      expect(error.message).toBe(original)
+    })
+  }
+
+  it('shows the message of an Exception, whatever its status', async () => {
+    expect((await jsonError(new Exception('Payment provider down', { status: 503 }))).message).toBe(
+      'Payment provider down',
+    )
+  })
+
+  it('shows the message of a client error raised by a package that is not an Exception', async () => {
+    const unauthorized = Object.assign(new Error('Unauthorized access'), {
+      code: 'E_UNAUTHORIZED_ACCESS',
+      status: 401,
+    })
+    const payload = await jsonError(unauthorized)
+    expect(payload).toMatchObject({ message: 'Unauthorized access', status: 401 })
+  })
+
+  it('shows the message of an error that opts in with expose', async () => {
+    const exposed = Object.assign(new Error('Upstream is busy, retry later'), {
+      status: 502,
+      expose: true,
+    })
+    expect((await jsonError(exposed)).message).toBe('Upstream is busy, retry later')
+  })
+
+  it('shows the real message in debug mode', async () => {
+    const error = Object.assign(new Error('connect ECONNREFUSED 10.0.12.5:5432'), {
+      code: 'ECONNREFUSED',
+    })
+    expect((await jsonError(error, true)).message).toBe('connect ECONNREFUSED 10.0.12.5:5432')
+  })
+
+  it('hides the message in HTML and JSON:API renderings too', async () => {
+    const error = () =>
+      Object.assign(new Error('connect ECONNREFUSED 10.0.12.5:5432'), { code: 'ECONNREFUSED' })
+    const html = ctxWith('text/html')
+    await new ExceptionHandler().handle(error(), html)
+    expect(String(html.response.getBody())).not.toContain('10.0.12.5')
+    const jsonApi = ctxWith('application/vnd.api+json')
+    await new ExceptionHandler().handle(error(), jsonApi)
+    expect(String(jsonApi.response.getBody())).not.toContain('10.0.12.5')
+  })
+})

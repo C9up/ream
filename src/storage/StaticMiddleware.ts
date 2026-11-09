@@ -150,8 +150,11 @@ export class StaticMiddleware {
     const reqPath = ctx.request.path()
 
     // A dotfile under `deny` is answered, not passed on: falling through would
-    // leak its existence through whatever the router answers next.
-    if (this.#dotFiles === 'deny' && this.#hasDotSegment(reqPath)) {
+    // leak its existence through whatever the router answers next. The check
+    // runs on the DECODED path — the name that would be opened — or `/%2eenv`
+    // reaches `.env`. A path that does not decode is checked raw; it is never
+    // served anyway.
+    if (this.#dotFiles === 'deny' && this.#hasDotSegment(decodePath(reqPath) ?? reqPath)) {
       ctx.response.status(403).send('Forbidden')
       return
     }
@@ -335,25 +338,21 @@ export class StaticMiddleware {
       reqPath = reqPath.slice(this.#prefix.length) || '/'
     }
 
-    if (this.#dotFiles === 'ignore' && this.#hasDotSegment(reqPath)) return null
-
-    // The candidates, in upstream's order: the path itself, then the path with
-    // each fallback extension, then the index files for a directory request.
-    //
-    // Percent-decoding happens BEFORE resolution on purpose: `%2e%2e%2f` is
-    // `../` and has to be normalised away by `path.resolve` like any other
-    // traversal, not carried through as an opaque segment. `decodeURIComponent`
-    // THROWS on a malformed sequence (a lone `%`), which would otherwise become
-    // a 500 on a request anyone can send.
-    let decoded: string
-    try {
-      decoded = decodeURIComponent(reqPath)
-    } catch {
-      return null
-    }
+    // Percent-decoding happens BEFORE any check and BEFORE resolution on
+    // purpose: the dot-file policy has to see the name that will be opened
+    // (`%2eenv` is `.env`), and `%2e%2e%2f` is `../`, which has to be
+    // normalised away by `path.resolve` like any other traversal, not carried
+    // through as an opaque segment. A malformed sequence (a lone `%`) is not
+    // servable.
+    const decoded = decodePath(reqPath)
+    if (decoded === null) return null
     // A NUL truncates the path in the syscall layer of some runtimes; Node
     // rejects it, but refusing here keeps the decision in one place.
     if (decoded.includes('\0')) return null
+    if (this.#dotFiles !== 'allow' && this.#hasDotSegment(decoded)) return null
+
+    // The candidates, in upstream's order: the path itself, then the path with
+    // each fallback extension, then the index files for a directory request.
     const relative = decoded.replace(/^\/+/, '')
     const candidates: string[] = []
     if (relative !== '') {
@@ -367,6 +366,8 @@ export class StaticMiddleware {
     }
 
     for (const candidate of candidates) {
+      // A configured index or extension can itself name a dot file.
+      if (this.#dotFiles !== 'allow' && this.#hasDotSegment(candidate)) continue
       const opened = await this.#openInRoot(candidate)
       if (opened) return opened
     }
@@ -423,6 +424,15 @@ export class StaticMiddleware {
       await handle.close().catch(() => {})
       return null
     }
+  }
+}
+
+/** `decodeURIComponent` that answers `null` instead of throwing on a malformed sequence. */
+function decodePath(reqPath: string): string | null {
+  try {
+    return decodeURIComponent(reqPath)
+  } catch {
+    return null
   }
 }
 

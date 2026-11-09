@@ -10,6 +10,7 @@
 pub mod cookies;
 pub mod grpc;
 pub mod ip;
+pub mod limits;
 pub mod multipart;
 pub mod ratelimit;
 pub mod request;
@@ -21,7 +22,10 @@ pub mod websocket;
 
 pub use cookies::parse_cookie_header;
 pub use grpc::{GrpcCall, GrpcHandler, GrpcReply};
-pub use ip::{ip_in_cidr, resolve_client_ip};
+pub use ip::{
+    ip_in_cidr, resolve_client_ip, resolve_client_ips, InvalidProxyEntry, TrustedProxies,
+};
+pub use limits::{BodyLimit, BodyLimits, ConnectionLimits};
 pub use multipart::{
     extract_boundary, parse_multipart, MultipartField, MultipartFilePayload, MultipartPayload,
 };

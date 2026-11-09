@@ -119,6 +119,10 @@
       "types": "./src/testing/TestClient.ts",
       "import": "./src/testing/TestClient.ts"
     },
+    "./http-client": {
+      "types": "./src/http-client/index.ts",
+      "import": "./src/http-client/index.ts"
+    },
     "./testing/utils": {
       "types": "./src/testing/testUtils.ts",
       "import": "./src/testing/testUtils.ts"
@@ -399,6 +403,10 @@
       "./testing": {
         "types": "./dist/testing/TestClient.d.ts",
         "import": "./dist/testing/TestClient.js"
+      },
+      "./http-client": {
+        "types": "./dist/http-client/index.d.ts",
+        "import": "./dist/http-client/index.js"
       },
       "./testing/utils": {
         "types": "./dist/testing/testUtils.d.ts",

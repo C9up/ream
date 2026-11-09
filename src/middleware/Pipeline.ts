@@ -15,6 +15,7 @@ import { debugHttp } from '../debug.js'
 import { ReamError } from '../errors/ReamError.js'
 import { E_FORBIDDEN, E_UNAUTHORIZED, E_VALIDATION_ERROR } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
+import { holdsPermissions } from '../http/permissions.js'
 
 export type MiddlewareFunction = (
   ctx: HttpContext,
@@ -239,9 +240,9 @@ function createGuardMiddleware(
       }
     }
 
+    // A token-authenticated request also needs the token to allow each one.
     if (permissions && permissions.length > 0) {
-      const userPerms = ctx.auth.permissions ?? ctx.auth.user?.permissions ?? []
-      if (!permissions.every((p) => userPerms.includes(p))) {
+      if (!holdsPermissions(ctx.auth, permissions)) {
         throw new E_FORBIDDEN('Insufficient permissions', permissions)
       }
     }

@@ -618,3 +618,83 @@ describe('StaticMiddleware > system files stay unreachable', () => {
     expect(backend.body.toString()).toBe('mine')
   })
 })
+
+/**
+ * The dot-file policy judges the name that would be OPENED. It used to run on
+ * the raw request path and decode afterwards, so `/%2eenv` served `.env` under
+ * both `ignore` and `deny`.
+ */
+describe('StaticMiddleware > percent-encoded dot files', () => {
+  let root: string
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'ream-static-dot-'))
+    writeFileSync(join(root, '.env'), 'SECRET=1')
+    mkdirSync(join(root, 'a', '.git'), { recursive: true })
+    writeFileSync(join(root, 'a', '.git', 'config'), '[core]')
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const encoded = [
+    '/%2eenv',
+    '/%2Eenv',
+    '/a/%2egit/config',
+    '/a/%2Egit/config',
+    '/a%2f%2egit%2fconfig',
+  ]
+
+  for (const path of encoded) {
+    it(`ignore: passes ${path} on without serving it`, async () => {
+      const middleware = new StaticMiddleware({ root, dotFiles: 'ignore' })
+      const { ctx, backend } = makeCtx(path)
+      const next = vi.fn<() => Promise<void>>(async () => {})
+      await middleware.handle(ctx, next)
+      await ctx.response.streamed()
+      expect(next).toHaveBeenCalledTimes(1)
+      expect(backend.chunks).toEqual([])
+    })
+
+    it(`deny: answers 403 for ${path}`, async () => {
+      const middleware = new StaticMiddleware({ root, dotFiles: 'deny' })
+      const { ctx, backend } = makeCtx(path)
+      const next = vi.fn<() => Promise<void>>(async () => {})
+      await middleware.handle(ctx, next)
+      await ctx.response.streamed()
+      expect(next).not.toHaveBeenCalled()
+      expect(ctx.response.getStatus()).toBe(403)
+      expect(backend.chunks).toEqual([])
+    })
+  }
+
+  it('still serves an encoded dot file when the policy is allow', async () => {
+    const middleware = new StaticMiddleware({ root, dotFiles: 'allow' })
+    const { ctx, backend } = makeCtx('/%2eenv')
+    await middleware.handle(ctx, vi.fn())
+    await ctx.response.streamed()
+    expect(backend.body.toString()).toBe('SECRET=1')
+  })
+
+  it('decodes once: a double-encoded dot is a literal file name', async () => {
+    writeFileSync(join(root, '%2eenv'), 'literal')
+    const middleware = new StaticMiddleware({ root, dotFiles: 'deny' })
+    const { ctx, backend } = makeCtx('/%252eenv')
+    await middleware.handle(ctx, vi.fn())
+    await ctx.response.streamed()
+    expect(ctx.response.getStatus()).toBe(200)
+    expect(backend.body.toString()).toBe('literal')
+  })
+
+  it('does not reach a dot file through a configured index name', async () => {
+    mkdirSync(join(root, 'docs'))
+    writeFileSync(join(root, 'docs', '.index.html'), 'hidden')
+    const middleware = new StaticMiddleware({ root, index: '.index.html' })
+    const { ctx, backend } = makeCtx('/docs/')
+    const next = vi.fn<() => Promise<void>>(async () => {})
+    await middleware.handle(ctx, next)
+    await ctx.response.streamed()
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(backend.chunks).toEqual([])
+  })
+})

@@ -13,7 +13,7 @@ crate-type = ["lib"]
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 http-body-util = "0.1"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "signal", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "signal", "io-util", "time"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

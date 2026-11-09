@@ -20,6 +20,7 @@ import {
 } from '@c9up/comet'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import type { HttpContext } from '../http/HttpContext.js'
+import { holdsPermissions } from '../http/permissions.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
 import { composeMiddleware, runValidator } from '../middleware/Pipeline.js'
 
@@ -113,9 +114,9 @@ function checkRpcAuthorization(
       return { code: -32003, message: 'Insufficient role' }
     }
   }
+  // A token-authenticated call also needs the token to allow each permission.
   if (def.permissions.length > 0) {
-    const userPerms = ctx.auth?.permissions ?? ctx.auth?.user?.permissions ?? []
-    if (!def.permissions.every((p: string) => userPerms.includes(p))) {
+    if (!holdsPermissions(ctx.auth, def.permissions)) {
       return { code: -32003, message: 'Insufficient permissions' }
     }
   }

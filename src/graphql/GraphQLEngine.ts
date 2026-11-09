@@ -25,6 +25,7 @@ import * as fs from 'node:fs'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import { loadNapi } from '../helpers/napi-loader.js'
 import type { HttpContext } from '../http/HttpContext.js'
+import { holdsPermissions } from '../http/permissions.js'
 
 /** Rust parser output (the `ream-graphql` crate via the `index` NAPI binary). */
 interface RustParsedField {
@@ -455,9 +456,9 @@ export class GraphQLEngine {
       }
     }
 
+    // A token-authenticated request also needs the token to allow each one.
     if (permissions.length > 0) {
-      const userPerms = ctx.auth?.permissions ?? ctx.auth?.user?.permissions ?? []
-      if (!permissions.every((p) => userPerms.includes(p))) {
+      if (!holdsPermissions(ctx.auth, permissions)) {
         return 'Insufficient permissions'
       }
     }

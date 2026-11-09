@@ -136,6 +136,9 @@ export default class BodyParserMiddleware {
     }
 
     const contentType = ctx.request.header('content-type') ?? ''
+    // A body over its native limit (`bodyTooLarge`) was never kept: `raw()`
+    // throws the same 413 below instead of handing back an empty string. The
+    // route is already matched here, so an unknown URL answered 404 first.
     const rawBody = ctx.request.raw()
 
     // Size check. Thrown rather than written: the app's exception handler

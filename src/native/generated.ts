@@ -75,6 +75,45 @@ export interface NapiRateLimitConfig {
 }
 
 /**
+ * The limit of one body parser and the content types it claims. `limit` is
+ * in bytes; an omitted field keeps the default.
+ */
+
+export interface NapiBodyLimit {
+  limit?: number
+  types?: Array<string>
+}
+
+/**
+ * Request-body limits per content type, the body parser's sections. Each
+ * omitted section keeps the `@adonisjs/bodyparser` default: json, form and
+ * raw (`text/*`) 1 MB, multipart 20 MB. A content type no section claims
+ * gets the raw limit.
+ */
+
+export interface NapiBodyLimits {
+  json?: NapiBodyLimit
+  form?: NapiBodyLimit
+  raw?: NapiBodyLimit
+  multipart?: NapiBodyLimit
+}
+
+/**
+ * Timeouts (milliseconds) and the connection cap, named after the Node
+ * `http.Server` settings an Adonis app configures. `0` disables a bound;
+ * an omitted field keeps the default: `headersTimeout` 60 000,
+ * `requestTimeout` 300 000, `keepAliveTimeout` 5 000, `maxConnections`
+ * 10 000.
+ */
+
+export interface NapiConnectionConfig {
+  headersTimeout?: number
+  requestTimeout?: number
+  keepAliveTimeout?: number
+  maxConnections?: number
+}
+
+/**
  * NAPI-exposed event bus.
  * Uses shared Tokio runtime (no per-instance runtime).
  */
@@ -134,11 +173,26 @@ export declare class HyperServer {
    */
   onGrpc(callback: (arg: NapiGrpcCall) => Promise<NapiGrpcReply>): void
   /**
-   * Configure the trusted-proxy CIDR list used by `request.ip` resolution.
-   * Must be called BEFORE `listen()`. Empty list = legacy permissive mode
-   * (any peer can populate `X-Forwarded-For`).
+   * Configure the trusted proxies used by `request.ip` / `request.ips`
+   * resolution. Must be called BEFORE `listen()`. Entries are addresses,
+   * CIDR ranges (IPv4 or IPv6), IPv4 netmask ranges, the named ranges
+   * `loopback` / `linklocal` / `uniquelocal`, or `"*"` (trust every hop).
+   * Empty list (the default) = `X-Forwarded-For` ignored, the socket peer
+   * is the client. Throws on an entry that is none of these.
    */
   configureTrustedProxies(cidrs: Array<string>): void
+  /**
+   * Configure the request-body limits, applied while the body is read:
+   * nothing past a limit is kept, and the request reaches JS without its
+   * body and with `bodyTooLarge` set, for the body parser to answer 413
+   * once the route is known. Must be called BEFORE `listen()`.
+   */
+  configureBodyLimits(config: NapiBodyLimits): void
+  /**
+   * Configure the header / body / keep-alive timeouts and the connection
+   * cap. Must be called BEFORE `listen()`.
+   */
+  configureConnections(config: NapiConnectionConfig): void
   /**
    * Install (or replace) the wire-level rate limiter. Pass `None` to
    * disable. Must be called BEFORE `listen()`.

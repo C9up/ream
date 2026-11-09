@@ -9,8 +9,9 @@ use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMod
 use napi::JsValue;
 use napi_derive::napi;
 use ream_http::{
-    GrpcCall, GrpcReply, RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer,
-    ShieldConfig, ShieldFilter, StreamRegistry,
+    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcReply, RateLimitConfig, RateLimiter,
+    ReamRequest, ReamResponse, ReamServer, ShieldConfig, ShieldFilter, StreamRegistry,
+    TrustedProxies,
 };
 use ream_napi_core::callback::FatalThreadsafeFunction;
 use ream_napi_core::catch_unwind_napi;
@@ -106,6 +107,74 @@ pub struct NapiRateLimitConfig {
     pub window_secs: u32,
 }
 
+/// The limit of one body parser and the content types it claims. `limit` is
+/// in bytes; an omitted field keeps the default.
+#[napi(object)]
+pub struct NapiBodyLimit {
+    pub limit: Option<i64>,
+    pub types: Option<Vec<String>>,
+}
+
+/// Request-body limits per content type, the body parser's sections. Each
+/// omitted section keeps the `@adonisjs/bodyparser` default: json, form and
+/// raw (`text/*`) 1 MB, multipart 20 MB. A content type no section claims
+/// gets the raw limit.
+#[napi(object)]
+pub struct NapiBodyLimits {
+    pub json: Option<NapiBodyLimit>,
+    pub form: Option<NapiBodyLimit>,
+    pub raw: Option<NapiBodyLimit>,
+    pub multipart: Option<NapiBodyLimit>,
+}
+
+/// Timeouts (milliseconds) and the connection cap, named after the Node
+/// `http.Server` settings an Adonis app configures. `0` disables a bound;
+/// an omitted field keeps the default: `headersTimeout` 60 000,
+/// `requestTimeout` 300 000, `keepAliveTimeout` 5 000, `maxConnections`
+/// 10 000.
+#[napi(object)]
+pub struct NapiConnectionConfig {
+    pub headers_timeout: Option<u32>,
+    pub request_timeout: Option<u32>,
+    pub keep_alive_timeout: Option<u32>,
+    pub max_connections: Option<u32>,
+}
+
+fn invalid_config(code: &str, message: String) -> napi::Error {
+    ream_napi_core::ream_error!(code, message).into()
+}
+
+fn merge_body_limit(
+    section: &str,
+    base: BodyLimit,
+    given: Option<NapiBodyLimit>,
+) -> napi::Result<BodyLimit> {
+    let Some(given) = given else {
+        return Ok(base);
+    };
+    let limit = match given.limit {
+        None => base.limit,
+        Some(bytes) => u64::try_from(bytes).map_err(|_| {
+            invalid_config(
+                "INVALID_BODY_LIMIT",
+                format!("`{section}.limit` must be a byte count of zero or more, got {bytes}"),
+            )
+        })?,
+    };
+    Ok(BodyLimit {
+        limit,
+        types: given.types.unwrap_or(base.types),
+    })
+}
+
+fn optional_millis(value: Option<u32>, default: Option<Duration>) -> Option<Duration> {
+    match value {
+        None => default,
+        Some(0) => None,
+        Some(ms) => Some(Duration::from_millis(u64::from(ms))),
+    }
+}
+
 /// NAPI-exposed Hyper HTTP server.
 #[napi]
 pub struct HyperServer {
@@ -117,7 +186,9 @@ pub struct HyperServer {
     grpc_handler: Arc<std::sync::Mutex<Option<ream_http::GrpcHandler>>>,
     server: Arc<TokioMutex<Option<ream_http::ReamServer>>>,
     shield: Arc<std::sync::Mutex<Option<ShieldConfig>>>,
-    trusted_proxies: Arc<std::sync::Mutex<Vec<String>>>,
+    trusted_proxies: Arc<std::sync::Mutex<TrustedProxies>>,
+    body_limits: Arc<std::sync::Mutex<BodyLimits>>,
+    connection_limits: Arc<std::sync::Mutex<ConnectionLimits>>,
     rate_limiter: Arc<std::sync::Mutex<Option<Arc<RateLimiter>>>>,
     /// Streaming bodies registry. Owned by `HyperServer` so JS can call
     /// `registerStream` / `writeStream` BEFORE `listen()` has wired the
@@ -166,7 +237,9 @@ impl HyperServer {
                 grpc_handler: Arc::new(std::sync::Mutex::new(None)),
                 server: Arc::new(TokioMutex::new(None)),
                 shield: Arc::new(std::sync::Mutex::new(None)),
-                trusted_proxies: Arc::new(std::sync::Mutex::new(Vec::new())),
+                trusted_proxies: Arc::new(std::sync::Mutex::new(TrustedProxies::default())),
+                body_limits: Arc::new(std::sync::Mutex::new(BodyLimits::default())),
+                connection_limits: Arc::new(std::sync::Mutex::new(ConnectionLimits::default())),
                 rate_limiter: Arc::new(std::sync::Mutex::new(None)),
                 stream_registry: StreamRegistry::new(),
             })
@@ -294,18 +367,69 @@ impl HyperServer {
         Ok(())
     }
 
-    /// Configure the trusted-proxy CIDR list used by `request.ip` resolution.
-    /// Must be called BEFORE `listen()`. Empty list = legacy permissive mode
-    /// (any peer can populate `X-Forwarded-For`).
+    /// Configure the trusted proxies used by `request.ip` / `request.ips`
+    /// resolution. Must be called BEFORE `listen()`. Entries are addresses,
+    /// CIDR ranges (IPv4 or IPv6), IPv4 netmask ranges, the named ranges
+    /// `loopback` / `linklocal` / `uniquelocal`, or `"*"` (trust every hop).
+    /// Empty list (the default) = `X-Forwarded-For` ignored, the socket peer
+    /// is the client. Throws on an entry that is none of these.
     #[napi]
     pub fn configure_trusted_proxies(&self, cidrs: Vec<String>) -> napi::Result<()> {
+        let compiled = TrustedProxies::compile(&cidrs)
+            .map_err(|error| invalid_config("INVALID_TRUSTED_PROXY", error.to_string()))?;
         let mut guard = self.trusted_proxies.lock().map_err(|_| {
             napi::Error::new(
                 napi::Status::GenericFailure,
                 "Trusted-proxies mutex poisoned",
             )
         })?;
-        *guard = cidrs;
+        *guard = compiled;
+        Ok(())
+    }
+
+    /// Configure the request-body limits, applied while the body is read:
+    /// nothing past a limit is kept, and the request reaches JS without its
+    /// body and with `bodyTooLarge` set, for the body parser to answer 413
+    /// once the route is known. Must be called BEFORE `listen()`.
+    #[napi]
+    pub fn configure_body_limits(&self, config: NapiBodyLimits) -> napi::Result<()> {
+        let defaults = BodyLimits::default();
+        let limits = BodyLimits {
+            json: merge_body_limit("json", defaults.json, config.json)?,
+            form: merge_body_limit("form", defaults.form, config.form)?,
+            raw: merge_body_limit("raw", defaults.raw, config.raw)?,
+            multipart: merge_body_limit("multipart", defaults.multipart, config.multipart)?,
+        };
+        let mut guard = self.body_limits.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "Body-limits mutex poisoned")
+        })?;
+        *guard = limits;
+        Ok(())
+    }
+
+    /// Configure the header / body / keep-alive timeouts and the connection
+    /// cap. Must be called BEFORE `listen()`.
+    #[napi]
+    pub fn configure_connections(&self, config: NapiConnectionConfig) -> napi::Result<()> {
+        let defaults = ConnectionLimits::default();
+        let limits = ConnectionLimits {
+            headers_timeout: optional_millis(config.headers_timeout, defaults.headers_timeout),
+            request_timeout: optional_millis(config.request_timeout, defaults.request_timeout),
+            keep_alive_timeout: optional_millis(
+                config.keep_alive_timeout,
+                defaults.keep_alive_timeout,
+            ),
+            max_connections: config
+                .max_connections
+                .map_or(defaults.max_connections, |max| max as usize),
+        };
+        let mut guard = self.connection_limits.lock().map_err(|_| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "Connection-limits mutex poisoned",
+            )
+        })?;
+        *guard = limits;
         Ok(())
     }
 
@@ -399,6 +523,25 @@ impl HyperServer {
             guard.clone()
         };
         srv.set_trusted_proxies(trusted);
+
+        // Body limits and connection limits — applied at the socket.
+        let body_limits = {
+            let guard = self.body_limits.lock().map_err(|_| {
+                napi::Error::new(napi::Status::GenericFailure, "Body-limits mutex poisoned")
+            })?;
+            guard.clone()
+        };
+        srv.set_body_limits(body_limits);
+        let connection_limits = {
+            let guard = self.connection_limits.lock().map_err(|_| {
+                napi::Error::new(
+                    napi::Status::GenericFailure,
+                    "Connection-limits mutex poisoned",
+                )
+            })?;
+            *guard
+        };
+        srv.set_connection_limits(connection_limits);
 
         // Wire rate limiter — pre-NAPI throttle keyed by `request.ip`.
         let limiter = {

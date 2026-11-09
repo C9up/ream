@@ -41,13 +41,30 @@ pub struct ReamRequest {
     #[serde(default)]
     pub remote_addr: String,
 
-    /// Resolved client IP — the value JS-side `request.ip()` returns.
-    /// Computed once by the server using the trusted-proxy CIDR list:
-    /// honours `X-Forwarded-For` / `X-Real-IP` only when the peer is trusted,
-    /// otherwise falls back to `remote_addr`. Pre-computed in Rust so JS
-    /// reads it as a field instead of recomputing CIDR matches per call.
+    /// Resolved client IP — the value JS-side `request.ip()` returns: the
+    /// last entry of `ips`. Computed once by the server from the trusted
+    /// proxies (see `crate::ip`); without any, it is `remote_addr`.
     #[serde(default)]
     pub ip: String,
+
+    /// The trusted address chain, closest hop first: the socket peer, then
+    /// each `X-Forwarded-For` entry walked right to left while the previous
+    /// hop is a trusted proxy. Its last entry is `ip`. Adonis `request.ips()`
+    /// (`proxy-addr`'s `all`).
+    #[serde(default)]
+    pub ips: Vec<String>,
+
+    /// Whether the socket peer is one of the trusted proxies — the condition
+    /// under which `X-Forwarded-Proto` / `X-Forwarded-Host` are believed,
+    /// whether or not the proxy also sent `X-Forwarded-For`.
+    #[serde(default)]
+    pub peer_trusted: bool,
+
+    /// The body was over its content type's limit: it was not kept, `body` is
+    /// empty and must not be read as the request's body. The body parser
+    /// answers 413 for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_too_large: bool,
 
     /// Pre-parsed `multipart/form-data` payload. Set when the server detected
     /// a multipart content-type and successfully parsed the body via the
@@ -101,6 +118,9 @@ impl ReamRequest {
             body_encoding: "utf8".to_string(),
             remote_addr,
             ip: String::new(),
+            ips: Vec::new(),
+            peer_trusted: false,
+            body_too_large: false,
             multipart: None,
             cookies: HashMap::new(),
         }

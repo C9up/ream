@@ -105,6 +105,69 @@ describe('CookieSigner > encrypt / decrypt', () => {
   })
 })
 
+/**
+ * GCM checks only as many tag bytes as it is given. Accepting a trimmed tag
+ * dropped the integrity of every encrypted cookie (and the cookie session
+ * store) from 128 bits to 32.
+ */
+describe('CookieSigner > full-length GCM tag and IV only', () => {
+  const b64 = (buf: Buffer) => buf.toString('base64url')
+  const parts = (sealed: string) => {
+    const [iv, data, tag] = sealed.split('.')
+    return {
+      iv: Buffer.from(defined(iv), 'base64url'),
+      data: defined(data),
+      tag: Buffer.from(defined(tag), 'base64url'),
+    }
+  }
+
+  it('emits a 12-byte IV and a 16-byte tag', () => {
+    const { iv, tag } = parts(signer.encrypt({ userId: 1 }))
+    expect(iv).toHaveLength(12)
+    expect(tag).toHaveLength(16)
+  })
+
+  for (const length of [15, 12, 8, 4]) {
+    it(`refuses a valid tag truncated to ${length} bytes`, () => {
+      const { iv, data, tag } = parts(signer.encrypt({ userId: 1 }))
+      expect(signer.decrypt(`${b64(iv)}.${data}.${b64(tag.subarray(0, length))}`)).toBeNull()
+    })
+  }
+
+  it('refuses a tag longer than 16 bytes', () => {
+    const { iv, data, tag } = parts(signer.encrypt('x'))
+    const longer = Buffer.concat([tag, Buffer.from([0])])
+    expect(signer.decrypt(`${b64(iv)}.${data}.${b64(longer)}`)).toBeNull()
+  })
+
+  it('refuses an IV that is not 12 bytes', () => {
+    const { iv, data, tag } = parts(signer.encrypt('x'))
+    expect(signer.decrypt(`${b64(iv.subarray(0, 8))}.${data}.${b64(tag)}`)).toBeNull()
+    expect(signer.decrypt(`${b64(Buffer.concat([iv, iv]))}.${data}.${b64(tag)}`)).toBeNull()
+  })
+
+  it('refuses an empty tag', () => {
+    const { iv, data } = parts(signer.encrypt('x'))
+    expect(signer.decrypt(`${b64(iv)}.${data}.`)).toBeNull()
+  })
+
+  it('emits no short-tag deprecation warning while decrypting', async () => {
+    const warnings: string[] = []
+    const onWarning = (warning: Error) => warnings.push(warning.message)
+    process.on('warning', onWarning)
+    try {
+      const { iv, data, tag } = parts(signer.encrypt('x'))
+      signer.decrypt(`${b64(iv)}.${data}.${b64(tag.subarray(0, 4))}`)
+      expect(signer.decrypt(signer.encrypt('x'))).toBe('x')
+      // Warnings are emitted on a later tick.
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off('warning', onWarning)
+    }
+    expect(warnings.filter((m) => m.includes('authTagLength'))).toEqual([])
+  })
+})
+
 describe('CookieSigner > purpose and expiry (AdonisJS parity)', () => {
   it('refuses a value presented for a different purpose', () => {
     const token = signer.encrypt('user-42', undefined, 'password-reset')

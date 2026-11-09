@@ -50,11 +50,19 @@ describe('Request > authority', () => {
     expect(request({ host: 'example.com:8080' }).authority()).toBe('example.com:8080')
   })
 
-  it('ignores X-Forwarded-Host even under trust-proxy', () => {
+  it('ignores X-Forwarded-Host even from a trusted proxy', () => {
     // No proxy convention forwards `:authority`, so trusting one here would let
     // a proxy rewrite the value a redirect check is validated against.
-    const r = request({ host: 'real.example.com', 'x-forwarded-host': 'evil.example.com' })
-    r.setTrustProxy(true)
+    const r = new Request({
+      method: 'GET',
+      path: '/',
+      query: '',
+      headers: { host: 'real.example.com', 'x-forwarded-host': 'evil.example.com' },
+      body: '',
+      // What the Rust layer ships once the peer is a trusted proxy.
+      ips: ['10.0.0.2', '203.0.113.9'],
+      peerTrusted: true,
+    })
     expect(r.authority()).toBe('real.example.com')
     // host() still honours it — that IS a forwarded-host convention.
     expect(r.host()).toBe('evil.example.com')
