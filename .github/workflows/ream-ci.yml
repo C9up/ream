@@ -104,8 +104,8 @@ jobs:
           - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, target: aarch64-unknown-linux-gnu }
           # darwin-x64 is cross-compiled on an arm64 runner (macos-13 Intel
           # runners are scarce/deprecated and leave this job queued forever).
-          - { os: macos-14,         suffix: darwin-x64,      target: x86_64-apple-darwin }
-          - { os: macos-14,         suffix: darwin-arm64,    target: aarch64-apple-darwin }
+          - { os: macos-15,         suffix: darwin-x64,      target: x86_64-apple-darwin }
+          - { os: macos-15,         suffix: darwin-arm64,    target: aarch64-apple-darwin }
           - { os: windows-latest,   suffix: win32-x64-msvc,  target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v6
