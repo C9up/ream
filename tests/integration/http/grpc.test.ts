@@ -1,6 +1,7 @@
 import { connect, constants } from 'node:http2'
 import { describe, expect, it } from 'vitest'
 import type { NapiGrpcCall, NapiGrpcLimits, NapiGrpcReply } from '../../../src/native/generated.js'
+import { cancellableGrpc } from '../../../src/server/nativeGrpc.js'
 import { HyperServer } from './loader.js'
 
 /**
@@ -353,6 +354,47 @@ describeIfNetwork('hyper-server > gRPC', () => {
       ).toThrow(/whole number of bytes/)
     },
   )
+
+  it('aborts the signal of a call whose client resets its stream', async () => {
+    const server = new HyperServer(0)
+    server.onRequest(async () => ({ status: 200, headers: {}, body: '' }))
+    const started = Date.now()
+    let abortedAfter: number | undefined
+    let ended = false
+    const calls = cancellableGrpc(
+      (call) =>
+        new Promise((resolve) => {
+          call.signal.addEventListener('abort', () => {
+            abortedAfter = Date.now() - started
+            resolve({ code: 1, details: 'Cancelled' })
+          })
+          // A handler nobody stops would finish here, long after the client left.
+          setTimeout(() => {
+            ended = true
+            resolve({ message: new Uint8Array() })
+          }, 3000).unref()
+        }),
+    )
+    server.onGrpcCancel(calls.onCancel)
+    server.onGrpc(calls.onCall)
+    await server.listen()
+    try {
+      const result = await rawCall(await server.port(), '/t.Svc/Slow', {
+        cancelAfter: 100,
+        waitMax: 1500,
+      })
+      expect(result.status).toBe(`closed rst=${constants.NGHTTP2_CANCEL}`)
+      const deadline = Date.now() + 1500
+      while (abortedAfter === undefined && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(abortedAfter).toBeGreaterThanOrEqual(90)
+      expect(abortedAfter).toBeLessThan(1000)
+      expect(ended).toBe(false)
+    } finally {
+      await server.close()
+    }
+  })
 
   it('keeps serving HTTP on the same port', async () => {
     const { port, close } = await start(async (call) => ({ message: call.message }))

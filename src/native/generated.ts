@@ -31,6 +31,11 @@ export interface NapiResponse {
  */
 
 export interface NapiGrpcCall {
+  /**
+   * This call, in the ids `onGrpcCancel` reports. Increasing, in the order
+   * the calls reach JavaScript.
+   */
+  id: number
   /** `/package.Service/Method`. */
   path: string
   /**
@@ -189,6 +194,12 @@ export declare class HyperServer {
     callback: (arg: NapiGrpcCall) => Promise<NapiGrpcReply>,
     limits?: NapiGrpcLimits | undefined | null,
   ): void
+  /**
+   * Register the function told, with its `id`, about a gRPC call the
+   * client gave up on — a reset stream or a closed connection — before the
+   * handler answered. A cancel can reach JavaScript before its call does.
+   */
+  onGrpcCancel(callback: (arg: number) => void): void
   /**
    * Configure the trusted proxies used by `request.ip` / `request.ips`
    * resolution. Must be called BEFORE `listen()`. Entries are addresses,

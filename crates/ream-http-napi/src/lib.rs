@@ -54,6 +54,9 @@ impl From<NapiResponse> for ReamResponse {
 /// binary) body of the HTTP path.
 #[napi(object)]
 pub struct NapiGrpcCall {
+    /// This call, in the ids `onGrpcCancel` reports. Increasing, in the order
+    /// the calls reach JavaScript.
+    pub id: i64,
     /// `/package.Service/Method`.
     pub path: String,
     /// Request metadata: the request headers, every value of a repeated one
@@ -86,6 +89,31 @@ impl From<NapiGrpcReply> for GrpcReply {
                 code: 13,
                 details: "The handler answered neither a message nor a status".into(),
             },
+        }
+    }
+}
+
+type GrpcCancel = FatalThreadsafeFunction<i64, i64, ()>;
+
+/// Tells JavaScript that a call was given up — the client reset its stream or
+/// the connection closed — when the future serving it is dropped before the
+/// handler answered.
+struct CancelOnDrop {
+    id: i64,
+    cancel: Option<Arc<GrpcCancel>>,
+}
+
+impl CancelOnDrop {
+    /// The handler answered: nothing to cancel any more.
+    fn disarm(&mut self) {
+        self.cancel = None;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.call(self.id, ThreadsafeFunctionCallMode::NonBlocking);
         }
     }
 }
@@ -213,6 +241,8 @@ pub struct HyperServer {
     /// `close()` so its threadsafe function stops pinning the event loop.
     grpc_handler: Arc<std::sync::Mutex<Option<ream_http::GrpcHandler>>>,
     grpc_limits: Arc<std::sync::Mutex<GrpcLimits>>,
+    /// Set by `onGrpcCancel`; read by every call, cleared by `close()`.
+    grpc_cancel: Arc<std::sync::Mutex<Option<Arc<GrpcCancel>>>>,
     server: Arc<TokioMutex<Option<ream_http::ReamServer>>>,
     shield: Arc<std::sync::Mutex<Option<ShieldConfig>>>,
     trusted_proxies: Arc<std::sync::Mutex<TrustedProxies>>,
@@ -265,6 +295,7 @@ impl HyperServer {
                 handler: Arc::new(std::sync::Mutex::new(None)),
                 grpc_handler: Arc::new(std::sync::Mutex::new(None)),
                 grpc_limits: Arc::new(std::sync::Mutex::new(GrpcLimits::default())),
+                grpc_cancel: Arc::new(std::sync::Mutex::new(None)),
                 server: Arc::new(TokioMutex::new(None)),
                 shield: Arc::new(std::sync::Mutex::new(None)),
                 trusted_proxies: Arc::new(std::sync::Mutex::new(TrustedProxies::default())),
@@ -379,13 +410,14 @@ impl HyperServer {
         *self.grpc_limits.lock().map_err(|_| {
             napi::Error::new(napi::Status::GenericFailure, "gRPC limits mutex poisoned")
         })? = limits;
-        let tsfn: FatalThreadsafeFunction<GrpcCall, NapiGrpcCall, Promise<NapiGrpcReply>> =
+        let tsfn: FatalThreadsafeFunction<(i64, GrpcCall), NapiGrpcCall, Promise<NapiGrpcReply>> =
             callback
-                .build_threadsafe_function::<GrpcCall>()
+                .build_threadsafe_function::<(i64, GrpcCall)>()
                 .callee_handled::<false>()
-                .build_callback(|ctx: ThreadsafeCallContext<GrpcCall>| {
-                    let call = ctx.value;
+                .build_callback(|ctx: ThreadsafeCallContext<(i64, GrpcCall)>| {
+                    let (id, call) = ctx.value;
                     Ok(NapiGrpcCall {
+                        id,
                         path: call.path,
                         metadata: call.metadata,
                         message: Uint8Array::from(call.message.to_vec()),
@@ -393,21 +425,47 @@ impl HyperServer {
                     })
                 })?;
         let tsfn = Arc::new(tsfn);
+        let cancel_slot = self.grpc_cancel.clone();
+        // Ids are taken and queued under one lock, so JavaScript receives the
+        // calls in id order — what lets it tell a cancel that arrived before
+        // its call from one that arrived after the call ended.
+        let queue = Arc::new(std::sync::Mutex::new(0_i64));
 
         let handler: ream_http::GrpcHandler = Arc::new(move |call: GrpcCall| {
-            let tsfn = tsfn.clone();
+            let internal = |details: &str| GrpcReply::Status {
+                code: 13,
+                details: details.into(),
+            };
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let queued = queue.lock().ok().map(|mut last| {
+                *last += 1;
+                let id = *last;
+                let status = tsfn.call_with_return_value(
+                    (id, call),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                    move |result, _env| {
+                        let _ = sender.send(result);
+                        Ok(())
+                    },
+                );
+                (id, status)
+            });
+            let Some((id, napi::Status::Ok)) = queued else {
+                return Box::pin(async move { internal("Failed to call the gRPC handler") });
+            };
+            let cancel = cancel_slot.lock().ok().and_then(|slot| slot.clone());
+            let on_drop = CancelOnDrop { id, cancel };
             Box::pin(async move {
-                let internal = |details: &str| GrpcReply::Status {
-                    code: 13,
-                    details: details.into(),
-                };
-                match tsfn.call_async(call).await {
-                    Ok(promise) => match promise.await {
+                let mut on_drop = on_drop;
+                let reply = match receiver.await {
+                    Ok(Ok(promise)) => match promise.await {
                         Ok(reply) => reply.into(),
                         Err(_) => internal("Internal error"),
                     },
-                    Err(_) => internal("Failed to call the gRPC handler"),
-                }
+                    _ => internal("Failed to call the gRPC handler"),
+                };
+                on_drop.disarm();
+                reply
             })
         });
 
@@ -415,6 +473,21 @@ impl HyperServer {
             napi::Error::new(napi::Status::GenericFailure, "gRPC handler mutex poisoned")
         })?;
         *guard = Some(handler);
+        Ok(())
+    }
+
+    /// Register the function told, with its `id`, about a gRPC call the
+    /// client gave up on — a reset stream or a closed connection — before the
+    /// handler answered. A cancel can reach JavaScript before its call does.
+    #[napi]
+    pub fn on_grpc_cancel(&self, callback: Function<'static, i64, ()>) -> napi::Result<()> {
+        let tsfn: GrpcCancel = callback
+            .build_threadsafe_function::<i64>()
+            .callee_handled::<false>()
+            .build_callback(|ctx: ThreadsafeCallContext<i64>| Ok(ctx.value))?;
+        *self.grpc_cancel.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "gRPC cancel mutex poisoned")
+        })? = Some(Arc::new(tsfn));
         Ok(())
     }
 
@@ -700,6 +773,9 @@ impl HyperServer {
             *guard = None;
         }
         if let Ok(mut guard) = self.grpc_handler.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.grpc_cancel.lock() {
             *guard = None;
         }
         // Shared runtime is static — not dropped on close (reused by other crates)

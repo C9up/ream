@@ -46,6 +46,11 @@ export interface GrpcCall {
   message: Uint8Array
   /** Resolved client IP, by the same trusted-proxy rules as `request.ip()`. */
   ip: string
+  /**
+   * Aborted when the client gives up on the call — resets its stream or
+   * closes the connection — before the handler answered.
+   */
+  signal: AbortSignal
 }
 
 /** A reply message, still encoded — or a gRPC status code instead of one. */

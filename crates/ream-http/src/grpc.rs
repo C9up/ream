@@ -793,4 +793,47 @@ mod tests {
         }
         server.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn a_client_reset_drops_the_handler_future() {
+        use std::sync::atomic::AtomicBool;
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (flag, notify) = (dropped.clone(), started.clone());
+        let (mut server, port) = start(|s| {
+            s.on_grpc(Arc::new(move |_call: GrpcCall| {
+                let guard = Dropped(flag.clone());
+                notify.notify_one();
+                Box::pin(async move {
+                    let _guard = guard;
+                    std::future::pending::<GrpcReply>().await
+                })
+            }))
+        })
+        .await;
+
+        let mut client = h2_client(port).await;
+        let (_response, mut stream) = client
+            .send_request(grpc_request("/t.S/M", &[]), false)
+            .unwrap();
+        stream.send_data(frame(b"x"), true).unwrap();
+        started.notified().await;
+        assert!(!dropped.load(Ordering::SeqCst));
+        stream.send_reset(h2::Reason::CANCEL);
+        // The future is what carries the cancellation to the handler's host.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the handler future was dropped on the client's reset");
+        server.shutdown().await;
+    }
 }

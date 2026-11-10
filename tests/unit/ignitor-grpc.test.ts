@@ -1,7 +1,12 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import type { HttpKernelRequest, HttpKernelResponse } from '../../src/HttpKernel.js'
-import type { GrpcHandler, GrpcLimits, HyperServerLike } from '../../src/index.js'
+import type {
+  GrpcHandler,
+  GrpcLimits,
+  HyperServerLike,
+  NativeGrpcHandler,
+} from '../../src/index.js'
 import { Ignitor, Router, Server } from '../../src/index.js'
 
 /**
@@ -11,7 +16,7 @@ import { Ignitor, Router, Server } from '../../src/index.js'
 
 class MockServer implements HyperServerLike {
   readonly events: string[] = []
-  grpcHandler: GrpcHandler | undefined
+  grpcHandler: NativeGrpcHandler | undefined
   onRequest(_cb: (req: HttpKernelRequest) => Promise<HttpKernelResponse>): void {}
   async listen(): Promise<void> {
     this.events.push('listen')
@@ -24,10 +29,15 @@ class MockServer implements HyperServerLike {
 
 class GrpcMockServer extends MockServer {
   limits: GrpcLimits | undefined
-  onGrpc(handler: GrpcHandler, limits?: GrpcLimits): void {
+  cancel: ((id: number) => void) | undefined
+  onGrpc(handler: NativeGrpcHandler, limits?: GrpcLimits): void {
     this.events.push('onGrpc')
     this.grpcHandler = handler
     this.limits = limits
+  }
+  onGrpcCancel(cancel: (id: number) => void): void {
+    this.events.push('onGrpcCancel')
+    this.cancel = cancel
   }
 }
 
@@ -50,8 +60,17 @@ describe('ignitor > gRPC', () => {
   it('hands the registered handler to the server before it listens', async () => {
     const server = new GrpcMockServer()
     const app = await ignitorWith(server, true).start()
-    expect(server.grpcHandler).toBe(handler)
-    expect(server.events).toEqual(['onGrpc', 'listen'])
+    expect(server.events).toEqual(['onGrpcCancel', 'onGrpc', 'listen'])
+    // The native server's numbered call reaches the registered handler.
+    expect(
+      await server.grpcHandler?.({
+        id: 1,
+        path: '/t.Svc/M',
+        metadata: {},
+        message: new Uint8Array(),
+        ip: '127.0.0.1',
+      }),
+    ).toEqual({ code: 12, details: 'unimplemented' })
     await app.stop()
   })
 

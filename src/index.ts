@@ -219,6 +219,7 @@ export { createHttpKernel } from './HttpKernel.js'
 
 // ─── Server ─────────────────────────────────────────────────
 
+export type { NativeGrpcCall, NativeGrpcHandler } from './server/nativeGrpc.js'
 export type {
   ErrorHandlerClass,
   GrpcCall,

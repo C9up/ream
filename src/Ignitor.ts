@@ -52,13 +52,14 @@ import {
 import { Router } from './router/Router.js'
 import { CookieSigner } from './security/CookieSigner.js'
 import { SignedUrl } from './security/SignedUrl.js'
+import { cancellableGrpc, type NativeGrpcHandler } from './server/nativeGrpc.js'
 import {
   type NativeBodyLimits,
   type NativeConnectionConfig,
   nativeBodyLimits,
   nativeConnectionConfig,
 } from './server/nativeLimits.js'
-import { type GrpcHandler, type GrpcLimits, Server } from './server/Server.js'
+import { type GrpcLimits, Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearEncryption, setEncryption } from './services/encryption.js'
 import { clearLogger, setLogger } from './services/logger.js'
@@ -276,7 +277,9 @@ export function defineConfig(config: ReamrcConfig): ReamrcConfig {
 export interface HyperServerLike {
   onRequest(callback: (request: HttpKernelRequest) => Promise<HttpKernelResponse>): void
   /** Optional — present on the real `HyperServer`; required once `server.grpc()` is used. */
-  onGrpc?(callback: GrpcHandler, limits?: GrpcLimits): void
+  onGrpc?(callback: NativeGrpcHandler, limits?: GrpcLimits): void
+  /** Optional — reports the calls a client gave up on; without it no call's signal aborts. */
+  onGrpcCancel?(callback: (id: number) => void): void
   /**
    * Optional — present on the real `HyperServer` (Rust-backed), absent on
    * trivial test mocks. Ignitor only calls it when a shield config is set.
@@ -911,7 +914,9 @@ export class Ignitor {
             { hint: 'Use the native HyperServer, or a test server that implements onGrpc().' },
           )
         }
-        this.#_httpServer.onGrpc(grpc, this.#server.getGrpcLimits())
+        const calls = cancellableGrpc(grpc)
+        this.#_httpServer.onGrpcCancel?.(calls.onCancel)
+        this.#_httpServer.onGrpc(calls.onCall, this.#server.getGrpcLimits())
       }
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
       // listen. Security filtering itself lives in @c9up/blackhole.
