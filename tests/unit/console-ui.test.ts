@@ -106,23 +106,31 @@ describe('Ui — table', () => {
 
 describe('Ui — sticker and instructions', () => {
   it('boxes the lines', () => {
-    const ui = rawUi()
-    ui.sticker().add('Started HTTP server').add('http://localhost:3333').render()
+    const lines = new Ui('silent')
+      .sticker()
+      .add('Started HTTP server')
+      .add('http://localhost:3333')
+      .prepare()
 
-    const logs = ui.getLogs()
     // Border, a blank row, the two lines, a blank row, border — the padding
     // is what keeps the text off the border.
-    expect(logs).toHaveLength(6)
-    expect(logs[2]).toContain('Started HTTP server')
-    expect(logs[0]?.startsWith('dim(╭')).toBe(true)
+    expect(lines).toHaveLength(6)
+    expect(lines[2]).toContain('Started HTTP server')
+    expect(lines[0]?.startsWith('╭')).toBe(true)
+  })
+
+  it('captures the content without the frame in raw mode', () => {
+    // A test asserts what the box says, not where its border falls.
+    const ui = rawUi()
+    ui.sticker().add('Started HTTP server').add('http://localhost:3333').render()
+    expect(ui.getLogs()).toEqual(['Started HTTP server', 'http://localhost:3333'])
   })
 
   it('marks each instruction with a pointer', () => {
     const ui = rawUi()
     ui.instructions().add('cd my-app').add('ream dev').render()
 
-    expect(ui.getLogs()[2]).toContain('dim(❯) cd my-app')
-    expect(ui.getLogs()[3]).toContain('dim(❯) ream dev')
+    expect(ui.getLogs()).toEqual(['dim(❯) cd my-app', 'dim(❯) ream dev'])
   })
 })
 
@@ -271,7 +279,8 @@ describe('Ui — Console option contracts', () => {
     // No TTY: one line per state instead of a frame-per-tick flood.
     expect(ui.getLogs()).toEqual([
       '[ cyan(wait) ] installing packages dim(yellow((npm i)))',
-      'unpacking packages',
+      // update() changes the text and keeps the label and the suffix.
+      '[ cyan(wait) ] unpacking packages dim(yellow((npm i)))',
     ])
   })
 
@@ -315,12 +324,16 @@ describe('Ui — Console option contracts', () => {
     expect(ui.getLogs()).toContain('  dim(clone repo: Downloaded 100%)')
   })
 
-  it('surfaces the last progress message when the task returns nothing', async () => {
+  it('surfaces the last progress message when the task succeeds without one of its own', async () => {
+    // Only a returned message or a task marked as succeeded is a success —
+    // returning nothing fails the task, so a forgotten `return` never
+    // reports green.
     const ui = rawUi()
     await ui
       .tasks()
       .add('sync', async (task) => {
         task.update('42 files')
+        return task.markAsSucceeded()
       })
       .run()
 
