@@ -9,8 +9,8 @@ use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMod
 use napi::JsValue;
 use napi_derive::napi;
 use ream_http::{
-    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcReply, RateLimitConfig, RateLimiter,
-    ReamRequest, ReamResponse, ReamServer, ShieldConfig, ShieldFilter, StreamRegistry,
+    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcLimits, GrpcReply, RateLimitConfig,
+    RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig, ShieldFilter, StreamRegistry,
     TrustedProxies,
 };
 use ream_napi_core::callback::FatalThreadsafeFunction;
@@ -86,6 +86,33 @@ impl From<NapiGrpcReply> for GrpcReply {
                 details: "The handler answered neither a message nor a status".into(),
             },
         }
+    }
+}
+
+/// Message size bounds of the gRPC calls, in bytes; `-1` for none. Omitted:
+/// 4 MiB received, no bound sent.
+#[napi(object)]
+pub struct NapiGrpcLimits {
+    pub max_receive_message_length: Option<f64>,
+    pub max_send_message_length: Option<f64>,
+}
+
+/// A byte count, or `-1` for no bound — a JS number, so NaN, infinities and
+/// fractions are refused rather than truncated.
+fn grpc_limit(name: &str, value: Option<f64>, default: usize) -> napi::Result<usize> {
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+    match value {
+        None => Ok(default),
+        Some(-1.0) => Ok(usize::MAX),
+        Some(v) if v.is_finite() && v.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&v) => {
+            usize::try_from(v as u64).map_err(|_| {
+                invalid_config("INVALID_GRPC_LIMIT", format!("`{name}` is too large: {v}"))
+            })
+        }
+        Some(v) => Err(invalid_config(
+            "INVALID_GRPC_LIMIT",
+            format!("`{name}` must be a whole number of bytes, or -1 for no limit, got {v}"),
+        )),
     }
 }
 
@@ -184,6 +211,7 @@ pub struct HyperServer {
     /// Same lifecycle as `handler`: set before `listen()`, cleared by
     /// `close()` so its threadsafe function stops pinning the event loop.
     grpc_handler: Arc<std::sync::Mutex<Option<ream_http::GrpcHandler>>>,
+    grpc_limits: Arc<std::sync::Mutex<GrpcLimits>>,
     server: Arc<TokioMutex<Option<ream_http::ReamServer>>>,
     shield: Arc<std::sync::Mutex<Option<ShieldConfig>>>,
     trusted_proxies: Arc<std::sync::Mutex<TrustedProxies>>,
@@ -235,6 +263,7 @@ impl HyperServer {
                 host,
                 handler: Arc::new(std::sync::Mutex::new(None)),
                 grpc_handler: Arc::new(std::sync::Mutex::new(None)),
+                grpc_limits: Arc::new(std::sync::Mutex::new(GrpcLimits::default())),
                 server: Arc::new(TokioMutex::new(None)),
                 shield: Arc::new(std::sync::Mutex::new(None)),
                 trusted_proxies: Arc::new(std::sync::Mutex::new(TrustedProxies::default())),
@@ -322,12 +351,33 @@ impl HyperServer {
     /// HTTP requests. Must be called BEFORE `listen()`.
     ///
     /// A rejected promise is answered `INTERNAL`, with nothing of the error
-    /// sent to the client.
+    /// sent to the client. `limits` bounds the request and reply messages;
+    /// a request is read, and refused, before the handler is called.
     #[napi]
     pub fn on_grpc(
         &self,
         callback: Function<'static, NapiGrpcCall, Promise<NapiGrpcReply>>,
+        limits: Option<NapiGrpcLimits>,
     ) -> napi::Result<()> {
+        let defaults = GrpcLimits::default();
+        let limits = match limits {
+            None => defaults,
+            Some(given) => GrpcLimits {
+                max_receive_message_length: grpc_limit(
+                    "maxReceiveMessageLength",
+                    given.max_receive_message_length,
+                    defaults.max_receive_message_length,
+                )?,
+                max_send_message_length: grpc_limit(
+                    "maxSendMessageLength",
+                    given.max_send_message_length,
+                    defaults.max_send_message_length,
+                )?,
+            },
+        };
+        *self.grpc_limits.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "gRPC limits mutex poisoned")
+        })? = limits;
         let tsfn: FatalThreadsafeFunction<GrpcCall, NapiGrpcCall, Promise<NapiGrpcReply>> =
             callback
                 .build_threadsafe_function::<GrpcCall>()
@@ -498,6 +548,10 @@ impl HyperServer {
         if let Some(grpc) = grpc_handler {
             srv.on_grpc(grpc);
         }
+        let grpc_limits = *self.grpc_limits.lock().map_err(|_| {
+            napi::Error::new(napi::Status::GenericFailure, "gRPC limits mutex poisoned")
+        })?;
+        srv.set_grpc_limits(grpc_limits);
         srv.set_stream_registry(self.stream_registry.clone());
 
         // Wire the shield filter if the JS side configured it before boot.

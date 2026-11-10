@@ -223,6 +223,7 @@ export type {
   ErrorHandlerClass,
   GrpcCall,
   GrpcHandler,
+  GrpcLimits,
   GrpcReply,
   LazyImport,
   MiddlewareClass,

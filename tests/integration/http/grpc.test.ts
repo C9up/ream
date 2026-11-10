@@ -1,6 +1,6 @@
 import { connect, constants } from 'node:http2'
 import { describe, expect, it } from 'vitest'
-import type { NapiGrpcCall, NapiGrpcReply } from '../../../src/native/generated.js'
+import type { NapiGrpcCall, NapiGrpcLimits, NapiGrpcReply } from '../../../src/native/generated.js'
 import { HyperServer } from './loader.js'
 
 /**
@@ -155,6 +155,7 @@ function rawCall(port: number, path: string, options: RawCallOptions = {}): Prom
 async function start(
   grpc: ((call: NapiGrpcCall) => Promise<NapiGrpcReply>) | undefined,
   http: (path: string, contentType: string) => string = (path) => `http ${path}`,
+  options: { limits?: NapiGrpcLimits; requestTimeout?: number } = {},
 ): Promise<{ port: number; close: () => Promise<void> }> {
   const server = new HyperServer(0)
   server.onRequest(async (raw) => {
@@ -166,7 +167,10 @@ async function start(
         : ''
     return { status: 200, headers: {}, body: http(path, contentType) }
   })
-  if (grpc) server.onGrpc(grpc)
+  if (grpc) server.onGrpc(grpc, options.limits)
+  if (options.requestTimeout !== undefined) {
+    server.configureConnections({ requestTimeout: options.requestTimeout })
+  }
   await server.listen()
   return { port: await server.port(), close: () => server.close() }
 }
@@ -221,7 +225,7 @@ describeIfNetwork('hyper-server > gRPC', () => {
     }
   })
 
-  it('never lets a request trailer into the metadata', async () => {
+  it('refuses request trailers before the handler, so none can reach the metadata', async () => {
     const seen: NapiGrpcCall[] = []
     const { port, close } = await start(async (call) => {
       seen.push(call)
@@ -230,16 +234,110 @@ describeIfNetwork('hyper-server > gRPC', () => {
     try {
       // A trailer would replace the header a proxy or the security filter
       // already checked.
-      await rawCall(port, '/t.Svc/Echo', {
+      const replaced = await rawCall(port, '/t.Svc/Echo', {
         headers: { authorization: 'Bearer real' },
         trailers: { authorization: 'Bearer forged' },
       })
-      await rawCall(port, '/t.Svc/Echo', { trailers: { authorization: 'Bearer forged' } })
-      expect(seen.map((call) => call.metadata.authorization)).toEqual(['Bearer real', undefined])
+      const alone = await rawCall(port, '/t.Svc/Echo', {
+        trailers: { authorization: 'Bearer forged' },
+      })
+      expect([replaced.status, alone.status]).toEqual(['13', '13'])
+      expect(seen).toEqual([])
     } finally {
       await close()
     }
   })
+
+  /** A server whose handler counts its calls. */
+  async function counted(
+    options: { limits?: NapiGrpcLimits; requestTimeout?: number },
+    reply: Uint8Array = new Uint8Array(),
+  ) {
+    const calls: NapiGrpcCall[] = []
+    const server = await start(
+      async (call) => {
+        calls.push(call)
+        return { message: reply }
+      },
+      undefined,
+      options,
+    )
+    return { ...server, calls }
+  }
+
+  it('answers a call whose request never ends at the request timeout', async () => {
+    const { port, close, calls } = await counted({ requestTimeout: 300 })
+    try {
+      const result = await rawCall(port, '/t.Svc/Echo', { keepOpen: true, waitMax: 3000 })
+      expect(result.status).toBe('4')
+      expect(result.ms).toBeGreaterThanOrEqual(250)
+      expect(result.ms).toBeLessThan(2000)
+      expect(calls).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('refuses a second message on a unary call at once', async () => {
+    const { port, close, calls } = await counted({ requestTimeout: 2000 })
+    try {
+      const result = await rawCall(port, '/t.Svc/Echo', {
+        messages: [new Uint8Array([1]), new Uint8Array([2])],
+        keepOpen: true,
+      })
+      expect(result).toMatchObject({
+        status: '12',
+        message: 'Received a second request message',
+      })
+      expect(result.ms).toBeLessThan(1000)
+      expect(calls).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('refuses a request past maxReceiveMessageLength before the handler', async () => {
+    const { port, close, calls } = await counted({ limits: { maxReceiveMessageLength: 4 } })
+    try {
+      const refused = await rawCall(port, '/t.Svc/Echo', { messages: [new Uint8Array(5)] })
+      expect(refused).toMatchObject({
+        status: '8',
+        message: 'Received message larger than max (5 vs 4)',
+      })
+      const served = await rawCall(port, '/t.Svc/Echo', { messages: [new Uint8Array(4)] })
+      expect(served.status).toBe('0')
+      expect(calls).toHaveLength(1)
+    } finally {
+      await close()
+    }
+  })
+
+  it('answers RESOURCE_EXHAUSTED instead of a reply past maxSendMessageLength', async () => {
+    const { port, close } = await counted(
+      { limits: { maxSendMessageLength: 2 } },
+      new Uint8Array([1, 2, 3]),
+    )
+    try {
+      expect(await rawCall(port, '/t.Svc/Echo')).toMatchObject({
+        status: '8',
+        message: 'Sent message larger than max (3 vs. 2)',
+      })
+    } finally {
+      await close()
+    }
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 1.5, -2])(
+    'refuses a message limit of %s',
+    (value) => {
+      const server = new HyperServer(0)
+      expect(() =>
+        server.onGrpc(async () => ({ message: new Uint8Array() }), {
+          maxReceiveMessageLength: value,
+        }),
+      ).toThrow(/whole number of bytes/)
+    },
+  )
 
   it('keeps serving HTTP on the same port', async () => {
     const { port, close } = await start(async (call) => ({ message: call.message }))

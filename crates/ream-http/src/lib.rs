@@ -21,7 +21,7 @@ pub mod stream_registry;
 pub mod websocket;
 
 pub use cookies::parse_cookie_header;
-pub use grpc::{GrpcCall, GrpcHandler, GrpcReply};
+pub use grpc::{GrpcCall, GrpcHandler, GrpcLimits, GrpcReply};
 pub use ip::{
     ip_in_cidr, resolve_client_ip, resolve_client_ips, InvalidProxyEntry, TrustedProxies,
 };

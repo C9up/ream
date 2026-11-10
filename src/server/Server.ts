@@ -50,6 +50,26 @@ export type GrpcReply = { message: Uint8Array } | { code: number; details: strin
 
 export type GrpcHandler = (call: GrpcCall) => Promise<GrpcReply>
 
+/**
+ * Message size bounds of the gRPC calls, in bytes; `-1` for none. A request
+ * past its bound is refused, `RESOURCE_EXHAUSTED`, before it is read; a reply
+ * past its bound is answered `RESOURCE_EXHAUSTED` instead.
+ */
+export interface GrpcLimits {
+  /** Default 4 MiB. */
+  maxReceiveMessageLength?: number
+  /** Default `-1`: no bound. */
+  maxSendMessageLength?: number
+}
+
+function checkGrpcLimit(name: string, value: number | undefined): void {
+  if (value === undefined || value === -1 || (Number.isSafeInteger(value) && value >= 0)) return
+  throw new ReamError(
+    'E_SERVER_GRPC_INVALID_LIMIT',
+    `${name} must be a whole number of bytes, or -1 for no limit — got ${value}.`,
+  )
+}
+
 export class Server {
   #router: Router
   #serverMiddleware: MiddlewareFunction[] = []
@@ -57,6 +77,7 @@ export class Server {
   #resolvedErrorHandler?: ExceptionHandler
   #trustedProxies: string[] = []
   #grpcHandler?: GrpcHandler
+  #grpcLimits: GrpcLimits = {}
 
   constructor(router: Router) {
     this.#router = router
@@ -107,14 +128,22 @@ export class Server {
    * One handler per server: a second one throws. Two packages both serving
    * gRPC is a conflict to resolve, not to settle by load order.
    */
-  grpc(handler: GrpcHandler): this {
+  grpc(handler: GrpcHandler, limits: GrpcLimits = {}): this {
     if (this.#grpcHandler) {
       throw new ReamError('E_SERVER_GRPC_ALREADY_SET', 'A gRPC handler is already registered.', {
         hint: 'Only one package can serve gRPC on the HTTP port.',
       })
     }
+    checkGrpcLimit('maxReceiveMessageLength', limits.maxReceiveMessageLength)
+    checkGrpcLimit('maxSendMessageLength', limits.maxSendMessageLength)
     this.#grpcHandler = handler
+    this.#grpcLimits = { ...limits }
     return this
+  }
+
+  /** The message bounds given with the gRPC handler (consumed by Ignitor at boot). */
+  getGrpcLimits(): GrpcLimits {
+    return { ...this.#grpcLimits }
   }
 
   /** The gRPC handler, if one is set (consumed by Ignitor at boot). */

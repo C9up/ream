@@ -9,21 +9,29 @@
 //!
 //! The branch sits before the body is collected, which is where the HTTP path
 //! runs its rate limiter and security filter. So it runs them itself, on the
-//! headers, before tonic reads a byte of the message — a call they refuse
-//! never reaches the handler. The message is bounded by tonic's decode limit
-//! (4 MiB by default), not by the HTTP path's 100 MB.
+//! headers, before a byte of the message is read — a call they refuse never
+//! reaches the handler.
+//!
+//! The request side of a call is read here, not by tonic, which would drain
+//! every further message and merge the client's trailers into the metadata:
+//! exactly one message, bounded by [`GrpcLimits`] (checked on its length
+//! prefix, before it is buffered), then the end of the stream, all within the
+//! server's request timeout. A second message, request trailers, a message cut
+//! short or none at all are refused before the handler runs.
 
 use crate::ip::TrustedProxies;
 use crate::ratelimit::RateLimiter;
 use crate::request::ReamRequest;
 use crate::security::{FilterResult, SecurityFilter};
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::server::{Grpc, UnaryService};
 use tonic::{Code, Status};
@@ -62,12 +70,35 @@ pub fn is_grpc<B>(req: &Request<B>) -> bool {
         .is_some_and(|ct| ct.starts_with("application/grpc"))
 }
 
+/// Message size bounds, in bytes — grpc-js's `grpc.max_receive_message_length`
+/// and `grpc.max_send_message_length`, with the same defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrpcLimits {
+    /// A larger request message is answered `RESOURCE_EXHAUSTED` before it is
+    /// read. Default 4 MiB.
+    pub max_receive_message_length: usize,
+    /// A larger reply is answered `RESOURCE_EXHAUSTED` instead. Default: none.
+    pub max_send_message_length: usize,
+}
+
+impl Default for GrpcLimits {
+    fn default() -> Self {
+        Self {
+            max_receive_message_length: 4 * 1024 * 1024,
+            max_send_message_length: usize::MAX,
+        }
+    }
+}
+
 /// The protections the HTTP path applies, applied to a gRPC call.
 pub(crate) struct Guards<'a> {
     pub peer_ip: &'a str,
     pub trusted_proxies: &'a TrustedProxies,
     pub rate_limiter: Option<&'a Arc<RateLimiter>>,
     pub security_filter: Option<&'a Arc<dyn SecurityFilter>>,
+    pub limits: GrpcLimits,
+    /// The HTTP path's request timeout, bounding the request side of a call.
+    pub request_timeout: Option<Duration>,
 }
 
 /// Guard, then serve one gRPC call.
@@ -104,17 +135,79 @@ pub(crate) async fn serve(
     // the security filter and any proxy in front already checked.
     let metadata = metadata_of(req.headers());
     let path = req.uri().path().to_owned();
+
+    let (parts, body) = req.into_parts();
+    let read = read_message(body, guards.limits.max_receive_message_length);
+    let message = match guards.request_timeout {
+        Some(limit) => tokio::time::timeout(limit, read).await.unwrap_or_else(|_| {
+            Err(Status::deadline_exceeded(
+                "The request was not received in time",
+            ))
+        }),
+        None => read.await,
+    };
+    let message = match message {
+        Ok(message) => message,
+        Err(status) => return status.into_http(),
+    };
+
+    // tonic still owns the response: framing, status, trailers. It gets the
+    // one message read above, as a body that ends with it.
     Grpc::new(BytesCodec)
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX)
         .unary(
             Unary {
                 path,
                 ip,
                 handler,
                 metadata: Some(metadata),
+                max_send: guards.limits.max_send_message_length,
             },
-            req,
+            Request::from_parts(parts, Full::new(message)),
         )
         .await
+}
+
+/// Read the request side of a unary call: one length-prefixed message (the
+/// prefix kept), then the end of the stream.
+async fn read_message(mut body: Incoming, max: usize) -> Result<Bytes, Status> {
+    let mut framed = BytesMut::new();
+    // The message length, once its 5-byte prefix has arrived.
+    let mut length: Option<usize> = None;
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| Status::cancelled("The request stream failed"))?;
+        let Ok(mut data) = frame.into_data() else {
+            return Err(Status::internal(
+                "Request trailers are not part of a gRPC call",
+            ));
+        };
+        while !data.is_empty() {
+            let wanted = match length {
+                None => 5 - framed.len(),
+                Some(len) => 5 + len - framed.len(),
+            };
+            if wanted == 0 {
+                // grpc-js answers the same, instead of draining the rest.
+                return Err(Status::unimplemented("Received a second request message"));
+            }
+            framed.extend_from_slice(&data.split_to(wanted.min(data.len())));
+            if length.is_none() && framed.len() == 5 {
+                let len = u32::from_be_bytes([framed[1], framed[2], framed[3], framed[4]]) as usize;
+                if len > max {
+                    return Err(Status::resource_exhausted(format!(
+                        "Received message larger than max ({len} vs {max})"
+                    )));
+                }
+                length = Some(len);
+            }
+        }
+    }
+    match length {
+        Some(len) if framed.len() == 5 + len => Ok(framed.freeze()),
+        None if framed.is_empty() => Err(Status::internal("Missing request message.")),
+        _ => Err(Status::internal("Unexpected EOF decoding stream.")),
+    }
 }
 
 /// Request metadata from the headers. Values that are not visible ASCII are
@@ -143,6 +236,7 @@ struct Unary {
     handler: GrpcHandler,
     /// Taken by the one call this service serves.
     metadata: Option<HashMap<String, String>>,
+    max_send: usize,
 }
 
 impl UnaryService<Bytes> for Unary {
@@ -157,8 +251,15 @@ impl UnaryService<Bytes> for Unary {
             ip: self.ip.clone(),
         };
         let reply = (self.handler)(call);
+        let max_send = self.max_send;
         Box::pin(async move {
             match reply.await {
+                GrpcReply::Message(message) if message.len() > max_send => {
+                    Err(Status::resource_exhausted(format!(
+                        "Sent message larger than max ({} vs. {max_send})",
+                        message.len()
+                    )))
+                }
                 GrpcReply::Message(message) => Ok(tonic::Response::new(message)),
                 GrpcReply::Status { code, details } => Err(Status::new(error_code(code), details)),
             }
@@ -419,8 +520,8 @@ mod tests {
 
         let five_mib = Bytes::from(vec![0u8; 5 * 1024 * 1024]);
         let error = call(port, "/t.S/M", five_mib, &[]).await.unwrap_err();
-        // tonic's answer to a message over its decode limit.
-        assert_eq!(error.code(), Code::OutOfRange);
+        // Past the default 4 MiB, answered like grpc-js answers it.
+        assert_eq!(error.code(), Code::ResourceExhausted);
         assert_eq!(counter.load(Ordering::SeqCst), 0);
         server.shutdown().await;
     }
@@ -462,8 +563,11 @@ mod tests {
             (
                 map.get("grpc-status")
                     .map(|v| v.to_str().unwrap().to_owned()),
-                map.get("grpc-message")
-                    .map(|v| v.to_str().unwrap().to_owned()),
+                map.get("grpc-message").map(|v| {
+                    urlencoding::decode(v.to_str().unwrap())
+                        .unwrap()
+                        .into_owned()
+                }),
             )
         };
         let from_headers = read(response.headers());
@@ -481,35 +585,79 @@ mod tests {
         }
     }
 
-    fn authorization_of(seen: &Arc<Mutex<Vec<GrpcCall>>>) -> Option<String> {
-        seen.lock()
-            .unwrap()
-            .last()
-            .and_then(|call| call.metadata.get("authorization").cloned())
+    /// A handler that counts its calls and answers `reply`.
+    fn counting_handler(counter: Arc<AtomicUsize>, reply: &'static [u8]) -> GrpcHandler {
+        Arc::new(move |_call: GrpcCall| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { GrpcReply::Message(Bytes::from_static(reply)) })
+        })
+    }
+
+    async fn start_bounded(
+        counter: Arc<AtomicUsize>,
+        reply: &'static [u8],
+        limits: GrpcLimits,
+    ) -> (ReamServer, u16) {
+        start(|s| {
+            s.on_grpc(counting_handler(counter, reply));
+            s.set_grpc_limits(limits);
+            s.set_connection_limits(crate::ConnectionLimits {
+                request_timeout: Some(Duration::from_millis(300)),
+                ..crate::ConnectionLimits::default()
+            });
+        })
+        .await
     }
 
     #[tokio::test]
-    async fn request_trailers_never_reach_the_metadata() {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let handler = recording_handler(seen.clone());
-        let (mut server, port) = start(|s| s.on_grpc(handler)).await;
+    async fn a_call_whose_request_never_ends_is_answered_at_the_request_timeout() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (mut server, port) = start_bounded(counter.clone(), b"", GrpcLimits::default()).await;
 
-        // The header the proxy saw, then a trailer that would replace it.
         let mut client = h2_client(port).await;
         let (response, mut stream) = client
-            .send_request(
-                grpc_request("/t.S/M", &[("authorization", "Bearer real")]),
-                false,
-            )
+            .send_request(grpc_request("/t.S/M", &[]), false)
             .unwrap();
         stream.send_data(frame(b"x"), false).unwrap();
-        let mut trailers = hyper::HeaderMap::new();
-        trailers.insert("authorization", "Bearer forged".parse().unwrap());
-        stream.send_trailers(trailers).unwrap();
-        grpc_status(response).await;
-        assert_eq!(authorization_of(&seen).as_deref(), Some("Bearer real"));
+        let started = std::time::Instant::now();
+        let (status, _) = tokio::time::timeout(Duration::from_secs(3), grpc_status(response))
+            .await
+            .expect("answered before the client gave up");
+        assert_eq!(status.as_deref(), Some("4"));
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        drop(stream);
+        server.shutdown().await;
+    }
 
-        // A trailer alone: no header, so no authorization at all.
+    #[tokio::test]
+    async fn a_second_message_on_a_unary_call_is_refused_at_once() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (mut server, port) = start_bounded(counter.clone(), b"", GrpcLimits::default()).await;
+
+        let mut client = h2_client(port).await;
+        let (response, mut stream) = client
+            .send_request(grpc_request("/t.S/M", &[]), false)
+            .unwrap();
+        stream.send_data(frame(b"one"), false).unwrap();
+        stream.send_data(frame(b"two"), false).unwrap();
+        let started = std::time::Instant::now();
+        let (status, message) = grpc_status(response).await;
+        assert_eq!(status.as_deref(), Some("12"));
+        assert_eq!(
+            message.as_deref(),
+            Some("Received a second request message")
+        );
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn request_trailers_are_refused_before_the_handler() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (mut server, port) = start_bounded(counter.clone(), b"", GrpcLimits::default()).await;
+
         let mut client = h2_client(port).await;
         let (response, mut stream) = client
             .send_request(grpc_request("/t.S/M", &[]), false)
@@ -518,9 +666,98 @@ mod tests {
         let mut trailers = hyper::HeaderMap::new();
         trailers.insert("authorization", "Bearer forged".parse().unwrap());
         stream.send_trailers(trailers).unwrap();
-        grpc_status(response).await;
-        assert_eq!(seen.lock().unwrap().len(), 2);
-        assert_eq!(authorization_of(&seen), None);
+        let (status, _) = grpc_status(response).await;
+        assert_eq!(status.as_deref(), Some("13"));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_length_prefix_past_the_limit_is_refused_before_the_message_is_read() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let limits = GrpcLimits {
+            max_receive_message_length: 8,
+            ..GrpcLimits::default()
+        };
+        let (mut server, port) = start_bounded(counter.clone(), b"", limits).await;
+
+        // Only the prefix, announcing 1 GiB, and the stream left open: the
+        // answer must not wait for (or make room for) the message.
+        let mut client = h2_client(port).await;
+        let (response, mut stream) = client
+            .send_request(grpc_request("/t.S/M", &[]), false)
+            .unwrap();
+        let mut prefix = vec![0u8];
+        prefix.extend_from_slice(&(1u32 << 30).to_be_bytes());
+        stream.send_data(Bytes::from(prefix), false).unwrap();
+        let (status, message) = grpc_status(response).await;
+        assert_eq!(status.as_deref(), Some("8"));
+        assert_eq!(
+            message.as_deref(),
+            Some("Received message larger than max (1073741824 vs 8)")
+        );
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_receive_limit_is_inclusive_and_configurable() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let limits = GrpcLimits {
+            max_receive_message_length: 8,
+            ..GrpcLimits::default()
+        };
+        let (mut server, port) = start_bounded(counter.clone(), b"ok", limits).await;
+
+        call(port, "/t.S/M", Bytes::from_static(b"12345678"), &[])
+            .await
+            .unwrap();
+        let error = call(port, "/t.S/M", Bytes::from_static(b"123456789"), &[])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::ResourceExhausted);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_reply_past_the_send_limit_is_answered_resource_exhausted() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let limits = GrpcLimits {
+            max_send_message_length: 2,
+            ..GrpcLimits::default()
+        };
+        let (mut server, port) = start_bounded(counter.clone(), b"abc", limits).await;
+
+        let error = call(port, "/t.S/M", Bytes::new(), &[]).await.unwrap_err();
+        assert_eq!(error.code(), Code::ResourceExhausted);
+        assert_eq!(error.message(), "Sent message larger than max (3 vs. 2)");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_call_without_a_message_is_refused() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (mut server, port) = start_bounded(counter.clone(), b"", GrpcLimits::default()).await;
+
+        let mut client = h2_client(port).await;
+        let (response, _stream) = client
+            .send_request(grpc_request("/t.S/M", &[]), true)
+            .unwrap();
+        let (status, _) = grpc_status(response).await;
+        assert_eq!(status.as_deref(), Some("13"));
+
+        // A message cut short: the prefix announces more than arrives.
+        let mut client = h2_client(port).await;
+        let (response, mut stream) = client
+            .send_request(grpc_request("/t.S/M", &[]), false)
+            .unwrap();
+        stream
+            .send_data(Bytes::from_static(&[0, 0, 0, 0, 9, 1, 2]), true)
+            .unwrap();
+        let (status, _) = grpc_status(response).await;
+        assert_eq!(status.as_deref(), Some("13"));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
         server.shutdown().await;
     }
 }

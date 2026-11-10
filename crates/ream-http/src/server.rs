@@ -82,6 +82,8 @@ pub struct ReamServer {
     /// gRPC handler. `None` (default) leaves `application/grpc` requests on
     /// the HTTP path, exactly as before gRPC existed.
     grpc_handler: Option<crate::GrpcHandler>,
+    /// Message size bounds of the gRPC calls.
+    grpc_limits: crate::GrpcLimits,
     /// Request-body limits per content type, enforced while the body is read.
     body_limits: Arc<BodyLimits>,
     /// Header / body / keep-alive timeouts and the connection cap.
@@ -105,6 +107,7 @@ impl ReamServer {
             rate_limiter: None,
             stream_registry: StreamRegistry::new(),
             grpc_handler: None,
+            grpc_limits: crate::GrpcLimits::default(),
             body_limits: Arc::new(BodyLimits::default()),
             connection_limits: ConnectionLimits::default(),
         }
@@ -171,6 +174,12 @@ impl ReamServer {
         self.grpc_handler = Some(handler);
     }
 
+    /// Bound the messages of the gRPC calls served (default: 4 MiB received,
+    /// no bound sent).
+    pub fn set_grpc_limits(&mut self, limits: crate::GrpcLimits) {
+        self.grpc_limits = limits;
+    }
+
     /// Register the request handler.
     pub fn on_request(&mut self, handler: RequestHandler) {
         self.handler = Some(handler);
@@ -198,6 +207,7 @@ impl ReamServer {
             rate_limiter: self.rate_limiter.clone(),
             stream_registry: self.stream_registry.clone(),
             grpc_handler: self.grpc_handler.clone(),
+            grpc_limits: self.grpc_limits,
             body_limits: self.body_limits.clone(),
             limits,
         });
@@ -324,6 +334,7 @@ struct ServeContext {
     rate_limiter: Option<Arc<crate::RateLimiter>>,
     stream_registry: StreamRegistry,
     grpc_handler: Option<crate::GrpcHandler>,
+    grpc_limits: crate::GrpcLimits,
     body_limits: Arc<BodyLimits>,
     limits: ConnectionLimits,
 }
@@ -522,6 +533,8 @@ async fn handle_request(
             trusted_proxies: &context.trusted_proxies,
             rate_limiter: context.rate_limiter.as_ref(),
             security_filter: context.security_filter.as_ref(),
+            limits: context.grpc_limits,
+            request_timeout: context.limits.request_timeout,
         };
         return Ok(crate::grpc::serve(req, grpc, guards)
             .await

@@ -58,7 +58,7 @@ import {
   nativeBodyLimits,
   nativeConnectionConfig,
 } from './server/nativeLimits.js'
-import { type GrpcHandler, Server } from './server/Server.js'
+import { type GrpcHandler, type GrpcLimits, Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
 import { clearEncryption, setEncryption } from './services/encryption.js'
 import { clearLogger, setLogger } from './services/logger.js'
@@ -276,7 +276,7 @@ export function defineConfig(config: ReamrcConfig): ReamrcConfig {
 export interface HyperServerLike {
   onRequest(callback: (request: HttpKernelRequest) => Promise<HttpKernelResponse>): void
   /** Optional — present on the real `HyperServer`; required once `server.grpc()` is used. */
-  onGrpc?(callback: GrpcHandler): void
+  onGrpc?(callback: GrpcHandler, limits?: GrpcLimits): void
   /**
    * Optional — present on the real `HyperServer` (Rust-backed), absent on
    * trivial test mocks. Ignitor only calls it when a shield config is set.
@@ -911,7 +911,7 @@ export class Ignitor {
             { hint: 'Use the native HyperServer, or a test server that implements onGrpc().' },
           )
         }
-        this.#_httpServer.onGrpc(grpc)
+        this.#_httpServer.onGrpc(grpc, this.#server.getGrpcLimits())
       }
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
       // listen. Security filtering itself lives in @c9up/blackhole.

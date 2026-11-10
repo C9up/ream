@@ -53,6 +53,16 @@ export interface NapiGrpcReply {
 }
 
 /**
+ * Message size bounds of the gRPC calls, in bytes; `-1` for none. Omitted:
+ * 4 MiB received, no bound sent.
+ */
+
+export interface NapiGrpcLimits {
+  maxReceiveMessageLength?: number
+  maxSendMessageLength?: number
+}
+
+/**
  * Configuration for the wire-level shield filter. Mirrors the Rust
  * `ShieldConfig` shape; the JS layer constructs it from `ShieldMiddleware`
  * options at boot and hands it off to `HyperServer.configureShield`.
@@ -169,9 +179,13 @@ export declare class HyperServer {
    * HTTP requests. Must be called BEFORE `listen()`.
    *
    * A rejected promise is answered `INTERNAL`, with nothing of the error
-   * sent to the client.
+   * sent to the client. `limits` bounds the request and reply messages;
+   * a request is read, and refused, before the handler is called.
    */
-  onGrpc(callback: (arg: NapiGrpcCall) => Promise<NapiGrpcReply>): void
+  onGrpc(
+    callback: (arg: NapiGrpcCall) => Promise<NapiGrpcReply>,
+    limits?: NapiGrpcLimits | undefined | null,
+  ): void
   /**
    * Configure the trusted proxies used by `request.ip` / `request.ips`
    * resolution. Must be called BEFORE `listen()`. Entries are addresses,
