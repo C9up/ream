@@ -256,10 +256,14 @@
   },
   "peerDependencies": {
     "@c9up/comet": "^0.1.0",
+    "@c9up/inker": "^0.1.20",
     "@c9up/quasar": "^0.1.0 || ^0.2.0"
   },
   "peerDependenciesMeta": {
     "@c9up/comet": {
+      "optional": true
+    },
+    "@c9up/inker": {
       "optional": true
     },
     "@c9up/quasar": {
@@ -269,6 +273,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
     "@c9up/comet": "^0.1.0",
+    "@c9up/inker": "^0.1.20",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "4.1.11",
     "mime-db": "^1.54.0",
