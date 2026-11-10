@@ -37,8 +37,11 @@ export type MiddlewareEntry = LazyImport<MiddlewareClassConstructor> | Middlewar
 export interface GrpcCall {
   /** `/package.Service/Method`, as it arrived. */
   path: string
-  /** Request metadata, header names lowercased. */
-  metadata: Record<string, string>
+  /**
+   * Request metadata: the request headers, every value of a repeated one in
+   * order, names lowercased. Never the client's trailers.
+   */
+  metadata: Record<string, string[]>
   /** The request message, still encoded. */
   message: Uint8Array
   /** Resolved client IP, by the same trusted-proxy rules as `request.ip()`. */

@@ -194,8 +194,23 @@ describeIfNetwork('hyper-server > gRPC', () => {
       expect(seen).toHaveLength(1)
       expect(seen[0]?.path).toBe('/t.Svc/Echo')
       expect([...(seen[0]?.message ?? [])]).toEqual([...message])
-      expect(seen[0]?.metadata.authorization).toBe('Bearer t0ken')
+      expect(seen[0]?.metadata.authorization).toEqual(['Bearer t0ken'])
       expect(seen[0]?.ip).toBe('127.0.0.1')
+    } finally {
+      await close()
+    }
+  })
+
+  it('hands over every value of a repeated header, in order', async () => {
+    const seen: NapiGrpcCall[] = []
+    const { port, close } = await start(async (call) => {
+      seen.push(call)
+      return { message: new Uint8Array() }
+    })
+    try {
+      await rawCall(port, '/t.Svc/Echo', { headers: { 'x-dup': ['a', 'b'], 'x-one': '1' } })
+      expect(seen[0]?.metadata['x-dup']).toEqual(['a', 'b'])
+      expect(seen[0]?.metadata['x-one']).toEqual(['1'])
     } finally {
       await close()
     }

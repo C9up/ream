@@ -40,9 +40,10 @@ use tonic::{Code, Status};
 pub struct GrpcCall {
     /// `/package.Service/Method`, as it arrived.
     pub path: String,
-    /// Request metadata (header names lowercased). Values that are not
-    /// visible ASCII are left out.
-    pub metadata: HashMap<String, String>,
+    /// Request metadata: the request headers, every value of a repeated one
+    /// in order, names lowercased. Values that are not visible ASCII are left
+    /// out.
+    pub metadata: HashMap<String, Vec<String>>,
     /// The request message, still encoded.
     pub message: Bytes,
     /// Resolved client IP, by the same trusted-proxy rules as `request.ip`.
@@ -210,13 +211,19 @@ async fn read_message(mut body: Incoming, max: usize) -> Result<Bytes, Status> {
     }
 }
 
-/// Request metadata from the headers. Values that are not visible ASCII are
-/// left out.
-fn metadata_of(headers: &hyper::HeaderMap) -> HashMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
-        .collect()
+/// Request metadata from the headers, keeping every value of a repeated
+/// one. Values that are not visible ASCII are left out.
+fn metadata_of(headers: &hyper::HeaderMap) -> HashMap<String, Vec<String>> {
+    let mut metadata: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, value) in headers {
+        if let Ok(value) = value.to_str() {
+            metadata
+                .entry(name.as_str().to_owned())
+                .or_default()
+                .push(value.to_owned());
+        }
+    }
+    metadata
 }
 
 /// The status a call the security filter refused is answered with.
@@ -235,7 +242,7 @@ struct Unary {
     ip: String,
     handler: GrpcHandler,
     /// Taken by the one call this service serves.
-    metadata: Option<HashMap<String, String>>,
+    metadata: Option<HashMap<String, Vec<String>>>,
     max_send: usize,
 }
 
@@ -415,8 +422,8 @@ mod tests {
         {
             let seen = seen.lock().unwrap();
             assert_eq!(
-                seen[0].metadata.get("authorization").map(String::as_str),
-                Some("Bearer t0ken")
+                seen[0].metadata.get("authorization"),
+                Some(&vec!["Bearer t0ken".to_owned()])
             );
         }
         server.shutdown().await;
@@ -758,6 +765,32 @@ mod tests {
         let (status, _) = grpc_status(response).await;
         assert_eq!(status.as_deref(), Some("13"));
         assert_eq!(counter.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn every_value_of_a_repeated_header_reaches_the_handler() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler = recording_handler(seen.clone());
+        let (mut server, port) = start(|s| s.on_grpc(handler)).await;
+
+        let mut client = h2_client(port).await;
+        let (response, mut stream) = client
+            .send_request(
+                grpc_request("/t.S/M", &[("x-dup", "a"), ("x-dup", "b"), ("x-one", "1")]),
+                false,
+            )
+            .unwrap();
+        stream.send_data(frame(b"x"), true).unwrap();
+        assert_eq!(grpc_status(response).await.0.as_deref(), Some("0"));
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(
+                seen[0].metadata.get("x-dup"),
+                Some(&vec!["a".to_owned(), "b".to_owned()])
+            );
+            assert_eq!(seen[0].metadata.get("x-one"), Some(&vec!["1".to_owned()]));
+        }
         server.shutdown().await;
     }
 }

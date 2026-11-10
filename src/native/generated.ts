@@ -33,8 +33,11 @@ export interface NapiResponse {
 export interface NapiGrpcCall {
   /** `/package.Service/Method`. */
   path: string
-  /** Request metadata, header names lowercased. */
-  metadata: Record<string, string>
+  /**
+   * Request metadata: the request headers, every value of a repeated one
+   * in order, names lowercased.
+   */
+  metadata: Record<string, Array<string>>
   /** The request message, still encoded. */
   message: Uint8Array
   /** Resolved client IP, by the same trusted-proxy rules as `request.ip`. */

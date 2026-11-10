@@ -56,8 +56,9 @@ impl From<NapiResponse> for ReamResponse {
 pub struct NapiGrpcCall {
     /// `/package.Service/Method`.
     pub path: String,
-    /// Request metadata, header names lowercased.
-    pub metadata: HashMap<String, String>,
+    /// Request metadata: the request headers, every value of a repeated one
+    /// in order, names lowercased.
+    pub metadata: HashMap<String, Vec<String>>,
     /// The request message, still encoded.
     pub message: Uint8Array,
     /// Resolved client IP, by the same trusted-proxy rules as `request.ip`.
