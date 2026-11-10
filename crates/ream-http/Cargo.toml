@@ -30,3 +30,6 @@ tonic = { version = "0.14", default-features = false, features = ["server", "cod
 
 [dev-dependencies]
 tonic = { version = "0.14", default-features = false, features = ["server", "codegen", "transport"] }
+# A raw HTTP/2 client: the gRPC tests send what a gRPC client never would
+# (request trailers, a second message, a stream left open, a reset).
+h2 = "0.4"

@@ -99,10 +99,31 @@ pub(crate) async fn serve(
         }
     }
 
+    // The metadata is the request HEADERS, read now: tonic would merge the
+    // client's trailers into it, and a trailer would then replace a header
+    // the security filter and any proxy in front already checked.
+    let metadata = metadata_of(req.headers());
     let path = req.uri().path().to_owned();
     Grpc::new(BytesCodec)
-        .unary(Unary { path, ip, handler }, req)
+        .unary(
+            Unary {
+                path,
+                ip,
+                handler,
+                metadata: Some(metadata),
+            },
+            req,
+        )
         .await
+}
+
+/// Request metadata from the headers. Values that are not visible ASCII are
+/// left out.
+fn metadata_of(headers: &hyper::HeaderMap) -> HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
+        .collect()
 }
 
 /// The status a call the security filter refused is answered with.
@@ -120,6 +141,8 @@ struct Unary {
     path: String,
     ip: String,
     handler: GrpcHandler,
+    /// Taken by the one call this service serves.
+    metadata: Option<HashMap<String, String>>,
 }
 
 impl UnaryService<Bytes> for Unary {
@@ -127,16 +150,9 @@ impl UnaryService<Bytes> for Unary {
     type Future = Pin<Box<dyn Future<Output = Result<tonic::Response<Bytes>, Status>> + Send>>;
 
     fn call(&mut self, request: tonic::Request<Bytes>) -> Self::Future {
-        let metadata = request
-            .metadata()
-            .clone()
-            .into_headers()
-            .iter()
-            .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-            .collect();
         let call = GrpcCall {
             path: self.path.clone(),
-            metadata,
+            metadata: self.metadata.take().unwrap_or_default(),
             message: request.into_inner(),
             ip: self.ip.clone(),
         };
@@ -406,6 +422,105 @@ mod tests {
         // tonic's answer to a message over its decode limit.
         assert_eq!(error.code(), Code::OutOfRange);
         assert_eq!(counter.load(Ordering::SeqCst), 0);
+        server.shutdown().await;
+    }
+
+    /// A raw HTTP/2 connection, for what a gRPC client never sends.
+    async fn h2_client(port: u16) -> h2::client::SendRequest<Bytes> {
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let (client, connection) = h2::client::handshake(tcp).await.unwrap();
+        tokio::spawn(connection);
+        client.ready().await.unwrap()
+    }
+
+    fn grpc_request(path: &str, headers: &[(&str, &str)]) -> hyper::Request<()> {
+        let mut request = hyper::Request::post(format!("http://127.0.0.1{path}"))
+            .header("content-type", "application/grpc")
+            .header("te", "trailers");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(()).unwrap()
+    }
+
+    /// One length-prefixed gRPC message.
+    fn frame(message: &[u8]) -> Bytes {
+        let mut out = Vec::with_capacity(5 + message.len());
+        out.push(0);
+        out.extend_from_slice(&(message.len() as u32).to_be_bytes());
+        out.extend_from_slice(message);
+        Bytes::from(out)
+    }
+
+    /// The `grpc-status` (and message) of a response, from its headers when
+    /// it is trailers-only, else from its trailers.
+    async fn grpc_status(response: h2::client::ResponseFuture) -> (Option<String>, Option<String>) {
+        let response = response.await.unwrap();
+        let read = |map: &hyper::HeaderMap| {
+            (
+                map.get("grpc-status")
+                    .map(|v| v.to_str().unwrap().to_owned()),
+                map.get("grpc-message")
+                    .map(|v| v.to_str().unwrap().to_owned()),
+            )
+        };
+        let from_headers = read(response.headers());
+        if from_headers.0.is_some() {
+            return from_headers;
+        }
+        let mut body = response.into_body();
+        while let Some(chunk) = body.data().await {
+            let chunk = chunk.unwrap();
+            let _ = body.flow_control().release_capacity(chunk.len());
+        }
+        match body.trailers().await.unwrap() {
+            Some(trailers) => read(&trailers),
+            None => (None, None),
+        }
+    }
+
+    fn authorization_of(seen: &Arc<Mutex<Vec<GrpcCall>>>) -> Option<String> {
+        seen.lock()
+            .unwrap()
+            .last()
+            .and_then(|call| call.metadata.get("authorization").cloned())
+    }
+
+    #[tokio::test]
+    async fn request_trailers_never_reach_the_metadata() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler = recording_handler(seen.clone());
+        let (mut server, port) = start(|s| s.on_grpc(handler)).await;
+
+        // The header the proxy saw, then a trailer that would replace it.
+        let mut client = h2_client(port).await;
+        let (response, mut stream) = client
+            .send_request(
+                grpc_request("/t.S/M", &[("authorization", "Bearer real")]),
+                false,
+            )
+            .unwrap();
+        stream.send_data(frame(b"x"), false).unwrap();
+        let mut trailers = hyper::HeaderMap::new();
+        trailers.insert("authorization", "Bearer forged".parse().unwrap());
+        stream.send_trailers(trailers).unwrap();
+        grpc_status(response).await;
+        assert_eq!(authorization_of(&seen).as_deref(), Some("Bearer real"));
+
+        // A trailer alone: no header, so no authorization at all.
+        let mut client = h2_client(port).await;
+        let (response, mut stream) = client
+            .send_request(grpc_request("/t.S/M", &[]), false)
+            .unwrap();
+        stream.send_data(frame(b"x"), false).unwrap();
+        let mut trailers = hyper::HeaderMap::new();
+        trailers.insert("authorization", "Bearer forged".parse().unwrap());
+        stream.send_trailers(trailers).unwrap();
+        grpc_status(response).await;
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        assert_eq!(authorization_of(&seen), None);
         server.shutdown().await;
     }
 }

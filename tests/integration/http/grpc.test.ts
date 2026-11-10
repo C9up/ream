@@ -1,4 +1,4 @@
-import { connect } from 'node:http2'
+import { connect, constants } from 'node:http2'
 import { describe, expect, it } from 'vitest'
 import type { NapiGrpcCall, NapiGrpcReply } from '../../../src/native/generated.js'
 import { HyperServer } from './loader.js'
@@ -69,6 +69,89 @@ function grpcCall(
   })
 }
 
+interface RawCallOptions {
+  headers?: Record<string, string | string[]>
+  /** Messages sent, each framed; one by default. */
+  messages?: Uint8Array[]
+  /** Request trailers, sent after the messages. */
+  trailers?: Record<string, string>
+  /** Leave the request side open after the messages. */
+  keepOpen?: boolean
+  /** Reset the stream (CANCEL) this many ms after sending. */
+  cancelAfter?: number
+  /** Give up waiting for the status after this many ms. */
+  waitMax?: number
+}
+
+interface RawResult {
+  /** `grpc-status`, or what happened instead. */
+  status: string
+  message: string | undefined
+  ms: number
+}
+
+function framed(message: Uint8Array): Uint8Array {
+  const frame = new Uint8Array(5 + message.length)
+  new DataView(frame.buffer).setUint32(1, message.length)
+  frame.set(message, 5)
+  return frame
+}
+
+/** A gRPC call as a hostile or impatient client makes it. */
+function rawCall(port: number, path: string, options: RawCallOptions = {}): Promise<RawResult> {
+  return new Promise((resolve) => {
+    const started = Date.now()
+    const session = connect(`http://127.0.0.1:${port}`)
+    session.on('error', () => {})
+    const request = session.request(
+      {
+        ':method': 'POST',
+        ':path': path,
+        'content-type': 'application/grpc',
+        te: 'trailers',
+        ...options.headers,
+      },
+      { endStream: false, waitForTrailers: options.trailers !== undefined },
+    )
+    let status: string | undefined
+    let message: string | undefined
+    let settled = false
+    const finish = (fallback: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(giveUp)
+      resolve({ status: status ?? fallback, message, ms: Date.now() - started })
+      session.destroy()
+    }
+    const readStatus = (headers: Record<string, unknown>) => {
+      const code = headers['grpc-status']
+      const text = headers['grpc-message']
+      if (typeof code === 'string') status = code
+      if (typeof text === 'string') message = decodeURIComponent(text)
+    }
+    request.on('response', readStatus)
+    request.on('trailers', readStatus)
+    request.on('data', () => {})
+    request.on('error', () => {})
+    request.on('close', () => finish(`closed rst=${request.rstCode}`))
+    const giveUp = setTimeout(() => finish('still open'), options.waitMax ?? 3000)
+    const trailers = options.trailers
+    if (trailers !== undefined) {
+      request.on('wantTrailers', () => request.sendTrailers(trailers))
+    }
+    const messages = options.messages ?? [new Uint8Array([1, 2, 3])]
+    messages.forEach((message, index) => {
+      const last = index === messages.length - 1
+      if (last && options.keepOpen !== true) request.end(framed(message))
+      else request.write(framed(message))
+    })
+    if (messages.length === 0 && options.keepOpen !== true) request.end()
+    if (options.cancelAfter !== undefined) {
+      setTimeout(() => request.close(constants.NGHTTP2_CANCEL), options.cancelAfter)
+    }
+  })
+}
+
 async function start(
   grpc: ((call: NapiGrpcCall) => Promise<NapiGrpcReply>) | undefined,
   http: (path: string, contentType: string) => string = (path) => `http ${path}`,
@@ -133,6 +216,26 @@ describeIfNetwork('hyper-server > gRPC', () => {
       const result = await grpcCall(port, '/t.Svc/Boom', new Uint8Array())
       expect(result.status).toBe('13')
       expect(result.message).toBe('Internal error')
+    } finally {
+      await close()
+    }
+  })
+
+  it('never lets a request trailer into the metadata', async () => {
+    const seen: NapiGrpcCall[] = []
+    const { port, close } = await start(async (call) => {
+      seen.push(call)
+      return { message: new Uint8Array() }
+    })
+    try {
+      // A trailer would replace the header a proxy or the security filter
+      // already checked.
+      await rawCall(port, '/t.Svc/Echo', {
+        headers: { authorization: 'Bearer real' },
+        trailers: { authorization: 'Bearer forged' },
+      })
+      await rawCall(port, '/t.Svc/Echo', { trailers: { authorization: 'Bearer forged' } })
+      expect(seen.map((call) => call.metadata.authorization)).toEqual(['Bearer real', undefined])
     } finally {
       await close()
     }
