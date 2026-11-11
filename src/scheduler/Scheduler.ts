@@ -144,7 +144,7 @@ function loadNative(): NativeModule {
  * so scheduler context is never lost.
  */
 function translateNativeError(e: unknown): ReamError {
-  const asError = e as Error
+  const asError = e instanceof Error ? e : new Error(String(e))
   const parsed = ReamError.fromNapi(asError)
   // `fromNapi` returns an `E_UNKNOWN`-coded error when the message is not
   // a JSON payload. Preserve that context under a scheduler-specific

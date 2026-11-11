@@ -1032,7 +1032,7 @@ export class Ignitor {
               'File change detected — a process restart is required to apply it (`ream dev` restarts automatically).',
             severity: 'info',
             timestamp: new Date().toISOString(),
-          } as ErrorEvent)
+          })
         },
         logger: {
           info: (msg) =>
@@ -1042,7 +1042,7 @@ export class Ignitor {
               message: msg,
               severity: 'info',
               timestamp: new Date().toISOString(),
-            } as ErrorEvent),
+            }),
         },
       })
     }
@@ -1479,7 +1479,7 @@ export class Ignitor {
       message,
       severity: kind === 'error' ? 'critical' : 'info',
       timestamp: new Date().toISOString(),
-    } as ErrorEvent)
+    })
   }
 }
 

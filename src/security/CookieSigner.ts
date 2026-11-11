@@ -125,14 +125,22 @@ export class CookieSigner {
       return null
     }
     if (typeof parsed !== 'object' || parsed === null) return null
-    const envelope = parsed as Envelope
     // The KEY must be there, whatever it holds — that is what distinguishes an
     // envelope from an arbitrary JSON document, and a signed `null` or `0` is a
     // legitimate payload.
-    if (!('m' in envelope)) return null
-    if (envelope.e !== undefined && envelope.e < Date.now()) return null
-    if ((envelope.p ?? undefined) !== purpose) return null
-    return envelope.m
+    if (!('m' in parsed)) return null
+    // Each field checked for the type `#seal` writes before it is compared: an
+    // expiry that is not a number (`"e": "9999"`, `"e": null`) or a purpose
+    // that is not a string must not slip past the comparisons below.
+    const expiry: unknown = 'e' in parsed ? parsed.e : undefined
+    if (expiry !== undefined) {
+      if (typeof expiry !== 'number' || !Number.isFinite(expiry)) return null
+      if (expiry < Date.now()) return null
+    }
+    const sealedFor: unknown = 'p' in parsed ? parsed.p : undefined
+    if (sealedFor !== undefined && typeof sealedFor !== 'string') return null
+    if (sealedFor !== purpose) return null
+    return parsed.m
   }
 
   /**

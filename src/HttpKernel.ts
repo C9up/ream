@@ -200,7 +200,7 @@ export function createHttpKernel(
           // read decorator metadata via Reflect. Absent for inline-arrow
           // route handlers — that's intentional, decorators only apply
           // to controller methods.
-          controller: match.route.controller?.target.prototype as object | undefined,
+          controller: controllerPrototype(match.route.controller?.target),
           action: match.route.controller?.method,
         }
       : { pattern: '', middleware: [] }
@@ -453,16 +453,23 @@ function createControllerHandler(
     // `HttpContext` as a dependency must get this request's, not a stale one.
     const resolve = ctx.containerResolver ?? container
     const instance = resolve ? await resolve.make(controller.target) : new controller.target()
-    const method = (instance as Record<string, (ctx: HttpContext) => Promise<void> | void>)[
-      controller.method
-    ]
+    const method: unknown =
+      typeof instance === 'object' && instance !== null
+        ? Reflect.get(instance, controller.method)
+        : undefined
     if (typeof method !== 'function') {
       throw new Error(
         `Controller method '${controller.method}' not found on ${controller.target.name}`,
       )
     }
-    await method.call(instance, ctx)
+    await Reflect.apply(method, instance, [ctx])
   }
+}
+
+/** A controller class's prototype, where its decorators keep their metadata. */
+function controllerPrototype(target: AnyConstructor | undefined): object | undefined {
+  const prototype: unknown = target?.prototype
+  return typeof prototype === 'object' && prototype !== null ? prototype : undefined
 }
 
 /**

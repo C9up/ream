@@ -15,6 +15,16 @@ export interface CollectedEvent {
   [key: string]: unknown
 }
 
+function isCollectedEvent(value: unknown): value is CollectedEvent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'name' in value &&
+    typeof value.name === 'string' &&
+    'data' in value
+  )
+}
+
 export interface CollectResult {
   events: CollectedEvent[]
   subId: number
@@ -34,15 +44,17 @@ interface BusLike {
 export function collect(bus: BusLike, pattern: string): CollectResult {
   const events: CollectedEvent[] = []
   const subId = bus.subscribe(pattern, (eventJson: string) => {
+    const unreadable: CollectedEvent = {
+      _raw: eventJson,
+      _parseError: true,
+      name: '',
+      data: undefined,
+    }
     try {
-      events.push(JSON.parse(eventJson) as CollectedEvent)
+      const parsed: unknown = JSON.parse(eventJson)
+      events.push(isCollectedEvent(parsed) ? parsed : unreadable)
     } catch {
-      events.push({
-        _raw: eventJson,
-        _parseError: true,
-        name: '',
-        data: undefined,
-      } as CollectedEvent)
+      events.push(unreadable)
     }
   })
   return { events, subId }
@@ -233,20 +245,13 @@ function partialMatch(actual: unknown, expected: unknown): boolean {
 
   if (Array.isArray(expected)) {
     if (!Array.isArray(actual)) return false
-    return expected.every(
-      (item, i) => i < (actual as unknown[]).length && partialMatch((actual as unknown[])[i], item),
-    )
+    const items: unknown[] = actual
+    return expected.every((item, i) => i < items.length && partialMatch(items[i], item))
   }
 
-  for (const key of Object.keys(expected as object)) {
-    if (!(key in (actual as object))) return false
-    if (
-      !partialMatch(
-        (actual as Record<string, unknown>)[key],
-        (expected as Record<string, unknown>)[key],
-      )
-    )
-      return false
+  for (const key of Object.keys(expected)) {
+    if (!(key in actual)) return false
+    if (!partialMatch(Reflect.get(actual, key), Reflect.get(expected, key))) return false
   }
   return true
 }

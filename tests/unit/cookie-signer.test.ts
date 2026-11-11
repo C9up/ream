@@ -224,6 +224,23 @@ describe('CookieSigner refuses what it did not seal', () => {
     expect(signer.unsign(forged, 'password-reset')).toBe(null)
   })
 
+  it('refuses an envelope whose expiry or purpose is not the type it seals', () => {
+    // `"e": "never"` compared as NaN against the clock, which is never "past",
+    // so a value with a string expiry did not expire at all.
+    const signer = new CookieSigner(secret)
+    const forge = (envelope: Record<string, unknown>): string => {
+      const payload = Buffer.from(JSON.stringify(envelope)).toString('base64url')
+      return `${payload}.${hmacSign(payload, secret)}`
+    }
+
+    expect(signer.unsign(forge({ m: 'x', e: 'never' }))).toBe(null)
+    expect(signer.unsign(forge({ m: 'x', e: '99999999999999' }))).toBe(null)
+    expect(signer.unsign(forge({ m: 'x', e: null }))).toBe(null)
+    expect(signer.unsign(forge({ m: 'x', p: 5 }))).toBe(null)
+    expect(signer.unsign(forge({ m: 'x', p: null }))).toBe(null)
+    expect(signer.unsign(forge({ m: 'x', e: Date.now() + 60_000, p: 'reset' }), 'reset')).toBe('x')
+  })
+
   it('still round-trips what it did seal, purpose included', () => {
     const signer = new CookieSigner(secret)
     const signed = signer.sign('value', undefined, 'password-reset')

@@ -13,6 +13,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { ReamError } from '../errors/ReamError.js'
 import { durationToSeconds } from '../helpers/duration.js'
+import { toErrnoException } from '../helpers/errors.js'
 import { etag, matchesIfNoneMatch } from './etag.js'
 import { contentType } from './mime.js'
 
@@ -848,7 +849,7 @@ export class Response extends Macroable {
       size = (await stat(filePath)).size
     } catch (error) {
       if (errorCallback) {
-        const [message, status] = errorCallback(error as NodeJS.ErrnoException)
+        const [message, status] = errorCallback(toErrnoException(error))
         this.status(status ?? 404).send(message)
         return
       }
@@ -1002,7 +1003,7 @@ export class Response extends Macroable {
       // The headers are already out, so there is no status left to change: end
       // the body and let the client see a short read. `errorCallback` is still
       // consulted for whatever logging it does.
-      errorCallback?.(err as NodeJS.ErrnoException)
+      errorCallback?.(toErrnoException(err))
     } finally {
       // Never rethrows: this runs detached, and an unhandled rejection here
       // would take the process down over one client's download.
@@ -1022,7 +1023,7 @@ export class Response extends Macroable {
       }
     } catch (err) {
       const [message, status] = errorCallback
-        ? errorCallback(err as NodeJS.ErrnoException)
+        ? errorCallback(toErrnoException(err))
         : ['Cannot process the request', 500]
       this.status(status ?? 500)
       this.send(message)

@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { arch, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { ReamError } from '../errors/ReamError.js'
+import { errorCode } from './errors.js'
 
 /**
  * Platform triple suffix (matches napi-rs naming).
@@ -88,14 +89,14 @@ export function loadNapi<T>(options: LoadNapiOptions): T {
     try {
       return req(path) as T
     } catch (e) {
-      const code = (e as NodeJS.ErrnoException | undefined)?.code
+      const code = errorCode(e)
       if (code === 'MODULE_NOT_FOUND') continue
       // Any other error (SyntaxError, ABI mismatch, permissions,
       // corrupt binary) means the file exists but cannot load. Surface
       // the real cause rather than a generic "not found".
       throw new ReamError(
         `${errorCodePrefix}_NAPI_LOAD_FAILED`,
-        `${binaryName} NAPI binary exists at '${path}' but failed to load: ${(e as Error).message}`,
+        `${binaryName} NAPI binary exists at '${path}' but failed to load: ${e instanceof Error ? e.message : String(e)}`,
         {
           hint: 'Check that the binary was built for the current platform and Node ABI. Rebuild with `pnpm --filter @c9up/ream build:rust`.',
         },

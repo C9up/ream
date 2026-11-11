@@ -511,7 +511,10 @@ export class GraphQLEngine {
     // Full-Rust: the spec-compliant `ream-graphql` parser (graphql-parser
     // crate) rejects invalid queries before any resolver runs. No TS fallback —
     // ream ships the native binary, so when Rust exists the engine is Rust.
-    const raw = JSON.parse(graphqlNative().graphqlParse(query)) as RustParseResult
+    const raw: unknown = JSON.parse(graphqlNative().graphqlParse(query))
+    if (!isRustParseResult(raw)) {
+      return { typeName: 'Query', fields: [], errors: [{ message: 'Unreadable parse result' }] }
+    }
     const typeName = OPERATION_TYPE[raw.operation_type] ?? 'Query'
     if (raw.errors.length > 0) {
       return { typeName, fields: [], errors: raw.errors.map((message) => ({ message })) }
@@ -584,6 +587,30 @@ function parseGraphQLBody(body: unknown): GraphQLRequest | null {
   const operationName = typeof rawOpName === 'string' ? rawOpName : undefined
 
   return { query: q, variables, operationName }
+}
+
+/** The shape the native parser answers with, checked rather than assumed. */
+function isRustParseResult(value: unknown): value is RustParseResult {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.operation_type === 'string' &&
+    (value.operation_name === null || typeof value.operation_name === 'string') &&
+    Array.isArray(value.errors) &&
+    value.errors.every((error) => typeof error === 'string') &&
+    Array.isArray(value.fields) &&
+    value.fields.every(isRustParsedField)
+  )
+}
+
+function isRustParsedField(value: unknown): value is RustParsedField {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.name === 'string' &&
+    (value.alias === null || typeof value.alias === 'string') &&
+    isRecord(value.args) &&
+    Array.isArray(value.sub_fields) &&
+    value.sub_fields.every(isRustParsedField)
+  )
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

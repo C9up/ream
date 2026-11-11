@@ -56,6 +56,7 @@ function isMimeType(value: string): value is MimeType {
 
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
+import { errorCode } from '../helpers/errors.js'
 import { parseSize } from './parseSize.js'
 import { parseFormFields } from './qsParse.js'
 
@@ -395,7 +396,7 @@ export class MultipartFile {
     try {
       await writeFile(filePath, this.content, options?.overwrite === false ? { flag: 'wx' } : {})
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      if (errorCode(error) === 'EEXIST') {
         throw new Error(
           `"${name}" already exists at "${location}". Set "overwrite = true" to overwrite it`,
         )
