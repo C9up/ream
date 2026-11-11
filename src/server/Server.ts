@@ -39,7 +39,10 @@ export interface GrpcCall {
   path: string
   /**
    * Request metadata: the request headers, every value of a repeated one in
-   * order, names lowercased. Never the client's trailers.
+   * order, names lowercased. Never the client's trailers. A `-bin` value is
+   * the base64 text that arrived: this is the HTTP/2 header layer, and the
+   * gRPC package that registers the handler decodes it, as a gRPC library's
+   * metadata class does over Node's HTTP/2 headers.
    */
   metadata: Record<string, string[]>
   /** The request message, still encoded. */

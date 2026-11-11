@@ -42,7 +42,10 @@ pub struct GrpcCall {
     pub path: String,
     /// Request metadata: the request headers, every value of a repeated one
     /// in order, names lowercased. Values that are not visible ASCII are left
-    /// out.
+    /// out. A `-bin` value is handed over as it arrived, base64 text: this is
+    /// the HTTP/2 header layer, and decoding belongs to the gRPC metadata
+    /// layer above it, the way a Node HTTP/2 server passes `-bin` headers
+    /// through and the gRPC library's metadata class decodes them.
     pub metadata: HashMap<String, Vec<String>>,
     /// The request message, still encoded.
     pub message: Bytes,
@@ -212,7 +215,9 @@ async fn read_message(mut body: Incoming, max: usize) -> Result<Bytes, Status> {
 }
 
 /// Request metadata from the headers, keeping every value of a repeated
-/// one. Values that are not visible ASCII are left out.
+/// one. Values that are not visible ASCII are left out. `-bin` values stay
+/// base64 text (see [`GrpcCall::metadata`]): decoding them here as well
+/// would hand the gRPC layer bytes it decodes a second time.
 fn metadata_of(headers: &hyper::HeaderMap) -> HashMap<String, Vec<String>> {
     let mut metadata: HashMap<String, Vec<String>> = HashMap::new();
     for (name, value) in headers {
@@ -336,6 +341,24 @@ mod tests {
             seen.lock().unwrap().push(call);
             Box::pin(async move { GrpcReply::Message(Bytes::from(reply)) })
         })
+    }
+
+    #[test]
+    fn metadata_keeps_bin_values_as_received_and_every_repeated_value() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.append("trace-bin", "AAEC/w==".parse().unwrap());
+        headers.append("trace-bin", "3q2+7w".parse().unwrap());
+        headers.append("x-tenant", "a".parse().unwrap());
+        headers.append("x-tenant", "b".parse().unwrap());
+        let metadata = metadata_of(&headers);
+        assert_eq!(
+            metadata.get("trace-bin"),
+            Some(&vec!["AAEC/w==".to_owned(), "3q2+7w".to_owned()])
+        );
+        assert_eq!(
+            metadata.get("x-tenant"),
+            Some(&vec!["a".to_owned(), "b".to_owned()])
+        );
     }
 
     async fn start(configure: impl FnOnce(&mut ReamServer)) -> (ReamServer, u16) {
