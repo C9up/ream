@@ -24,9 +24,10 @@ pub use grpc::{GrpcCall, GrpcHandler, GrpcLimits, GrpcReply};
 pub use ip::{
     ip_in_cidr, resolve_client_ip, resolve_client_ips, InvalidProxyEntry, TrustedProxies,
 };
-pub use limits::{BodyLimit, BodyLimits, ConnectionLimits};
+pub use limits::{BodyLimit, BodyLimits, ConnectionLimits, MultipartCounts};
 pub use multipart::{
-    extract_boundary, parse_multipart, MultipartField, MultipartFilePayload, MultipartPayload,
+    extract_boundary, parse_multipart, MultipartError, MultipartField, MultipartFilePayload,
+    MultipartPayload,
 };
 pub use ratelimit::{RateLimitConfig, RateLimitOutcome, RateLimiter};
 pub use request::ReamRequest;

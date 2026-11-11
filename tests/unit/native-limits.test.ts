@@ -42,6 +42,12 @@ describe('native limits > config translation', () => {
     })
   })
 
+  it('hands the multipart part counts to the native parser', () => {
+    expect(nativeBodyLimits({ multipart: { maxFields: 50, maxFiles: 5 } })).toEqual({
+      multipart: { maxFields: 50, maxFiles: 5 },
+    })
+  })
+
   it('picks the timeouts and the connection cap out of the http block', () => {
     expect(
       nativeConnectionConfig({

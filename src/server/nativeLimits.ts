@@ -29,12 +29,21 @@ export interface NativeBodyLimit {
   types?: string[]
 }
 
+/**
+ * The multipart section, with the part counts the native parser enforces
+ * while it parses: it stops at the first field or file past its bound.
+ */
+export interface NativeMultipartLimit extends NativeBodyLimit {
+  maxFields?: number
+  maxFiles?: number
+}
+
 /** Body limits per body-parser section; an omitted section keeps its default. */
 export interface NativeBodyLimits {
   json?: NativeBodyLimit
   form?: NativeBodyLimit
   raw?: NativeBodyLimit
-  multipart?: NativeBodyLimit
+  multipart?: NativeMultipartLimit
 }
 
 /** Timeouts in milliseconds (`0` disables one) and the connection cap (`0` = unbounded). */
@@ -57,6 +66,14 @@ export function nativeBodyLimits(config: BodyParserConfig): NativeBodyLimits {
     if (given.limit !== undefined) native.limit = parseSize(given.limit)
     if (given.types !== undefined) native.types = [...given.types]
     limits[section] = native
+  }
+  const multipart = config.multipart
+  if (multipart) {
+    limits.multipart = {
+      ...limits.multipart,
+      ...(multipart.maxFields !== undefined && { maxFields: multipart.maxFields }),
+      ...(multipart.maxFiles !== undefined && { maxFiles: multipart.maxFiles }),
+    }
   }
   return limits
 }

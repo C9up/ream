@@ -179,6 +179,74 @@ describeIfNetwork('native server > body limits', () => {
   it('refuses a negative limit', () => {
     const server = new HyperServer(0)
     expect(() => server.configureBodyLimits({ json: { limit: -1 } })).toThrow(/INVALID_BODY_LIMIT/)
+    expect(() => server.configureBodyLimits({ multipart: { maxFields: -1 } })).toThrow(
+      /INVALID_BODY_LIMIT/,
+    )
+  })
+
+  /** A multipart body of `fields` empty text parts and `files` one-byte files. */
+  function multipart(fields: number, files: number): FormData {
+    const form = new FormData()
+    for (let i = 0; i < fields; i += 1) form.append(`f${i}`, '')
+    for (let i = 0; i < files; i += 1) form.append(`u${i}`, new Blob(['x']), `u${i}.txt`)
+    return form
+  }
+
+  const parts = (raw: Record<string, unknown>) => {
+    const payload = rawField(raw, 'multipart')
+    const count = (key: string): number => {
+      if (typeof payload !== 'object' || payload === null) return -1
+      const list: unknown = Reflect.get(payload, key)
+      return Array.isArray(list) ? list.length : -1
+    }
+    return JSON.stringify({
+      seen: {
+        tooLarge: rawField(raw, 'bodyTooLarge') === true,
+        fields: count('fields'),
+        files: count('files'),
+      },
+    })
+  }
+
+  it('stops parsing a multipart body at the first part past maxFields or maxFiles', async () => {
+    const { port, close } = await serve(parts, (server) =>
+      server.configureBodyLimits({ multipart: { maxFields: 2, maxFiles: 2 } }),
+    )
+    try {
+      const post = async (form: FormData) =>
+        (await fetch(`http://127.0.0.1:${port}/`, { method: 'POST', body: form })).json()
+
+      expect(await post(multipart(2, 2))).toEqual({
+        seen: { tooLarge: false, fields: 2, files: 2 },
+      })
+      expect(await post(multipart(3, 0))).toEqual({
+        seen: { tooLarge: true, fields: -1, files: -1 },
+      })
+      expect(await post(multipart(0, 3))).toEqual({
+        seen: { tooLarge: true, fields: -1, files: -1 },
+      })
+    } finally {
+      await close()
+    }
+  })
+
+  it('never ships a body of hundreds of thousands of empty parts to JavaScript', async () => {
+    // The default bound is 1000 fields: the parse stops at part 1001 instead
+    // of parsing, encoding and converting every one of them first.
+    const { port, close } = await serve(parts)
+    const part = '--B\r\nContent-Disposition: form-data; name="f"\r\n\r\n\r\n'
+    const body = `${part.repeat(350_000)}--B--\r\n`
+    expect(body.length).toBeLessThan(20 * 1024 * 1024)
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, {
+        method: 'POST',
+        headers: { 'content-type': 'multipart/form-data; boundary=B' },
+        body,
+      })
+      expect(await res.json()).toEqual({ seen: { tooLarge: true, fields: -1, files: -1 } })
+    } finally {
+      await close()
+    }
   })
 })
 

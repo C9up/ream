@@ -113,7 +113,20 @@ export interface NapiBodyLimits {
   json?: NapiBodyLimit
   form?: NapiBodyLimit
   raw?: NapiBodyLimit
-  multipart?: NapiBodyLimit
+  multipart?: NapiMultipartLimit
+}
+
+/**
+ * The multipart section: its size limit and types, and how many fields
+ * and files a body may carry (default 1000 each), enforced while the body
+ * is parsed.
+ */
+
+export interface NapiMultipartLimit {
+  limit?: number
+  types?: Array<string>
+  maxFields?: number
+  maxFiles?: number
 }
 
 /**
@@ -168,9 +181,10 @@ export declare class EventBus {
 
 export declare class HyperServer {
   /**
-   * `host` is the bind address: an IPv4 literal (`0.0.0.0` to accept from
-   * every interface) or the `localhost` alias. Omitted → loopback only,
-   * the safe default for a dev machine.
+   * `host` is the bind address: an IPv4 or IPv6 literal (`0.0.0.0` or `::`
+   * to accept from every interface, a bracketed `[::1]` too) or the
+   * `localhost` alias. Omitted → loopback only, the safe default for a dev
+   * machine.
    */
   constructor(port?: number | undefined | null, host?: string | undefined | null)
   /**

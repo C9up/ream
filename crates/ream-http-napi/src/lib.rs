@@ -9,9 +9,9 @@ use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMod
 use napi::JsValue;
 use napi_derive::napi;
 use ream_http::{
-    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcLimits, GrpcReply, RateLimitConfig,
-    RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig, ShieldFilter, StreamRegistry,
-    TrustedProxies,
+    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcLimits, GrpcReply, MultipartCounts,
+    RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig,
+    ShieldFilter, StreamRegistry, TrustedProxies,
 };
 use ream_napi_core::callback::FatalThreadsafeFunction;
 use ream_napi_core::catch_unwind_napi;
@@ -180,7 +180,18 @@ pub struct NapiBodyLimits {
     pub json: Option<NapiBodyLimit>,
     pub form: Option<NapiBodyLimit>,
     pub raw: Option<NapiBodyLimit>,
-    pub multipart: Option<NapiBodyLimit>,
+    pub multipart: Option<NapiMultipartLimit>,
+}
+
+/// The multipart section: its size limit and types, and how many fields
+/// and files a body may carry (default 1000 each), enforced while the body
+/// is parsed.
+#[napi(object)]
+pub struct NapiMultipartLimit {
+    pub limit: Option<i64>,
+    pub types: Option<Vec<String>>,
+    pub max_fields: Option<i64>,
+    pub max_files: Option<i64>,
 }
 
 /// Timeouts (milliseconds) and the connection cap, named after the Node
@@ -221,6 +232,19 @@ fn merge_body_limit(
         limit,
         types: given.types.unwrap_or(base.types),
     })
+}
+
+/// A multipart part count: a whole number of zero or more.
+fn part_count(name: &str, given: Option<i64>, default: usize) -> napi::Result<usize> {
+    match given {
+        None => Ok(default),
+        Some(count) => usize::try_from(count).map_err(|_| {
+            invalid_config(
+                "INVALID_BODY_LIMIT",
+                format!("`multipart.{name}` must be a count of zero or more, got {count}"),
+            )
+        }),
+    }
 }
 
 /// A bind address: an IPv4 or IPv6 literal, an IPv6 one possibly in the
@@ -534,11 +558,29 @@ impl HyperServer {
     #[napi]
     pub fn configure_body_limits(&self, config: NapiBodyLimits) -> napi::Result<()> {
         let defaults = BodyLimits::default();
+        let (multipart, multipart_counts) = match config.multipart {
+            None => (defaults.multipart, defaults.multipart_counts),
+            Some(given) => {
+                let counts = MultipartCounts {
+                    max_fields: part_count("maxFields", given.max_fields, 1000)?,
+                    max_files: part_count("maxFiles", given.max_files, 1000)?,
+                };
+                let limit = NapiBodyLimit {
+                    limit: given.limit,
+                    types: given.types,
+                };
+                (
+                    merge_body_limit("multipart", defaults.multipart, Some(limit))?,
+                    counts,
+                )
+            }
+        };
         let limits = BodyLimits {
             json: merge_body_limit("json", defaults.json, config.json)?,
             form: merge_body_limit("form", defaults.form, config.form)?,
             raw: merge_body_limit("raw", defaults.raw, config.raw)?,
-            multipart: merge_body_limit("multipart", defaults.multipart, config.multipart)?,
+            multipart,
+            multipart_counts,
         };
         let mut guard = self.body_limits.lock().map_err(|_| {
             napi::Error::new(napi::Status::GenericFailure, "Body-limits mutex poisoned")

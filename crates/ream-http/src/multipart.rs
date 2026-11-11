@@ -44,13 +44,33 @@ pub struct MultipartPayload {
     pub files: Vec<MultipartFilePayload>,
 }
 
+/// Why a multipart body was not parsed.
+#[derive(Debug)]
+pub enum MultipartError {
+    /// The body is not well-formed multipart; answered 400.
+    Malformed(multer::Error),
+    /// More fields than `max_fields`; the body is dropped as over its limit.
+    TooManyFields,
+    /// More files than `max_files`; the body is dropped as over its limit.
+    TooManyFiles,
+}
+
+impl From<multer::Error> for MultipartError {
+    fn from(error: multer::Error) -> Self {
+        Self::Malformed(error)
+    }
+}
+
 /// Parse a `multipart/form-data` body. The boundary is extracted from the
-/// `Content-Type` header by the caller. Returns `Err` if the body is
-/// malformed; the server then surfaces a 400.
+/// `Content-Type` header by the caller. The part counts are enforced as the
+/// parts arrive: the parse stops at the first field or file past its bound,
+/// before that part is read, so a body of hundreds of thousands of empty
+/// parts costs no more than the first `max + 1` of them.
 pub async fn parse_multipart(
     boundary: &str,
     body: Bytes,
-) -> Result<MultipartPayload, multer::Error> {
+    counts: crate::limits::MultipartCounts,
+) -> Result<MultipartPayload, MultipartError> {
     use futures_core::Stream;
     use std::pin::Pin;
     use std::task::{Context, Poll};
@@ -79,6 +99,14 @@ pub async fn parse_multipart(
             .content_type()
             .map(|m| m.to_string())
             .unwrap_or_default();
+
+        let is_file = file_name.as_deref().is_some_and(|name| !name.is_empty());
+        if is_file && payload.files.len() >= counts.max_files {
+            return Err(MultipartError::TooManyFiles);
+        }
+        if !is_file && payload.fields.len() >= counts.max_fields {
+            return Err(MultipartError::TooManyFields);
+        }
 
         // `bytes()` consumes the field — we drop the `Field` after.
         let bytes = field.bytes().await?;
@@ -134,6 +162,7 @@ pub fn extract_boundary(content_type: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::limits::MultipartCounts;
 
     fn body_with_text_field(boundary: &str, name: &str, value: &str) -> Bytes {
         let body = format!(
@@ -189,7 +218,9 @@ mod tests {
     #[tokio::test]
     async fn parses_a_single_text_field() {
         let body = body_with_text_field("BOUND", "title", "hello world");
-        let payload = parse_multipart("BOUND", body).await.unwrap();
+        let payload = parse_multipart("BOUND", body, MultipartCounts::default())
+            .await
+            .unwrap();
         assert_eq!(payload.fields.len(), 1);
         assert_eq!(payload.fields[0].name, "title");
         assert_eq!(payload.fields[0].value, "hello world");
@@ -205,7 +236,9 @@ mod tests {
             "image/png",
             &[0x89, 0x50, 0x4e, 0x47],
         );
-        let payload = parse_multipart("BOUND", body).await.unwrap();
+        let payload = parse_multipart("BOUND", body, MultipartCounts::default())
+            .await
+            .unwrap();
         assert_eq!(payload.files.len(), 1);
         let file = &payload.files[0];
         assert_eq!(file.field_name, "avatar");
@@ -227,7 +260,9 @@ mod tests {
             .to_vec();
         bytes.extend_from_slice(&[1, 2, 3]);
         bytes.extend_from_slice(b"\r\n--BOUND--\r\n");
-        let payload = parse_multipart("BOUND", Bytes::from(bytes)).await.unwrap();
+        let payload = parse_multipart("BOUND", Bytes::from(bytes), MultipartCounts::default())
+            .await
+            .unwrap();
         assert_eq!(payload.files[0].content_type, "application/octet-stream");
     }
 
@@ -235,6 +270,53 @@ mod tests {
     async fn malformed_body_surfaces_error() {
         // Boundary doesn't appear in the body — multer reports an error
         let body = Bytes::from("not a multipart body");
-        assert!(parse_multipart("BOUND", body).await.is_err());
+        assert!(parse_multipart("BOUND", body, MultipartCounts::default())
+            .await
+            .is_err());
+    }
+
+    /// `count` empty text fields, then `files` one-byte files.
+    fn many_parts(fields: usize, files: usize) -> Bytes {
+        let mut body = String::new();
+        for i in 0..fields {
+            body.push_str(&format!(
+                "--B\r\nContent-Disposition: form-data; name=\"f{i}\"\r\n\r\n\r\n"
+            ));
+        }
+        for i in 0..files {
+            body.push_str(&format!(
+                "--B\r\nContent-Disposition: form-data; name=\"u{i}\"; filename=\"u{i}.txt\"\r\n\r\nx\r\n"
+            ));
+        }
+        body.push_str("--B--\r\n");
+        Bytes::from(body)
+    }
+
+    fn counts(max_fields: usize, max_files: usize) -> MultipartCounts {
+        MultipartCounts {
+            max_fields,
+            max_files,
+        }
+    }
+
+    #[tokio::test]
+    async fn stops_at_the_first_field_past_max_fields() {
+        let result = parse_multipart("B", many_parts(350_000, 0), counts(1000, 1000)).await;
+        assert!(matches!(result, Err(MultipartError::TooManyFields)));
+    }
+
+    #[tokio::test]
+    async fn stops_at_the_first_file_past_max_files() {
+        let result = parse_multipart("B", many_parts(0, 3), counts(1000, 2)).await;
+        assert!(matches!(result, Err(MultipartError::TooManyFiles)));
+    }
+
+    #[tokio::test]
+    async fn accepts_exactly_the_configured_counts() {
+        let payload = parse_multipart("B", many_parts(2, 2), counts(2, 2))
+            .await
+            .unwrap();
+        assert_eq!(payload.fields.len(), 2);
+        assert_eq!(payload.files.len(), 2);
     }
 }

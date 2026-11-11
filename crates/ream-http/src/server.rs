@@ -939,11 +939,33 @@ async fn hyper_to_ream_request(
     // Multipart: parse server-side via `multer`. Ship structured fields/files
     // to JS instead of the raw boundary-framed bytes. JS no longer parses.
     if media_type == "multipart/form-data" {
+        let counts = context.body_limits.multipart_counts;
         let payload = match crate::multipart::extract_boundary(&content_type) {
             Some(boundary) => {
-                match crate::multipart::parse_multipart(&boundary, body_bytes).await {
+                match crate::multipart::parse_multipart(&boundary, body_bytes, counts).await {
                     Ok(p) => Some(p),
-                    Err(_) => {
+                    // Too many parts: dropped like a body over its size limit,
+                    // so routing still answers first and the body parser
+                    // raises the 413 once the route reads the body.
+                    Err(
+                        crate::multipart::MultipartError::TooManyFields
+                        | crate::multipart::MultipartError::TooManyFiles,
+                    ) => {
+                        let mut req = ReamRequest::from_hyper_with_addr(
+                            &method,
+                            &uri,
+                            headers,
+                            String::new(),
+                            peer_ip,
+                        );
+                        req.body_too_large = true;
+                        req.ip = resolved_ip;
+                        req.ips = ips;
+                        req.peer_trusted = peer_trusted;
+                        req.cookies = cookies;
+                        return Ok(req);
+                    }
+                    Err(crate::multipart::MultipartError::Malformed(_)) => {
                         return Err(ReamResponse::json(
                             400,
                             r#"{"error":{"code":"E_BAD_MULTIPART","message":"Malformed multipart/form-data body"}}"#,

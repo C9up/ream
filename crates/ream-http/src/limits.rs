@@ -45,6 +45,26 @@ pub struct BodyLimits {
     pub form: BodyLimit,
     pub raw: BodyLimit,
     pub multipart: BodyLimit,
+    /// How many fields and files a multipart body may carry.
+    pub multipart_counts: MultipartCounts,
+}
+
+/// The part counts of a multipart body, enforced while it is parsed: the
+/// parse stops at the first part past either bound, before reading it.
+/// The body parser's `maxFields` and `maxFiles`, both 1000 by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultipartCounts {
+    pub max_fields: usize,
+    pub max_files: usize,
+}
+
+impl Default for MultipartCounts {
+    fn default() -> Self {
+        Self {
+            max_fields: 1000,
+            max_files: 1000,
+        }
+    }
 }
 
 impl Default for BodyLimits {
@@ -62,6 +82,7 @@ impl Default for BodyLimits {
             form: BodyLimit::new(MB, &["application/x-www-form-urlencoded"]),
             raw: BodyLimit::new(MB, &["text/*"]),
             multipart: BodyLimit::new(20 * MB, &["multipart/form-data"]),
+            multipart_counts: MultipartCounts::default(),
         }
     }
 }
