@@ -1227,7 +1227,10 @@ export class Router extends Macroable {
         this.#staticIndex.get(`${method}:${candidatePath}`) ??
         this.#staticIndex.get(`*:${candidatePath}`)
       if (staticRoute) {
-        if (!staticRoute.domain || !host || matchDomain(staticRoute.domain, host)) {
+        // A missing host matches no domain: only routes without one are
+        // candidates, so a domain-scoped route is never served to a request
+        // that simply omits its Host header.
+        if (!staticRoute.domain || (host !== undefined && matchDomain(staticRoute.domain, host))) {
           return { route: staticRoute, params: {} }
         }
       }
@@ -1235,7 +1238,7 @@ export class Router extends Macroable {
       // 2. Try parametric routes (only same-method candidates)
       const paramCandidates = this.#paramIndex.get(method) ?? []
       for (const route of paramCandidates) {
-        if (route.domain && host && !matchDomain(route.domain, host)) continue
+        if (route.domain && (host === undefined || !matchDomain(route.domain, host))) continue
 
         const params = matchPath(route.path, candidatePath)
         if (params === null) continue

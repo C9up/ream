@@ -217,4 +217,21 @@ describe('Router > a host matches case-insensitively', () => {
   it('ignores the port', () => {
     expect(scoped().match('GET', '/a', 'API.example.com:8080')).toBeDefined()
   })
+
+  it('never serves a domain-scoped route to a request that carries no host', () => {
+    // An HTTP/1.0 request may omit Host entirely. A missing host must match
+    // no domain at all, or the domain restriction is bypassed by leaving the
+    // header out.
+    const router = new Router()
+    router.get('/admin', () => {}).domain('admin.example.com')
+    router.get('/tenant/:id', () => {}).domain('*.example.com')
+    router.get('/public', () => {})
+    router.commit()
+
+    expect(router.match('GET', '/admin', undefined)).toBeUndefined()
+    expect(router.match('GET', '/tenant/1', undefined)).toBeUndefined()
+    expect(router.match('GET', '/admin', '')).toBeUndefined()
+    expect(router.match('GET', '/public', undefined)).toBeDefined()
+    expect(router.match('GET', '/admin', 'admin.example.com')).toBeDefined()
+  })
 })
