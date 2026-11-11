@@ -182,7 +182,33 @@ jobs:
           cp target/release/libream_napi_test.so tests/integration/napi/index.linux-x64-gnu.node
       - name: Build TS (tsc -> dist/)
         run: pnpm build
-      - run: pnpm exec vitest run --coverage
+      # Two reporters on purpose: the JSON one feeds the zero-skipped gate, the
+      # default one is what a human reads.
+      - name: Vitest
+        run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile=test-results.json
+      # This job builds the host binaries, so every suite gated on them (the
+      # native HTTP server, the scheduler, the stream contract, the event bus)
+      # is expected to run here. A binary that stops loading, or a runner that
+      # sets REAM_SKIP_NETWORK_TESTS, turns those suites into skips; without
+      # this gate the run stayed green with them untested.
+      - name: Gate — tests ran AND zero skipped
+        run: |
+          if [ ! -f test-results.json ]; then
+            echo "::error::test-results.json not produced — vitest failed before writing"
+            exit 1
+          fi
+          total=$(jq '[.testResults[].assertionResults[]] | length' test-results.json)
+          if [ "$total" -eq 0 ]; then
+            echo "::error::0 tests ran — test discovery is broken (check vitest include glob)"
+            exit 1
+          fi
+          skipped=$(jq '[.testResults[].assertionResults[] | select(.status=="skipped" or .status=="pending" or .status=="todo")] | length' test-results.json)
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::$skipped tests skipped — check the native binaries load and REAM_SKIP_NETWORK_TESTS is unset"
+            jq -r '.testResults[] | .name as $file | .assertionResults[] | select(.status=="skipped" or .status=="pending" or .status=="todo") | "\($file): \(.fullName)"' test-results.json
+            exit 1
+          fi
+        shell: bash
       # The native scheduler's ticker, end to end. Cron is minute-grained, so
       # this waits up to a minute; it runs here, on its own, rather than in the
       # suite above, and is never skipped.
