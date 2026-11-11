@@ -726,6 +726,52 @@ pub(crate) fn request_headers(uri: &hyper::Uri, map: &hyper::HeaderMap) -> HashM
     headers
 }
 
+/// The media type of a `Content-Type` value: parameters dropped, lowercased.
+/// Media types are case-insensitive, so `Multipart/Form-Data` is multipart.
+fn media_type(content_type: &str) -> String {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// Whether a body of this media type is text the application reads as a
+/// string: `text/*`, JSON, XML, form-encoded, JavaScript, GraphQL, or no
+/// media type at all.
+fn is_textual(media_type: &str) -> bool {
+    media_type.is_empty()
+        || media_type.starts_with("text/")
+        || media_type.ends_with("+json")
+        || media_type.ends_with("+xml")
+        || matches!(
+            media_type,
+            "application/json"
+                | "application/xml"
+                | "application/x-www-form-urlencoded"
+                | "application/javascript"
+                | "application/graphql"
+        )
+}
+
+/// The body as it crosses into JavaScript, with its encoding: as a string
+/// when it is valid UTF-8 of a textual media type, otherwise base64, so
+/// every byte of an upload reaches `request.rawBuffer()` exactly as sent.
+/// Decoding a PNG or a PDF as UTF-8 replaced each invalid byte with U+FFFD.
+fn encode_body(media_type: &str, bytes: &[u8]) -> (String, &'static str) {
+    if is_textual(media_type) {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return (text.to_owned(), "utf8");
+        }
+    }
+    use base64::Engine;
+    (
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+        "base64",
+    )
+}
+
 /// The most of an over-limit body the server reads and throws away while the
 /// request is answered without it, so a client still uploading receives the
 /// answer instead of a reset connection (Node discards an unread body the
@@ -851,6 +897,7 @@ async fn hyper_to_ream_request(
     let uri = origin_form(req.uri());
     let headers = request_headers(req.uri(), req.headers());
     let content_type = headers.get("content-type").cloned().unwrap_or_default();
+    let media_type = media_type(&content_type);
 
     // The body-parser limit for this content type, applied while reading:
     // nothing past it is ever buffered.
@@ -890,7 +937,7 @@ async fn hyper_to_ream_request(
 
     // Multipart: parse server-side via `multer`. Ship structured fields/files
     // to JS instead of the raw boundary-framed bytes. JS no longer parses.
-    if content_type.starts_with("multipart/form-data") {
+    if media_type == "multipart/form-data" {
         let payload = match crate::multipart::extract_boundary(&content_type) {
             Some(boundary) => {
                 match crate::multipart::parse_multipart(&boundary, body_bytes).await {
@@ -921,19 +968,9 @@ async fn hyper_to_ream_request(
         return Ok(req);
     }
 
-    // Other binary content (`application/octet-stream`, etc.) still rides as
-    // base64 — JS layer decodes via `Request.rawBuffer()`.
-    let is_binary = content_type.starts_with("application/octet-stream");
-    let mut req = if is_binary {
-        use base64::Engine;
-        let body = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
-        let mut req = ReamRequest::from_hyper_with_addr(&method, &uri, headers, body, peer_ip);
-        req.body_encoding = "base64".to_string();
-        req
-    } else {
-        let body = String::from_utf8_lossy(&body_bytes).into_owned();
-        ReamRequest::from_hyper_with_addr(&method, &uri, headers, body, peer_ip)
-    };
+    let (body, encoding) = encode_body(&media_type, &body_bytes);
+    let mut req = ReamRequest::from_hyper_with_addr(&method, &uri, headers, body, peer_ip);
+    req.body_encoding = encoding.to_string();
     req.ip = resolved_ip;
     req.ips = ips;
     req.peer_trusted = peer_trusted;
@@ -1787,6 +1824,86 @@ mod tests {
 
         let uri: hyper::Uri = "/x".parse().unwrap();
         assert!(!request_headers(&uri, &hyper::HeaderMap::new()).contains_key("host"));
+    }
+
+    #[test]
+    fn a_binary_body_crosses_as_base64_whatever_its_media_type() {
+        use base64::Engine;
+        let png = [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x80];
+        for media in [
+            "image/png",
+            "application/pdf",
+            "application/octet-stream",
+            "",
+        ] {
+            let (body, encoding) = encode_body(media, &png);
+            assert_eq!(encoding, "base64", "{media}");
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(body)
+                    .unwrap(),
+                png
+            );
+        }
+        // Invalid UTF-8 under a textual media type is not decoded either.
+        assert_eq!(encode_body("text/plain", &png).1, "base64");
+        // A valid UTF-8 body of a binary media type is still shipped as bytes.
+        assert_eq!(encode_body("image/svg", b"abc").1, "base64");
+    }
+
+    #[test]
+    fn a_textual_body_crosses_as_a_string() {
+        for media in [
+            "application/json",
+            "application/vnd.api+json",
+            "text/plain",
+            "application/x-www-form-urlencoded",
+            "",
+        ] {
+            assert_eq!(
+                encode_body(media, "{\"caf\u{e9}\":1}".as_bytes()),
+                ("{\"caf\u{e9}\":1}".to_owned(), "utf8"),
+                "{media}"
+            );
+        }
+    }
+
+    #[test]
+    fn media_types_compare_case_insensitively() {
+        assert_eq!(
+            media_type("Multipart/Form-Data; Boundary=b"),
+            "multipart/form-data"
+        );
+        assert_eq!(
+            media_type("Application/Octet-Stream"),
+            "application/octet-stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mixed_case_multipart_body_is_parsed() {
+        let (mut server, port, _) = start(|req| req.body_encoding.clone(), |_| {}).await;
+        let part = "--b\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhi\r\n--b--\r\n";
+        let request = format!(
+            "POST / HTTP/1.1\r\nHost: x\r\nContent-Type: Multipart/Form-Data; Boundary=b\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{part}",
+            part.len()
+        );
+        let response = exchange(port, request.as_bytes(), Duration::from_secs(5)).await;
+        assert_eq!(body_of(&response), "multipart");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_binary_upload_reaches_the_handler_byte_for_byte() {
+        let (mut server, port, _) =
+            start(|req| format!("{}|{}", req.body_encoding, req.body), |_| {}).await;
+        let mut request =
+            b"PUT / HTTP/1.1\r\nHost: x\r\nContent-Type: image/png\r\nContent-Length: 7\r\nConnection: close\r\n\r\n"
+                .to_vec();
+        request.extend_from_slice(&[0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x80]);
+        let response = exchange(port, &request, Duration::from_secs(5)).await;
+        assert_eq!(body_of(&response), "base64|iVBOR//+gA==");
+        server.shutdown().await;
     }
 
     #[tokio::test]

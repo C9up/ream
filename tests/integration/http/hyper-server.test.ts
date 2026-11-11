@@ -1,7 +1,8 @@
 import { connect } from 'node:http2'
+import { createConnection } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { HyperServer } from './loader.js'
-import { asRequest, type NapiRequest } from './napi-request.js'
+import { asRequest, type NapiRequest, rawField } from './napi-request.js'
 
 /**
  * Some sandboxed environments (restricted container runtimes, certain
@@ -275,5 +276,61 @@ describeIfNetwork('hyper-server > HTTP/2', () => {
     } finally {
       await close()
     }
+  })
+})
+
+describeIfNetwork('hyper-server > binary request bodies', () => {
+  /** Send `body` raw under `contentType`; resolve with what the handler saw. */
+  async function upload(
+    contentType: string,
+    body: Buffer,
+  ): Promise<{ encoding: unknown; bytes: Buffer }> {
+    const server = new HyperServer(0)
+    let seen: { encoding: unknown; bytes: Buffer } | undefined
+    server.onRequest(async (raw) => {
+      const encoding = rawField(raw, 'bodyEncoding')
+      const text = asRequest(raw).body
+      seen = {
+        encoding,
+        bytes: Buffer.from(text, encoding === 'base64' ? 'base64' : 'utf8'),
+      }
+      return { status: 200, headers: {}, body: 'ok' }
+    })
+    await server.listen()
+    const port = await server.port()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection(port, '127.0.0.1', () => {
+          socket.write(
+            `PUT /upload HTTP/1.1\r\nHost: x\r\nContent-Type: ${contentType}\r\n` +
+              `Content-Length: ${body.length}\r\nConnection: close\r\n\r\n`,
+          )
+          socket.write(body)
+        })
+        socket.on('error', reject)
+        socket.resume()
+        socket.on('end', () => resolve())
+      })
+    } finally {
+      await server.close()
+    }
+    if (seen === undefined) throw new Error('the handler was never called')
+    return seen
+  }
+
+  it('hands over every byte of an upload whatever its media type', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x80])
+    for (const contentType of ['image/png', 'application/pdf', 'Application/Octet-Stream']) {
+      const seen = await upload(contentType, png)
+      expect(seen.encoding).toBe('base64')
+      expect(seen.bytes.equals(png)).toBe(true)
+    }
+  })
+
+  it('still hands a JSON body over as text', async () => {
+    const json = Buffer.from('{"caf\u00e9":1}')
+    const seen = await upload('application/json', json)
+    expect(seen.encoding).toBe('utf8')
+    expect(seen.bytes.equals(json)).toBe(true)
   })
 })

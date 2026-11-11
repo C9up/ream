@@ -115,7 +115,12 @@ pub async fn parse_multipart(
 pub fn extract_boundary(content_type: &str) -> Option<String> {
     for part in content_type.split(';') {
         let trimmed = part.trim();
-        if let Some(rest) = trimmed.strip_prefix("boundary=") {
+        // Parameter names are case-insensitive (RFC 9110 §5.6.6).
+        let rest = match (trimmed.get(..9), trimmed.get(9..)) {
+            (Some(name), Some(rest)) if name.eq_ignore_ascii_case("boundary=") => Some(rest),
+            _ => None,
+        };
+        if let Some(rest) = rest {
             // Strip surrounding quotes if present (`boundary="abc"`)
             let unquoted = rest.trim_matches('"');
             if !unquoted.is_empty() {
