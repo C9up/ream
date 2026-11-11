@@ -186,6 +186,12 @@ export type MatchedParams = Record<string, string | string[]>
 export interface MatchResult {
   route: RouteDefinition
   params: MatchedParams
+  /**
+   * The values a parameterised domain captured from the host —
+   * `{ tenant: 'acme' }` for `:tenant.app.test` on `acme.app.test`. Empty for
+   * an exact or wildcard domain, and for a route without one.
+   */
+  subdomains: Record<string, string>
 }
 
 // ─── Matchers ───────────────────────────────────────────────
@@ -868,8 +874,8 @@ export class Router extends Macroable {
   #staticIndex: Map<string, RouteDefinition> = new Map()
   /** Index: parametric routes grouped by method. */
   #paramIndex: Map<string, RouteDefinition[]> = new Map()
-  /** Index: every domain a route is scoped to, lowercased, in registration order. */
-  #domains: string[] = []
+  /** Index: every domain a route is scoped to, compiled, in registration order. */
+  #domains: CompiledDomain[] = []
   /** Index: named routes for O(1) URL generation. */
   #nameIndex: Map<string, RouteDefinition> = new Map()
   /** Whether the index needs rebuilding. */
@@ -1183,8 +1189,10 @@ export class Router extends Macroable {
       }
 
       if (route.domain !== undefined) {
-        const domain = route.domain.toLowerCase()
-        if (!this.#domains.includes(domain)) this.#domains.push(domain)
+        const pattern = route.domain.toLowerCase()
+        if (!this.#domains.some((d) => d.pattern === pattern)) {
+          this.#domains.push(compileDomain(route.domain))
+        }
       }
 
       const isParam = route.path.includes(':') || route.path.includes('*')
@@ -1243,13 +1251,13 @@ export class Router extends Macroable {
         const staticRoute =
           this.#staticIndex.get(`${method}:${candidatePath}`) ??
           this.#staticIndex.get(`*:${candidatePath}`)
-        if (staticRoute) return { route: staticRoute, params: {} }
+        if (staticRoute) return { route: staticRoute, params: {}, subdomains: {} }
       }
 
       // 2. Try parametric and domain-scoped routes (only same-method candidates)
       const paramCandidates = this.#paramIndex.get(method) ?? []
       for (const route of paramCandidates) {
-        if (route.domain?.toLowerCase() !== domain) continue
+        if (route.domain?.toLowerCase() !== domain?.pattern) continue
 
         const params = matchPath(route.path, candidatePath)
         if (params === null) continue
@@ -1268,7 +1276,11 @@ export class Router extends Macroable {
         // handler wants — `where('id', matchers.number())` hands `params.id`
         // a NUMBER, as in AdonisJS. Ream carried only the pattern, so every
         // controller re-parsed a string the router had already validated.
-        return { route, params: applyCasts(params, effective) }
+        return {
+          route,
+          params: applyCasts(params, effective),
+          subdomains: domain?.subdomains ?? {},
+        }
       }
     }
 
@@ -1283,18 +1295,32 @@ export class Router extends Macroable {
   }
 
   /**
-   * The registered domain `host` belongs to, lowercased, or `undefined` when
-   * none covers it.
+   * The registered domain `host` belongs to — its lowercased pattern and the
+   * values its parameters captured — or `undefined` when none covers it.
    *
    * NAMED DEVIATION — upstream takes the first registered pattern that
    * matches, so a wildcard declared before `admin.example.com` swallows the
-   * admin host and its routes become unreachable. An exact domain wins here
-   * over any wildcard, and among wildcards the first registered still wins.
+   * admin host and its routes become unreachable. Here the most specific kind
+   * wins whatever the order: an exact domain, then a parameterised one (each
+   * parameter fills exactly one label), then a wildcard (any depth). Within a
+   * kind, the first registered still wins.
    */
-  #matchingDomain(host: string): string | undefined {
+  #matchingDomain(
+    host: string,
+  ): { pattern: string; subdomains: Record<string, string> } | undefined {
     if (this.#domains.length === 0) return undefined
-    const exact = this.#domains.find((d) => !d.startsWith('*.') && matchDomain(d, host))
-    return exact ?? this.#domains.find((d) => d.startsWith('*.') && matchDomain(d, host))
+    const hostname = hostnameOf(host)
+    const exact = this.#domains.find((d) => d.kind === 'exact' && d.pattern === hostname)
+    if (exact) return { pattern: exact.pattern, subdomains: {} }
+    for (const domain of this.#domains) {
+      if (domain.kind !== 'param') continue
+      const subdomains = matchParamDomain(domain.labels, hostname)
+      if (subdomains) return { pattern: domain.pattern, subdomains }
+    }
+    const wildcard = this.#domains.find(
+      (d) => d.kind === 'wildcard' && matchDomain(d.pattern, host),
+    )
+    return wildcard ? { pattern: wildcard.pattern, subdomains: {} } : undefined
   }
 
   // ─── URL generation ───────────────────────────────────────
@@ -1666,6 +1692,75 @@ function matchPath(pattern: string, actual: string): MatchedParams | null {
   return params
 }
 
+/** A route domain, compiled once when the index is built. */
+interface CompiledDomain {
+  /** The pattern lowercased: what a route's own `domain` is compared to. */
+  pattern: string
+  kind: 'exact' | 'param' | 'wildcard'
+  /**
+   * A parameterised domain's labels: static ones lowercased, `:name` ones
+   * kept as written so the parameter keeps the name the route gave it.
+   */
+  labels: string[]
+}
+
+/** What one parameter accepts: a single DNS label, lowercased. */
+const DOMAIN_PARAM_VALUE = /^[a-z0-9_-]+$/
+
+function compileDomain(domain: string): CompiledDomain {
+  const pattern = domain.toLowerCase()
+  if (pattern.startsWith('*.')) return { pattern, kind: 'wildcard', labels: [] }
+  const labels = domain
+    .split('.')
+    .map((label) => (label.startsWith(':') ? label : label.toLowerCase()))
+  if (!labels.some((label) => label.startsWith(':'))) return { pattern, kind: 'exact', labels }
+  const names = new Set<string>()
+  for (const label of labels) {
+    if (!label.startsWith(':')) continue
+    const name = label.slice(1)
+    if (name === '' || names.has(name)) {
+      throw new Error(
+        `[E_INVALID_ROUTE_DOMAIN] The route domain "${domain}" has ${name === '' ? 'a parameter without a name' : `the parameter "${name}" twice`}.`,
+      )
+    }
+    names.add(name)
+  }
+  return { pattern, kind: 'param', labels }
+}
+
+/**
+ * The values `hostname` gives a parameterised domain's labels, or `null` when
+ * it does not fit them.
+ *
+ * NAMED DEVIATION — upstream's matcher fills a parameter with everything in
+ * front of the static suffix, so `:tenant.app.test` took `a.b.app.test` as the
+ * tenant `a.b` and `.app.test` as an empty one, and a parameter could only
+ * open the domain. Here each parameter is exactly one non-empty label of
+ * letters, digits, `-` or `_`, in any position (`api.:tenant.test`,
+ * `:tenant.:region.app.test`).
+ */
+function matchParamDomain(labels: string[], hostname: string): Record<string, string> | null {
+  const hostLabels = hostname.split('.')
+  if (hostLabels.length !== labels.length) return null
+  const values: Record<string, string> = {}
+  for (const [index, label] of labels.entries()) {
+    const value = hostLabels[index] ?? ''
+    if (label.startsWith(':')) {
+      if (!DOMAIN_PARAM_VALUE.test(value)) return null
+      values[label.slice(1)] = value
+    } else if (label !== value) {
+      return null
+    }
+  }
+  return values
+}
+
+/** The request's host without its port, lowercased (RFC 4343). */
+function hostnameOf(host: string): string {
+  const [hostname = ''] = host.split(':')
+  return hostname.toLowerCase()
+}
+
 /**
  * Match a domain pattern against the request's host. Supports wildcards like
  * `*.example.com`.
@@ -1676,8 +1771,7 @@ function matchPath(pattern: string, actual: string): MatchedParams | null {
  * Comparing them verbatim sends that request to a fallback, or to a 404.
  */
 function matchDomain(pattern: string, host: string): boolean {
-  const [hostname = ''] = host.split(':') // strip port
-  const actualHost = hostname.toLowerCase()
+  const actualHost = hostnameOf(host)
   const wanted = pattern.toLowerCase()
   if (wanted === actualHost) return true
   if (wanted.startsWith('*.')) {

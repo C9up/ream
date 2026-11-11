@@ -212,6 +212,7 @@ export function createHttpKernel(
     //    value bound for this request cannot be seen by any other.
     const resolver = config.container?.createResolver()
     const ctx = new HttpContext(correlationId, reqData, match?.params ?? {}, routeInfo, resolver)
+    ctx.subdomains = match?.subdomains ?? {}
     // What Adonis binds on every request's resolver: the context itself, so a
     // controller or service can take `HttpContext` as a constructor dependency.
     resolver?.bindValue(HttpContext, ctx)

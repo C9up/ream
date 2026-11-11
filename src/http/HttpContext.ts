@@ -415,10 +415,16 @@ export class HttpContext extends Macroable {
     this.request.setSignedUrl(signedUrl)
   }
 
-  /** Subdomains of the request host (AdonisJS `ctx.subdomains`). */
-  get subdomains(): string[] {
-    return this.request.subdomains()
-  }
+  /**
+   * The values the matched route's domain captured from the host:
+   * `{ tenant: 'acme' }` for a route on `:tenant.app.test` reached through
+   * `acme.app.test`. Empty when the route has no parameterised domain. Set by
+   * the HTTP kernel from the route match, as upstream's router does.
+   *
+   * BREAKING — this used to be the host's labels (`['api']`); that is
+   * `ctx.request.subdomains()`, and stays there.
+   */
+  subdomains: Record<string, string> = {}
 
   /** Stable identifier for the matched route (`METHOD-pattern`) — AdonisJS `ctx.routeKey`. */
   get routeKey(): string {

@@ -27,7 +27,13 @@ describe('HttpContext ambient helpers', () => {
 
   it('exposes ctx.subdomains and ctx.routeKey', () => {
     const ctx = makeCtx()
-    expect(ctx.subdomains).toEqual(['api'])
+    // What a parameterised route domain captured: nothing here, the route has
+    // no domain. The host's labels are the request's.
+    expect(ctx.subdomains).toEqual({})
+    expect(ctx.request.subdomains()).toEqual(['api'])
+    expect(ctx.request.serialize().subdomains).toEqual({})
+    ctx.subdomains = { tenant: 'api' }
+    expect(ctx.request.serialize().subdomains).toEqual({ tenant: 'api' })
     expect(ctx.routeKey).toBe('GET-/u/:id')
   })
 

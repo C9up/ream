@@ -759,7 +759,9 @@ export class Request extends Macroable {
       cookies: this.cookies(),
       hostname: this.hostname(),
       ip: this.ip(),
-      subdomains: this.subdomains(),
+      // What the route's domain captured (`ctx.subdomains`), as upstream
+      // serialises it — not the host's labels, which `subdomains()` returns.
+      subdomains: (this.ctx === undefined ? undefined : Reflect.get(this.ctx, 'subdomains')) ?? {},
     }
   }
 

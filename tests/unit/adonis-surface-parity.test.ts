@@ -11,6 +11,7 @@ import { Emitter } from '../../src/events/Emitter.js'
 import { FakeBus } from '../../src/events/testing/FakeBus.js'
 import { HttpContext } from '../../src/http/HttpContext.js'
 import type { RawRequest } from '../../src/http/Request.js'
+import { createHttpKernel, MiddlewareRegistry } from '../../src/index.js'
 import { Router } from '../../src/router/Router.js'
 import { CookieSigner } from '../../src/security/CookieSigner.js'
 
@@ -307,3 +308,148 @@ describe('Router > the matching domain owns the request', () => {
     expect(router.match('GET', '/', 'acme.example.com')?.route.name).toBe('tenant.home')
   })
 })
+
+describe('Router > a parameterised domain', () => {
+  function tenantRouter() {
+    const router = new Router()
+    router.get('/dashboard', () => {}).as('root.dashboard')
+    router.get('/pricing', () => {}).as('root.pricing')
+    router
+      .get('/dashboard', () => {})
+      .domain(':tenant.app.test')
+      .as('tenant.dashboard')
+    router
+      .get('/users/:id', () => {})
+      .domain(':tenant.app.test')
+      .as('tenant.user')
+    router.commit()
+    return router
+  }
+
+  it('matches a host whose label fills the parameter, and hands back its value', () => {
+    const match = tenantRouter().match('GET', '/dashboard', 'acme.app.test')
+    expect(match?.route.name).toBe('tenant.dashboard')
+    expect(match?.subdomains).toEqual({ tenant: 'acme' })
+  })
+
+  it('keeps path params and domain params apart', () => {
+    const match = tenantRouter().match('GET', '/users/7', 'acme.app.test')
+    expect(match?.route.name).toBe('tenant.user')
+    expect(match?.params).toEqual({ id: '7' })
+    expect(match?.subdomains).toEqual({ tenant: 'acme' })
+  })
+
+  it('compares the host case-insensitively and ignores the port', () => {
+    const match = tenantRouter().match('GET', '/dashboard', 'ACME.App.Test:8080')
+    expect(match?.route.name).toBe('tenant.dashboard')
+    expect(match?.subdomains).toEqual({ tenant: 'acme' })
+  })
+
+  it('fills a parameter with exactly one label', () => {
+    // NAMED DEVIATION — upstream's matcher takes everything before the static
+    // suffix, so `a.b.app.test` gave `tenant: 'a.b'` and `.app.test` gave an
+    // empty tenant. Neither names a tenant.
+    const router = tenantRouter()
+    expect(router.match('GET', '/dashboard', 'a.b.app.test')?.route.name).toBe('root.dashboard')
+    expect(router.match('GET', '/dashboard', '.app.test')?.route.name).toBe('root.dashboard')
+    expect(router.match('GET', '/dashboard', 'app.test')?.route.name).toBe('root.dashboard')
+    expect(router.match('GET', '/dashboard', 'acme.evil.test')?.route.name).toBe('root.dashboard')
+  })
+
+  it('does not fall back to a domain-less route once the parameterised domain matched', () => {
+    const router = tenantRouter()
+    expect(router.match('GET', '/pricing', 'acme.app.test')).toBeUndefined()
+    expect(router.match('GET', '/pricing', 'app.test')?.route.name).toBe('root.pricing')
+  })
+
+  it('never serves the domain to a request that carries no host', () => {
+    expect(tenantRouter().match('GET', '/dashboard', undefined)?.route.name).toBe('root.dashboard')
+    expect(tenantRouter().match('GET', '/users/7', undefined)).toBeUndefined()
+  })
+
+  it('takes a parameter in any label, and several of them', () => {
+    const router = new Router()
+    router
+      .get('/', () => {})
+      .domain(':tenant.:region.app.test')
+      .as('regional')
+    router
+      .get('/', () => {})
+      .domain('api.:tenant.test')
+      .as('api')
+    router.commit()
+
+    const regional = router.match('GET', '/', 'acme.eu.app.test')
+    expect(regional?.route.name).toBe('regional')
+    expect(regional?.subdomains).toEqual({ tenant: 'acme', region: 'eu' })
+    const api = router.match('GET', '/', 'api.acme.test')
+    expect(api?.route.name).toBe('api')
+    expect(api?.subdomains).toEqual({ tenant: 'acme' })
+  })
+
+  it('a group domain behaves the same way', () => {
+    const router = new Router()
+    router.get('/', () => {}).as('home')
+    router
+      .group(() => {
+        router.get('/', () => {}).as('tenant.home')
+      })
+      .domain(':tenant.app.test')
+    router.commit()
+    const match = router.match('GET', '/', 'acme.app.test')
+    expect(match?.route.name).toBe('tenant.home')
+    expect(match?.subdomains).toEqual({ tenant: 'acme' })
+  })
+
+  it('ranks an exact domain first, then a parameterised one, then a wildcard, whatever the order', () => {
+    const router = new Router()
+    router
+      .get('/', () => {})
+      .domain('*.app.test')
+      .as('wildcard')
+    router
+      .get('/', () => {})
+      .domain(':tenant.app.test')
+      .as('tenant')
+    router
+      .get('/', () => {})
+      .domain('admin.app.test')
+      .as('admin')
+    router.commit()
+
+    expect(router.match('GET', '/', 'admin.app.test')?.route.name).toBe('admin')
+    expect(router.match('GET', '/', 'admin.app.test')?.subdomains).toEqual({})
+    expect(router.match('GET', '/', 'acme.app.test')?.route.name).toBe('tenant')
+    // Two labels: the parameter takes one, so only the wildcard covers it.
+    expect(router.match('GET', '/', 'a.b.app.test')?.route.name).toBe('wildcard')
+    expect(router.match('GET', '/', 'a.b.app.test')?.subdomains).toEqual({})
+  })
+
+  it('refuses a domain whose parameter has no name', () => {
+    const router = new Router()
+    router.get('/', () => {}).domain(':.app.test')
+    expect(() => router.commit()).toThrow(/E_INVALID_ROUTE_DOMAIN/)
+  })
+
+  it('hands the values to the handler as ctx.subdomains', async () => {
+    const router = new Router()
+    router
+      .get('/whoami', (ctx) => {
+        ctx.response.json({ subdomains: ctx.subdomains })
+      })
+      .domain(':tenant.app.test')
+    router.get('/whoami', (ctx) => {
+      ctx.response.json({ subdomains: ctx.subdomains })
+    })
+    const kernel = createHttpKernel({ router, middleware: new MiddlewareRegistry() })
+
+    const tenant = await kernel(request('/whoami', 'acme.app.test'))
+    expect(JSON.parse(tenant.body)).toEqual({ subdomains: { tenant: 'acme' } })
+    const root = await kernel(request('/whoami', 'app.test'))
+    expect(JSON.parse(root.body)).toEqual({ subdomains: {} })
+  })
+})
+
+function request(path: string, host: string) {
+  return { method: 'GET', path, query: '', headers: { host, accept: 'application/json' }, body: '' }
+}
