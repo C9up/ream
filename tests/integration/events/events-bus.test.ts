@@ -140,7 +140,7 @@ describe('events > request/reply', () => {
     })
 
     const response = await reqBus.request('order.validate', JSON.stringify({ amount: 42 }))
-    expect(response).toBeDefined()
+    expect(JSON.parse(response)).toEqual({ valid: true })
   })
 
   it('reports a handler that never replies as a timeout, not as a panic', async () => {

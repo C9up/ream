@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { HttpContext } from '../../src/http/HttpContext.js'
 import type { RawRequest } from '../../src/http/Request.js'
 
@@ -30,10 +30,19 @@ describe('ream > HttpContext > ALS get/getOrFail (AdonisJS parity)', () => {
 describe('ream > HttpContext > logger', () => {
   it('falls back to a console logger when no "logger" is registered', () => {
     const ctx = makeCtx()
-    expect(typeof ctx.logger.info).toBe('function')
-    expect(typeof ctx.logger.error).toBe('function')
-    // Same instance on repeat access (built once).
-    expect(ctx.logger).toBe(ctx.logger)
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    let lines: string[]
+    try {
+      ctx.logger.info('order placed', { id: 7 })
+      ctx.logger.error('payment failed')
+      lines = write.mock.calls.map(([line]) => String(line))
+    } finally {
+      write.mockRestore()
+    }
+    expect(lines).toEqual([
+      `[info] (${ctx.id}) order placed {"id":7}\n`,
+      `[error] (${ctx.id}) payment failed\n`,
+    ])
   })
 
   it('child-scopes the injected base logger to the request id', () => {

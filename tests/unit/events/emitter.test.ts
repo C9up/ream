@@ -64,12 +64,16 @@ describe('events > Emitter > string-based events', () => {
 
   it('isolates an `emitter:error` listener that itself throws (no infinite loop)', async () => {
     const emitter = new Emitter(new FakeBus())
-    emitter.on('emitter:error', () => {
+    const errorListener = vi.fn(() => {
       throw new Error('error-listener crashed')
     })
+    emitter.on('emitter:error', errorListener)
     emitter.on('boom', () => Promise.reject(new Error('primary')))
-    await emitter.emit('boom', {})
+    await expect(emitter.emit('boom', {})).resolves.toBeUndefined()
     await new Promise((r) => setTimeout(r, 0))
+    // Called for the primary failure, and not again for its own: a throwing
+    // error listener must not report itself in a loop.
+    expect(errorListener).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -347,11 +351,16 @@ describe('events > BaseEvent', () => {
     // wired IS that one, so two applications sharing a process cannot unwire
     // each other's. Called with nothing, as it was here, it never cleared
     // anything: this test ran against whatever the previous one left wired.
-    const emitter = new Emitter(new FakeBus())
+    const bus = new FakeBus()
+    const emitter = new Emitter(bus)
+    const listener = vi.fn()
+    emitter.on(Sample, listener)
     BaseEvent.useEmitter(emitter)
     BaseEvent.resetEmitter(emitter)
 
-    await new Sample(1).emit()
+    await expect(new Sample(1).emit()).resolves.toBeUndefined()
+    expect(bus.getEmitted()).toEqual([])
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('emit() dispatches through the wired emitter and forwards to the bus', async () => {
