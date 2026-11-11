@@ -73,24 +73,41 @@ pub fn parse_graphql_query(query: &str) -> ParseResult {
                     OperationDefinition::Query(q) => {
                         result.operation_type = "query".to_string();
                         result.operation_name = q.name.clone();
-                        result.fields =
-                            extract_fields(&q.selection_set.items, &fragments, &mut visiting);
+                        result.fields = extract_fields(
+                            &q.selection_set.items,
+                            &fragments,
+                            &mut visiting,
+                            &mut result.errors,
+                        );
                     }
                     OperationDefinition::Mutation(m) => {
                         result.operation_type = "mutation".to_string();
                         result.operation_name = m.name.clone();
-                        result.fields =
-                            extract_fields(&m.selection_set.items, &fragments, &mut visiting);
+                        result.fields = extract_fields(
+                            &m.selection_set.items,
+                            &fragments,
+                            &mut visiting,
+                            &mut result.errors,
+                        );
                     }
                     OperationDefinition::Subscription(s) => {
                         result.operation_type = "subscription".to_string();
                         result.operation_name = s.name.clone();
-                        result.fields =
-                            extract_fields(&s.selection_set.items, &fragments, &mut visiting);
+                        result.fields = extract_fields(
+                            &s.selection_set.items,
+                            &fragments,
+                            &mut visiting,
+                            &mut result.errors,
+                        );
                     }
                     OperationDefinition::SelectionSet(ss) => {
                         result.operation_type = "query".to_string();
-                        result.fields = extract_fields(&ss.items, &fragments, &mut visiting);
+                        result.fields = extract_fields(
+                            &ss.items,
+                            &fragments,
+                            &mut visiting,
+                            &mut result.errors,
+                        );
                     }
                 }
             }
@@ -111,6 +128,7 @@ fn extract_fields(
     selections: &[Selection<String>],
     fragments: &HashMap<String, &FragmentDefinition<String>>,
     visiting: &mut HashSet<String>,
+    errors: &mut Vec<String>,
 ) -> Vec<ParsedField> {
     let mut fields = Vec::new();
 
@@ -120,10 +138,17 @@ fn extract_fields(
                 let args = f
                     .arguments
                     .iter()
-                    .map(|(name, value)| (name.clone(), graphql_value_to_json(value)))
+                    .map(|(name, value)| {
+                        let json = graphql_value_to_json(value).unwrap_or_else(|error| {
+                            errors.push(format!("Argument \"{name}\" of \"{}\": {error}", f.name));
+                            serde_json::Value::Null
+                        });
+                        (name.clone(), json)
+                    })
                     .collect();
 
-                let sub_fields = extract_fields(&f.selection_set.items, fragments, visiting);
+                let sub_fields =
+                    extract_fields(&f.selection_set.items, fragments, visiting, errors);
 
                 fields.push(ParsedField {
                     name: f.name.clone(),
@@ -141,7 +166,7 @@ fn extract_fields(
                 if let Some(frag) = fragments.get(name) {
                     visiting.insert(name.clone());
                     let mut expanded =
-                        extract_fields(&frag.selection_set.items, fragments, visiting);
+                        extract_fields(&frag.selection_set.items, fragments, visiting, errors);
                     visiting.remove(name);
                     fields.append(&mut expanded);
                 }
@@ -151,7 +176,8 @@ fn extract_fields(
             Selection::InlineFragment(inline) => {
                 // Inline fragments (`... on Type { ... }` / `... { ... }`) have no
                 // name to cycle on; expand their selection set in place.
-                let mut expanded = extract_fields(&inline.selection_set.items, fragments, visiting);
+                let mut expanded =
+                    extract_fields(&inline.selection_set.items, fragments, visiting, errors);
                 fields.append(&mut expanded);
             }
         }
@@ -160,34 +186,45 @@ fn extract_fields(
     fields
 }
 
-/// Convert a GraphQL Value to serde_json::Value.
-fn graphql_value_to_json(value: &Value<String>) -> serde_json::Value {
-    match value {
+/// The largest integer a JavaScript number holds exactly (2^53 - 1).
+const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+/// Convert a GraphQL Value to serde_json::Value, refusing a literal the
+/// resolver would receive as a different value: an integer past what a
+/// JavaScript number holds exactly, or a float that is not finite. Both used
+/// to be substituted (rounded, or turned into null) without a word.
+fn graphql_value_to_json(value: &Value<String>) -> Result<serde_json::Value, String> {
+    Ok(match value {
         Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Int(n) => {
-            serde_json::Value::Number(serde_json::Number::from(n.as_i64().unwrap_or(0)))
-        }
-        Value::Float(f) => serde_json::Number::from_f64(*f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
+        Value::Int(n) => match n.as_i64() {
+            Some(int) if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&int) => {
+                serde_json::Value::Number(serde_json::Number::from(int))
+            }
+            _ => return Err("integer literal out of range".to_owned()),
+        },
+        Value::Float(f) => match serde_json::Number::from_f64(*f) {
+            Some(number) => serde_json::Value::Number(number),
+            None => return Err("float literal is not a finite number".to_owned()),
+        },
         Value::Boolean(b) => serde_json::Value::Bool(*b),
         Value::Null => serde_json::Value::Null,
         Value::Enum(e) => serde_json::Value::String(e.clone()),
-        Value::List(items) => {
-            serde_json::Value::Array(items.iter().map(graphql_value_to_json).collect())
-        }
-        Value::Object(obj) => {
-            let map: serde_json::Map<String, serde_json::Value> = obj
+        Value::List(items) => serde_json::Value::Array(
+            items
                 .iter()
-                .map(|(k, v)| (k.clone(), graphql_value_to_json(v)))
-                .collect();
-            serde_json::Value::Object(map)
-        }
+                .map(graphql_value_to_json)
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(obj) => serde_json::Value::Object(
+            obj.iter()
+                .map(|(k, v)| graphql_value_to_json(v).map(|json| (k.clone(), json)))
+                .collect::<Result<_, _>>()?,
+        ),
         Value::Variable(name) => {
             // Variable references: store as "$varName" for TS-side resolution
             serde_json::Value::String(format!("${}", name))
         }
-    }
+    })
 }
 
 /// Validate that a query only references known operation types.
@@ -287,6 +324,32 @@ mod tests {
         assert_eq!(result.operation_name, Some("GetTask".to_string()));
         assert_eq!(result.fields[0].name, "task");
         assert_eq!(result.fields[0].args.get("id").unwrap(), "$id");
+    }
+
+    #[test]
+    fn an_integer_literal_past_a_safe_integer_is_refused() {
+        for literal in [
+            "99999999999999999999",
+            "9007199254740992",
+            "-9007199254740992",
+        ] {
+            let result = parse_graphql_query(&format!("{{ items(limit: {literal}) {{ id }} }}"));
+            assert!(!result.errors.is_empty(), "{literal} was accepted");
+        }
+        let result = parse_graphql_query("{ items(limit: 9007199254740991) { id } }");
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.fields[0].args["limit"],
+            serde_json::json!(9_007_199_254_740_991_i64)
+        );
+    }
+
+    #[test]
+    fn a_float_literal_that_is_not_finite_is_refused() {
+        let result = parse_graphql_query("{ items(ratio: 1e400) { id } }");
+        assert!(!result.errors.is_empty());
+        let nested = parse_graphql_query("{ items(filter: { ratios: [1.5, 1e400] }) { id } }");
+        assert!(!nested.errors.is_empty());
     }
 
     #[test]

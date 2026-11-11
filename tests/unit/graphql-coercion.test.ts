@@ -67,3 +67,31 @@ describe('GraphQLEngine > argument coercion (schema-driven)', () => {
     expect(captured.id).toBe('abc')
   })
 })
+
+describe('GraphQLEngine > literals a resolver could not receive intact', () => {
+  async function body(query: string): Promise<{ errors?: Array<{ message: string }> }> {
+    captured = {}
+    const raw: RawRequest = {
+      method: 'POST',
+      path: '/graphql',
+      query: '',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query }),
+    }
+    const ctx = new HttpContext('t', raw, {}, { pattern: '/graphql', middleware: [] })
+    await makeEngine().handle(ctx)
+    return JSON.parse(ctx.response.getBody())
+  }
+
+  it('refuses an integer past a safe integer instead of rounding it', async () => {
+    const result = await body('query { task(id: 9007199254740993) { id } }')
+    expect(result.errors?.[0]?.message).toMatch(/out of range/)
+    expect(captured).toEqual({})
+  })
+
+  it('refuses a float that is not finite instead of passing null', async () => {
+    const result = await body('query { task(ratio: 1e400) { id } }')
+    expect(result.errors?.[0]?.message).toMatch(/not a finite number/)
+    expect(captured).toEqual({})
+  })
+})
