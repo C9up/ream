@@ -1197,10 +1197,15 @@ export class Response extends Macroable {
 
   /**
    * Expire a cookie immediately (AdonisJS `clearCookie`) — re-sends it with
-   * `Max-Age=0`, the RFC 6265 delete-now signal that `cookie()` honours.
+   * `Max-Age=0` and an `Expires` in 1970, the RFC 6265 delete-now signals.
+   *
+   * A browser matches the cookie to replace on its name, domain and path, so
+   * a cookie written with a `domain` (or a `path`) is only cleared when the
+   * same ones are passed here; `secure` and `sameSite` are accepted so a
+   * `SameSite=None` cookie can be cleared at all.
    */
-  clearCookie(name: string, options?: { path?: string }): this {
-    return this.plainCookie(name, '', { ...options, maxAge: 0 })
+  clearCookie(name: string, options?: Omit<CookieOptions, 'maxAge' | 'expires'>): this {
+    return this.plainCookie(name, '', { ...options, maxAge: 0, expires: new Date(0) })
   }
 
   // ─── Internals (used by HttpKernel for NAPI serialization) ─

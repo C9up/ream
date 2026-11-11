@@ -144,6 +144,31 @@ describe('ream > Response header/cookie/jsonp helpers (AdonisJS parity)', () => 
     const setCookie = r.getHeaders()['set-cookie'] ?? ''
     expect(setCookie).toContain('sid=')
     expect(setCookie).toContain('Max-Age=0')
+    expect(setCookie).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT')
+  })
+
+  it('clearCookie clears a cookie written with a domain, secure and sameSite', () => {
+    // The browser only replaces the cookie whose domain and path match, so a
+    // clear that cannot carry them leaves a domain-wide cookie in place.
+    const options = {
+      domain: '.example.com',
+      path: '/app',
+      secure: true,
+      sameSite: 'none' as const,
+    }
+    const r = new Response()
+    r.clearCookie('remember', options)
+    const setCookie = r.getHeaders()['set-cookie'] ?? ''
+    expect(setCookie).toMatch(/^remember=[^;]*; /)
+    for (const attribute of [
+      'Max-Age=0',
+      'Domain=.example.com',
+      'Path=/app',
+      'Secure',
+      'SameSite=none',
+    ]) {
+      expect(setCookie).toContain(attribute)
+    }
   })
 
   it('jsonp wraps the body in the (sanitised) callback as text/javascript', () => {
