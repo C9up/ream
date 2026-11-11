@@ -141,10 +141,10 @@ export interface RpcRouterOptions {
  * Returns the JSON-RPC error code+message to reject with, or undefined when the
  * caller is authorized.
  */
-function checkRpcAuthorization(
+async function checkRpcAuthorization(
   ctx: HttpContext,
   def: RpcMethodDefinition,
-): { code: number; message: string } | undefined {
+): Promise<{ code: number; message: string } | undefined> {
   const needsAuth = def.guards.length > 0 || def.roles.length > 0 || def.permissions.length > 0
   if (needsAuth && !ctx.auth?.isAuthenticated) {
     return { code: -32003, message: 'Unauthorized' }
@@ -159,7 +159,7 @@ function checkRpcAuthorization(
   }
   // A token-authenticated call also needs the token to allow each permission.
   if (def.permissions.length > 0) {
-    if (!holdsPermissions(ctx.auth, def.permissions)) {
+    if (!(await holdsPermissions(ctx.auth, def.permissions))) {
       return { code: -32003, message: 'Insufficient permissions' }
     }
   }
@@ -381,7 +381,7 @@ export class RpcRouter {
     if (!def) return rpcError(-32601, 'Method not found', id)
 
     try {
-      const denied = checkRpcAuthorization(ctx, def)
+      const denied = await checkRpcAuthorization(ctx, def)
       if (denied) return rpcError(denied.code, denied.message, id)
 
       // Run declared named middleware (e.g. guards) — they throw to deny, mapped

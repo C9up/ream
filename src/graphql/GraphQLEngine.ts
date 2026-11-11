@@ -383,7 +383,7 @@ export class GraphQLEngine {
       }
     }
 
-    const guardError = this.#enforceGuards(entry.options, ctx)
+    const guardError = await this.#enforceGuards(entry.options, ctx)
     if (guardError) {
       return { ok: false, error: { message: guardError, path: [field.name] } }
     }
@@ -469,7 +469,7 @@ export class GraphQLEngine {
   }
 
   /** Enforce guard/role/permission on a resolver. */
-  #enforceGuards(options: ResolverOptions, ctx: HttpContext): string | null {
+  async #enforceGuards(options: ResolverOptions, ctx: HttpContext): Promise<string | null> {
     const guards = [...(options.guards ?? []), ...(options.guard ? [options.guard] : [])]
     const roles = [...(options.roles ?? []), ...(options.role ? [options.role] : [])]
     const permissions = options.permissions ?? []
@@ -491,7 +491,7 @@ export class GraphQLEngine {
 
     // A token-authenticated request also needs the token to allow each one.
     if (permissions.length > 0) {
-      if (!holdsPermissions(ctx.auth, permissions)) {
+      if (!(await holdsPermissions(ctx.auth, permissions))) {
         return 'Insufficient permissions'
       }
     }

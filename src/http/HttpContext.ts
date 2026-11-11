@@ -56,6 +56,16 @@ export interface AuthState {
   authenticateUsing?(guards?: string[], options?: { loginRoute?: string }): Promise<void>
   getUserOrFail?(): AuthState['user']
   /**
+   * Whether the authenticated user holds every permission in `permissions`,
+   * as the auth layer resolves them (warden's authenticator asks its rights
+   * resolver and narrows by the current access token). When present, the
+   * `.permission()` gates trust this answer instead of the payload's
+   * `permissions`, which can be stale or incomplete. `scope` is the auth
+   * layer's own notion (warden: `'global'` or a tenant); the gates pass none,
+   * so the layer's default applies.
+   */
+  hasAllPermissions?(permissions: readonly string[], scope?: unknown): Promise<boolean>
+  /**
    * The guard behind `name` (AdonisJS `auth.use('web')`).
    *
    * Typed through the augmentable `Authenticators` interface in

@@ -7,6 +7,12 @@
  * obtain a route permission they did not hold by getting a token whose scope
  * carried the same name, and a token limited to `profile` still carried every
  * permission of its user.
+ *
+ * When the auth layer resolves permissions itself (an auth state exposing
+ * `hasAllPermissions`, as warden's authenticator does through its rights
+ * resolver), that answer replaces the payload's `permissions`: a permission
+ * granted only by the resolver is accepted, one left only in the payload is
+ * refused, and the token still narrows the result.
  */
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -24,12 +30,23 @@ function token(...abilities: string[]) {
   return { abilities, allows: (ability: string) => abilities.includes(ability) }
 }
 
-type Identity = { permissions: string[]; token?: ReturnType<typeof token> }
+type Identity = {
+  permissions: string[]
+  token?: ReturnType<typeof token>
+  /** What the auth layer's resolver grants; absent = no resolver on the auth state. */
+  resolved?: readonly string[]
+}
 
-function authFor({ permissions, token: currentAccessToken }: Identity): AuthState {
+function authFor({ permissions, token: currentAccessToken, resolved }: Identity): AuthState {
   return {
     isAuthenticated: true,
     user: { id: 'u1', permissions, ...(currentAccessToken ? { currentAccessToken } : {}) },
+    ...(resolved
+      ? {
+          hasAllPermissions: async (required: readonly string[]) =>
+            required.every((permission) => resolved.includes(permission)),
+        }
+      : {}),
   }
 }
 
@@ -60,6 +77,26 @@ const cases: Array<[label: string, identity: Identity, allowed: boolean]> = [
   ],
   ['a session user with the permission (no token)', { permissions: ['orders:write'] }, true],
   ['a session user without the permission (no token)', { permissions: [] }, false],
+  [
+    'a user the resolver grants the permission to, absent from the payload',
+    { permissions: [], resolved: ['orders:write'] },
+    true,
+  ],
+  [
+    'a user whose payload carries the permission the resolver refuses',
+    { permissions: ['orders:write'], resolved: [] },
+    false,
+  ],
+  [
+    'a resolver-granted user with a token that does not allow it',
+    { permissions: [], resolved: ['orders:write'], token: token('profile') },
+    false,
+  ],
+  [
+    'a resolver-granted user with a token that allows it',
+    { permissions: [], resolved: ['orders:write'], token: token('orders:write') },
+    true,
+  ],
 ]
 
 describe('HTTP route .permission() gate', () => {
@@ -166,33 +203,61 @@ describe('GraphQL resolver permissions gate', () => {
 })
 
 describe('holdsPermissions', () => {
-  it('requires every permission, each allowed by the token', () => {
+  it('requires every permission, each allowed by the token', async () => {
     const auth = authFor({ permissions: ['a', 'b'], token: token('a') })
-    expect(holdsPermissions(auth, ['a'])).toBe(true)
-    expect(holdsPermissions(auth, ['a', 'b'])).toBe(false)
+    expect(await holdsPermissions(auth, ['a'])).toBe(true)
+    expect(await holdsPermissions(auth, ['a', 'b'])).toBe(false)
   })
 
-  it('reads top-level permissions too, still narrowed by the token', () => {
+  it('reads top-level permissions too, still narrowed by the token', async () => {
     const auth: AuthState = {
       isAuthenticated: true,
       permissions: ['a'],
       user: { id: 'u1', currentAccessToken: token() },
     }
-    expect(holdsPermissions(auth, ['a'])).toBe(false)
+    expect(await holdsPermissions(auth, ['a'])).toBe(false)
   })
 
-  it('denies when the token has no callable allows', () => {
+  it('denies when the token has no callable allows', async () => {
     const auth: AuthState = {
       isAuthenticated: true,
       user: { id: 'u1', permissions: ['a'] },
     }
     // A provider outside TypeScript handing a token-shaped value without `allows`.
     Reflect.set(auth.user ?? {}, 'currentAccessToken', { abilities: ['a'] })
-    expect(holdsPermissions(auth, ['a'])).toBe(false)
+    expect(await holdsPermissions(auth, ['a'])).toBe(false)
   })
 
-  it('denies an unauthenticated state with no permissions', () => {
-    expect(holdsPermissions(undefined, ['a'])).toBe(false)
-    expect(holdsPermissions({ isAuthenticated: false }, ['a'])).toBe(false)
+  it('denies an unauthenticated state with no permissions', async () => {
+    expect(await holdsPermissions(undefined, ['a'])).toBe(false)
+    expect(await holdsPermissions({ isAuthenticated: false }, ['a'])).toBe(false)
+  })
+
+  it('asks the resolver with the required list, and fails closed on a non-true answer', async () => {
+    const asked: Array<readonly string[]> = []
+    const auth: AuthState = {
+      isAuthenticated: true,
+      user: { id: 'u1', permissions: ['a'] },
+      hasAllPermissions: async (required) => {
+        asked.push(required)
+        return false
+      },
+    }
+    expect(await holdsPermissions(auth, ['a', 'b'])).toBe(false)
+    expect(asked).toEqual([['a', 'b']])
+    // A provider outside TypeScript answering something other than a boolean.
+    Reflect.set(auth, 'hasAllPermissions', async () => 'yes')
+    expect(await holdsPermissions(auth, ['a'])).toBe(false)
+  })
+
+  it('lets a resolver error surface instead of granting', async () => {
+    const auth: AuthState = {
+      isAuthenticated: true,
+      user: { id: 'u1', permissions: ['a'] },
+      hasAllPermissions: async () => {
+        throw new Error('rights store down')
+      },
+    }
+    await expect(holdsPermissions(auth, ['a'])).rejects.toThrow('rights store down')
   })
 })

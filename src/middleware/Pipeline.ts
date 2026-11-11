@@ -245,7 +245,7 @@ function createGuardMiddleware(
 
     // A token-authenticated request also needs the token to allow each one.
     if (permissions && permissions.length > 0) {
-      if (!holdsPermissions(ctx.auth, permissions)) {
+      if (!(await holdsPermissions(ctx.auth, permissions))) {
         throw new E_FORBIDDEN('Insufficient permissions', permissions)
       }
     }
