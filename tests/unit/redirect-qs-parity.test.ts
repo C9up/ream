@@ -157,6 +157,23 @@ describe('ream > redirect().toIntended (AdonisJS parity)', () => {
     expect(location(response)).toBe('/safe')
   })
 
+  it('refuses a non-web scheme whose host is the application', () => {
+    // `new URL('javascript://app.test/%0aalert(1)').host` is `app.test`: a
+    // host check alone lets the script through.
+    for (const stored of [
+      'javascript://app.test/%0aalert(1)',
+      'data://app.test/x',
+      'ftp://app.test/x',
+    ]) {
+      const { redirect, response } = withSession('http://app.test/x', stored)
+      redirect.toIntended('/safe')
+      expect(location(response), stored).toBe('/safe')
+    }
+    const { redirect, response } = withSession('http://app.test/x', 'https://app.test/next')
+    redirect.toIntended('/safe')
+    expect(location(response)).toBe('https://app.test/next')
+  })
+
   it('toIntendedRoute falls back to the named route', () => {
     const { redirect, response } = withSession('http://app.test/x')
     redirect.toIntendedRoute('dashboard')

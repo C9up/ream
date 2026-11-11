@@ -93,6 +93,8 @@ describe('isPublicAddress', () => {
     '::a9fe:a9fe',
     '64:ff9b::a00:5',
     '2002:a00:5::1',
+    // Teredo (2001:0::/32, inside the blocked IETF 2001::/23)
+    '2001:0:53aa:64c:0:3ff:fe3d:1',
     '2001:db8::1',
     'not-an-ip',
   ]

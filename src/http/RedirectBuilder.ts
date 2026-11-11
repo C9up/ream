@@ -32,6 +32,9 @@ function isTrustedRedirect(
   } catch {
     return false
   }
+  // Only a web URL is a redirect target: `javascript://app.test/%0aalert(1)`
+  // has the right host and is a script, not a page.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
   if (allowedHosts.includes(parsed.host)) return true
   // Upstream accepts any absolute URL when it knows no host to compare with;
   // refusing it is the safer reading of an attacker-controlled header.

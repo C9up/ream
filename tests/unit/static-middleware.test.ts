@@ -496,6 +496,9 @@ describe('StaticMiddleware > nothing outside the root', () => {
     ['trailing NUL', '/a.txt%00.png'],
     ['malformed percent', '/%'],
     ['lone percent mid-path', '/img/%zz/a.png'],
+    ['backslash', '/..\\..\\etc\\passwd'],
+    ['mixed', '/assets\\..\\..\\etc\\passwd'],
+    ['encoded backslash', '/..%5c..%5cetc%5cpasswd'],
   ] as const
 
   for (const [name, path] of traversals) {
