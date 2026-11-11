@@ -669,6 +669,21 @@ const FIRST_VALUE_WINS: [&str; 18] = [
     "user-agent",
 ];
 
+/// A header value as Node's `http` module exposes it. Visible ASCII comes
+/// through as is; a value carrying an obs-text byte (0x80 and above, which
+/// HTTP/1.1 allows) is read as latin1, one character per byte, rather than
+/// dropped from the map.
+fn header_value_string(value: &hyper::header::HeaderValue) -> String {
+    match value.to_str() {
+        Ok(text) => text.to_owned(),
+        Err(_) => value
+            .as_bytes()
+            .iter()
+            .map(|&byte| char::from(byte))
+            .collect(),
+    }
+}
+
 /// Flatten the request headers into a name → value map (names lowercase),
 /// joining repeated lines the way Node does: `Cookie` with `"; "` (HTTP/2
 /// clients send one line per cookie), the headers of [`FIRST_VALUE_WINS`]
@@ -676,19 +691,17 @@ const FIRST_VALUE_WINS: [&str; 18] = [
 pub(crate) fn collect_headers(map: &hyper::HeaderMap) -> HashMap<String, String> {
     let mut headers: HashMap<String, String> = HashMap::with_capacity(map.keys_len());
     for (name, value) in map {
-        let Ok(value) = value.to_str() else {
-            continue;
-        };
+        let value = header_value_string(value);
         let name = name.as_str();
         let Some(existing) = headers.get_mut(name) else {
-            headers.insert(name.to_owned(), value.to_owned());
+            headers.insert(name.to_owned(), value);
             continue;
         };
         if FIRST_VALUE_WINS.contains(&name) {
             continue;
         }
         existing.push_str(if name == "cookie" { "; " } else { ", " });
-        existing.push_str(value);
+        existing.push_str(&value);
     }
     headers
 }
@@ -1725,6 +1738,12 @@ mod tests {
         assert_eq!(headers["accept"], "text/html, application/json");
         assert_eq!(headers["x-forwarded-for"], "203.0.113.9, 10.0.0.1");
         assert_eq!(headers["cookie"], "a=1; b=2");
+    }
+
+    #[test]
+    fn an_obs_text_header_value_is_read_as_latin1_not_dropped() {
+        let headers = collect_headers(&header_map(&[("x-name", b"caf\xe9")]));
+        assert_eq!(headers["x-name"], "caf\u{e9}");
     }
 
     #[tokio::test]
