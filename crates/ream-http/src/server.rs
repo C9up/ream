@@ -645,30 +645,50 @@ pub(crate) fn origin_form(uri: &hyper::Uri) -> String {
         .map_or_else(|| uri.path().to_string(), |pq| pq.as_str().to_string())
 }
 
-/// Flatten the request headers into a name → value map (names lowercase).
-/// Repeated `Cookie` lines are joined with `"; "` — HTTP/2 clients send one
-/// line per cookie — and repeated `X-Forwarded-For` lines with `", "`, as
-/// Node does, so neither loses entries. Any other repeated header keeps its
-/// last value.
+/// Headers Node keeps the FIRST value of when a request repeats them, and
+/// drops every later line (`_http_incoming.js`, `matchKnownFields`). A
+/// duplicate `Host` must not move routing to the second line.
+const FIRST_VALUE_WINS: [&str; 18] = [
+    "age",
+    "authorization",
+    "content-length",
+    "content-type",
+    "etag",
+    "expires",
+    "from",
+    "host",
+    "if-modified-since",
+    "if-unmodified-since",
+    "last-modified",
+    "location",
+    "max-forwards",
+    "proxy-authorization",
+    "referer",
+    "retry-after",
+    "server",
+    "user-agent",
+];
+
+/// Flatten the request headers into a name → value map (names lowercase),
+/// joining repeated lines the way Node does: `Cookie` with `"; "` (HTTP/2
+/// clients send one line per cookie), the headers of [`FIRST_VALUE_WINS`]
+/// keep their first line, and every other one is joined with `", "`.
 pub(crate) fn collect_headers(map: &hyper::HeaderMap) -> HashMap<String, String> {
     let mut headers: HashMap<String, String> = HashMap::with_capacity(map.keys_len());
     for (name, value) in map {
         let Ok(value) = value.to_str() else {
             continue;
         };
-        let separator = match name.as_str() {
-            "cookie" => Some("; "),
-            "x-forwarded-for" => Some(", "),
-            _ => None,
+        let name = name.as_str();
+        let Some(existing) = headers.get_mut(name) else {
+            headers.insert(name.to_owned(), value.to_owned());
+            continue;
         };
-        if let Some(separator) = separator {
-            if let Some(existing) = headers.get_mut(name.as_str()) {
-                existing.push_str(separator);
-                existing.push_str(value);
-                continue;
-            }
+        if FIRST_VALUE_WINS.contains(&name) {
+            continue;
         }
-        headers.insert(name.to_string(), value.to_string());
+        existing.push_str(if name == "cookie" { "; " } else { ", " });
+        existing.push_str(value);
     }
     headers
 }
@@ -1667,5 +1687,63 @@ mod tests {
         stream.read_to_string(&mut response).await.unwrap();
 
         response.split("\r\n\r\n").nth(1).unwrap_or("").to_string()
+    }
+
+    fn header_map(lines: &[(&'static str, &[u8])]) -> hyper::HeaderMap {
+        let mut map = hyper::HeaderMap::new();
+        for (name, value) in lines {
+            map.append(
+                *name,
+                hyper::header::HeaderValue::from_bytes(value).unwrap(),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn a_repeated_host_keeps_its_first_line() {
+        let headers = collect_headers(&header_map(&[
+            ("host", b"app.example.com"),
+            ("host", b"evil.example.com"),
+            ("authorization", b"Bearer first"),
+            ("authorization", b"Bearer second"),
+        ]));
+        assert_eq!(headers["host"], "app.example.com");
+        assert_eq!(headers["authorization"], "Bearer first");
+    }
+
+    #[test]
+    fn other_repeated_headers_are_joined_like_node() {
+        let headers = collect_headers(&header_map(&[
+            ("accept", b"text/html"),
+            ("accept", b"application/json"),
+            ("x-forwarded-for", b"203.0.113.9"),
+            ("x-forwarded-for", b"10.0.0.1"),
+            ("cookie", b"a=1"),
+            ("cookie", b"b=2"),
+        ]));
+        assert_eq!(headers["accept"], "text/html, application/json");
+        assert_eq!(headers["x-forwarded-for"], "203.0.113.9, 10.0.0.1");
+        assert_eq!(headers["cookie"], "a=1; b=2");
+    }
+
+    #[tokio::test]
+    async fn a_second_host_line_does_not_move_the_request() {
+        let (mut server, port, _) = start(
+            |req| req.headers.get("host").cloned().unwrap_or_default(),
+            |_| {},
+        )
+        .await;
+        let response = exchange(
+            port,
+            b"GET / HTTP/1.1\r\nHost: app.example.com\r\nHost: evil.example.com\r\nConnection: close\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .await;
+        // hyper accepts a duplicate Host on HTTP/1.1; the first line is the
+        // host, as in Node.
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(body_of(&response), "app.example.com");
+        server.shutdown().await;
     }
 }
