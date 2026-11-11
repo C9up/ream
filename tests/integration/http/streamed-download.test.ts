@@ -15,6 +15,7 @@ import { Response } from '../../../src/http/Response.js'
 import type { NapiResponse } from '../../../src/native/generated.js'
 import { HyperServer } from './loader.js'
 import { asRequest, type NapiRequest } from './napi-request.js'
+import { track } from './servers.js'
 
 const networkAllowed = process.env.REAM_SKIP_NETWORK_TESTS !== '1'
 const describeIfNetwork = networkAllowed ? describe : describe.skip
@@ -23,7 +24,7 @@ const describeIfNetwork = networkAllowed ? describe : describe.skip
 async function serve(
   handler: (req: NapiRequest, server: InstanceType<typeof HyperServer>) => Promise<NapiResponse>,
 ): Promise<{ port: number; close: () => Promise<void> }> {
-  const server = new HyperServer(0)
+  const server = track(new HyperServer(0))
   // Raw record in, the five named fields out — the Rust declares no shape for
   // the request. The response goes back untouched: it carries the `streamId`
   // this whole file is about.
@@ -134,7 +135,7 @@ describeIfNetwork('Response.stream over a real server', () => {
     // while every unit test stayed green.
     const payload = randomBytes(256 * 1024)
 
-    const server = new HyperServer(0)
+    const server = track(new HyperServer(0))
     let pumped: Promise<void> = Promise.resolve()
 
     server.onRequest(async () => {
@@ -168,7 +169,7 @@ describeIfNetwork('Response.stream over a real server', () => {
     // and the client still gets them.
     const payload = Buffer.from([0x00, 0xff, 0x7f])
 
-    const server = new HyperServer(0)
+    const server = track(new HyperServer(0))
     server.onRequest(async () => {
       const res = new Response()
       await res.stream(Readable.from([payload]))

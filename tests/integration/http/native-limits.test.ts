@@ -2,6 +2,7 @@ import { connect } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { HyperServer } from './loader.js'
 import { rawField } from './napi-request.js'
+import { track } from './servers.js'
 
 /**
  * The guards the native server applies before a request reaches JS, driven
@@ -17,7 +18,7 @@ async function serve(
   echo: (raw: Record<string, unknown>) => string,
   configure: Configure = () => {},
 ): Promise<{ port: number; calls: () => number; close: () => Promise<void> }> {
-  const server = new HyperServer(0)
+  const server = track(new HyperServer(0))
   let calls = 0
   configure(server)
   server.onRequest(async (raw) => {
@@ -84,7 +85,7 @@ describeIfNetwork('native server > client IP behind proxies', () => {
   })
 
   it('refuses a trusted-proxy entry that is not an address or a range', () => {
-    const server = new HyperServer(0)
+    const server = track(new HyperServer(0))
     expect(() => server.configureTrustedProxies(['10.0.0/8'])).toThrow(/INVALID_TRUSTED_PROXY/)
   })
 })
@@ -177,7 +178,7 @@ describeIfNetwork('native server > body limits', () => {
   })
 
   it('refuses a negative limit', () => {
-    const server = new HyperServer(0)
+    const server = track(new HyperServer(0))
     expect(() => server.configureBodyLimits({ json: { limit: -1 } })).toThrow(/INVALID_BODY_LIMIT/)
     expect(() => server.configureBodyLimits({ multipart: { maxFields: -1 } })).toThrow(
       /INVALID_BODY_LIMIT/,

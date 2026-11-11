@@ -5,6 +5,7 @@ import type { TestResponse } from '../../../src/testing/TestClient.js'
 import { defined } from '../../__helpers__/defined.js'
 import { HyperServer } from './loader.js'
 import { asRequest, type NapiRequest, rawField } from './napi-request.js'
+import { track } from './servers.js'
 
 /**
  * End-to-end proof that the test utility's `.file()` / `.field()` encoding is
@@ -61,7 +62,7 @@ async function createServer(
     body: string
   }>,
 ): Promise<{ port: number; close: () => Promise<void> }> {
-  const server = new HyperServer(0)
+  const server = track(new HyperServer(0))
   server.onRequest((raw) => handler(withMultipart(raw)))
   await server.listen()
   const port = await server.port()

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { NapiGrpcCall, NapiGrpcLimits, NapiGrpcReply } from '../../../src/native/generated.js'
 import { cancellableGrpc } from '../../../src/server/nativeGrpc.js'
 import { HyperServer } from './loader.js'
+import { track } from './servers.js'
 
 /**
  * gRPC on the HTTP port, through the real native server.
@@ -158,7 +159,7 @@ async function start(
   http: (path: string, contentType: string) => string = (path) => `http ${path}`,
   options: { limits?: NapiGrpcLimits; requestTimeout?: number } = {},
 ): Promise<{ port: number; close: () => Promise<void> }> {
-  const server = new HyperServer(0)
+  const server = track(new HyperServer(0))
   server.onRequest(async (raw) => {
     const path = typeof raw.path === 'string' ? raw.path : ''
     const headers = raw.headers
@@ -346,7 +347,7 @@ describeIfNetwork('hyper-server > gRPC', () => {
   it.each([Number.NaN, Number.POSITIVE_INFINITY, 1.5, -2])(
     'refuses a message limit of %s',
     (value) => {
-      const server = new HyperServer(0)
+      const server = track(new HyperServer(0))
       expect(() =>
         server.onGrpc(async () => ({ message: new Uint8Array() }), {
           maxReceiveMessageLength: value,
@@ -356,7 +357,7 @@ describeIfNetwork('hyper-server > gRPC', () => {
   )
 
   it('aborts the signal of a call whose client resets its stream', async () => {
-    const server = new HyperServer(0)
+    const server = track(new HyperServer(0))
     server.onRequest(async () => ({ status: 200, headers: {}, body: '' }))
     const started = Date.now()
     let abortedAfter: number | undefined

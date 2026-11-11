@@ -3,6 +3,7 @@ import { createConnection } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { HyperServer } from './loader.js'
 import { asRequest, type NapiRequest, rawField } from './napi-request.js'
+import { track } from './servers.js'
 
 /**
  * Some sandboxed environments (restricted container runtimes, certain
@@ -50,7 +51,7 @@ async function httpPost(
 async function createServer(
   handler: (req: NapiRequest) => Promise<NapiResponse>,
 ): Promise<{ port: number; close: () => Promise<void> }> {
-  const server = new HyperServer(0)
+  const server = track(new HyperServer(0))
   // The binding hands over a raw record — the Rust declares no shape for it —
   // so the five fields a test reads are pulled out here.
   server.onRequest((raw) => handler(asRequest(raw)))
@@ -214,7 +215,7 @@ describeIfNetwork('hyper-server > error handling', () => {
 
 describeIfNetwork('hyper-server > bind address', () => {
   it('binds every interface when the host is 0.0.0.0', async () => {
-    const server = new HyperServer(0, '0.0.0.0')
+    const server = track(new HyperServer(0, '0.0.0.0'))
     server.onRequest(async () => ({ status: 200, headers: {}, body: 'bound' }))
     await server.listen()
     const port = await server.port()
@@ -226,7 +227,7 @@ describeIfNetwork('hyper-server > bind address', () => {
   })
 
   it('accepts the localhost alias', async () => {
-    const server = new HyperServer(0, 'localhost')
+    const server = track(new HyperServer(0, 'localhost'))
     server.onRequest(async () => ({ status: 200, headers: {}, body: 'loopback' }))
     await server.listen()
     const port = await server.port()
@@ -238,7 +239,7 @@ describeIfNetwork('hyper-server > bind address', () => {
 
   it('binds an IPv6 literal, bracketed or not', async () => {
     for (const host of ['::1', '[::1]']) {
-      const server = new HyperServer(0, host)
+      const server = track(new HyperServer(0, host))
       server.onRequest(async () => ({ status: 200, headers: {}, body: 'v6' }))
       await server.listen()
       try {
@@ -321,7 +322,7 @@ describeIfNetwork('hyper-server > binary request bodies', () => {
     contentType: string,
     body: Buffer,
   ): Promise<{ encoding: unknown; bytes: Buffer }> {
-    const server = new HyperServer(0)
+    const server = track(new HyperServer(0))
     let seen: { encoding: unknown; bytes: Buffer } | undefined
     server.onRequest(async (raw) => {
       const encoding = rawField(raw, 'bodyEncoding')

@@ -154,7 +154,9 @@ describe('Scheduler.runTaskNow', () => {
   it('runTaskNow returns failed with E_SCHEDULE_TASK_TIMEOUT when timeoutMs elapses', async () => {
     const scheduler = new Scheduler({ nativeModule: buildFakeNative() })
     scheduler.register('slow', '*/1 * * * *', async () => {
-      await new Promise((r) => setTimeout(r, 1000))
+      // Unref'd: runTaskNow gives up after 30 ms, and the abandoned timer must
+      // not keep the worker alive for the rest of the second.
+      await new Promise((r) => setTimeout(r, 1000).unref())
     })
     const result = await scheduler.runTaskNow('slow', { timeoutMs: 30 })
     expect(result.outcome).toBe('failed')

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Request } from '../../../src/http/Request.js'
 import { HyperServer } from './loader.js'
 import { asRequest, rawField } from './napi-request.js'
+import { track } from './servers.js'
 
 /**
  * `request.protocol()` / `secure()` / `host()` / `ips()` over the real native
@@ -16,7 +17,7 @@ function strings(value: unknown): string[] | undefined {
 }
 
 async function seenBy(trustedProxies: string[], headers: Record<string, string>) {
-  const server = new HyperServer(0)
+  const server = track(new HyperServer(0))
   if (trustedProxies.length > 0) server.configureTrustedProxies(trustedProxies)
   server.onRequest(async (raw) => {
     const ipValue = rawField(raw, 'ip')
