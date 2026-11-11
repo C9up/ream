@@ -288,19 +288,28 @@ export class Session {
     // The store is untyped by nature, so `T` is the CALLER's claim about what
     // it put there — one assertion from `unknown`, which is what `T` means
     // here. Going through `any` first widened nothing and hid the intent.
-    if (key in this.#data) return this.#data[key] as T
+    // OWN keys only: `in` walked the prototype, so an empty session answered
+    // `get('toString')` with a function and `has('constructor')` with true.
+    if (Object.hasOwn(this.#data, key)) return this.#data[key] as T
     return defaultValue as T
   }
 
   /** Set a session value. */
   put(key: string, value: unknown): void {
-    this.#data[key] = value
+    // Defined, not assigned: `put('__proto__', x)` stores a key like any
+    // other instead of replacing the session data's prototype.
+    Object.defineProperty(this.#data, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
     this.#dirty = true
   }
 
   /** Check if a key exists. */
   has(key: string): boolean {
-    return key in this.#data
+    return Object.hasOwn(this.#data, key)
   }
 
   /** Get all session data. */
@@ -504,7 +513,7 @@ export class Session {
   old<T = unknown>(key: string, defaultValue?: T): T {
     // Same contract as `get`: `T` is the caller's claim about a store that is
     // untyped by nature.
-    if (key in this.#previousFlash) return this.#previousFlash[key] as T
+    if (Object.hasOwn(this.#previousFlash, key)) return this.#previousFlash[key] as T
     return defaultValue as T
   }
 

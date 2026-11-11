@@ -48,6 +48,28 @@ describe('Session > value API', () => {
   })
 })
 
+describe('Session > inherited keys', () => {
+  it('answers only for keys the session holds, never for Object.prototype', () => {
+    // A guard checking `session.has(key)` with a caller-supplied key must not
+    // be told an empty session holds `constructor`.
+    const s = new Session('sid')
+    for (const key of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      expect(s.has(key), key).toBe(false)
+      expect(s.get(key, 'fallback'), key).toBe('fallback')
+      expect(s.pull(key, 'fallback'), key).toBe('fallback')
+      expect(s.old(key, 'fallback'), key).toBe('fallback')
+    }
+  })
+
+  it('stores a key named __proto__ as data, not as the prototype', () => {
+    const s = new Session('sid')
+    s.put('__proto__', { admin: true })
+    expect(s.get('admin')).toBeUndefined()
+    expect(s.has('__proto__')).toBe(true)
+    expect(s.get('__proto__')).toEqual({ admin: true })
+  })
+})
+
 describe('Session > flash lifecycle', () => {
   it('extracts __flash from incoming data into the previous-request messages', () => {
     const s = new Session('sid', { user: 1, __flash: { success: 'Saved!' } })
