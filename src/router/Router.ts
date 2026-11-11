@@ -868,6 +868,8 @@ export class Router extends Macroable {
   #staticIndex: Map<string, RouteDefinition> = new Map()
   /** Index: parametric routes grouped by method. */
   #paramIndex: Map<string, RouteDefinition[]> = new Map()
+  /** Index: every domain a route is scoped to, lowercased, in registration order. */
+  #domains: string[] = []
   /** Index: named routes for O(1) URL generation. */
   #nameIndex: Map<string, RouteDefinition> = new Map()
   /** Whether the index needs rebuilding. */
@@ -1144,6 +1146,7 @@ export class Router extends Macroable {
     this.#staticIndex.clear()
     this.#paramIndex.clear()
     this.#nameIndex.clear()
+    this.#domains = []
 
     for (const route of this.#routes) {
       // Soft-deleted routes (resource .only()/.except()/.apiOnly()) never match.
@@ -1177,6 +1180,11 @@ export class Router extends Macroable {
           )
         }
         this.#nameIndex.set(route.name, route)
+      }
+
+      if (route.domain !== undefined) {
+        const domain = route.domain.toLowerCase()
+        if (!this.#domains.includes(domain)) this.#domains.push(domain)
       }
 
       const isParam = route.path.includes(':') || route.path.includes('*')
@@ -1221,24 +1229,27 @@ export class Router extends Macroable {
       candidates.push(path.slice(0, -1))
     }
 
+    // The domain the host belongs to decides which routes are candidates, as
+    // upstream does: only that domain's routes when one matches, with no
+    // fallback to the domain-less ones; only the domain-less ones when none
+    // does. A missing host matches no domain, so a domain-scoped route is
+    // never served to a request that simply omits its Host header.
+    const domain = host === undefined ? undefined : this.#matchingDomain(host)
+
     for (const candidatePath of candidates) {
-      // 1. Try static exact match (O(1))
-      const staticRoute =
-        this.#staticIndex.get(`${method}:${candidatePath}`) ??
-        this.#staticIndex.get(`*:${candidatePath}`)
-      if (staticRoute) {
-        // A missing host matches no domain: only routes without one are
-        // candidates, so a domain-scoped route is never served to a request
-        // that simply omits its Host header.
-        if (!staticRoute.domain || (host !== undefined && matchDomain(staticRoute.domain, host))) {
-          return { route: staticRoute, params: {} }
-        }
+      // 1. Try static exact match (O(1)). The index holds domain-less routes
+      // only, so it is consulted only when no domain owns the request.
+      if (domain === undefined) {
+        const staticRoute =
+          this.#staticIndex.get(`${method}:${candidatePath}`) ??
+          this.#staticIndex.get(`*:${candidatePath}`)
+        if (staticRoute) return { route: staticRoute, params: {} }
       }
 
-      // 2. Try parametric routes (only same-method candidates)
+      // 2. Try parametric and domain-scoped routes (only same-method candidates)
       const paramCandidates = this.#paramIndex.get(method) ?? []
       for (const route of paramCandidates) {
-        if (route.domain && (host === undefined || !matchDomain(route.domain, host))) continue
+        if (route.domain?.toLowerCase() !== domain) continue
 
         const params = matchPath(route.path, candidatePath)
         if (params === null) continue
@@ -1269,6 +1280,21 @@ export class Router extends Macroable {
     }
 
     return undefined
+  }
+
+  /**
+   * The registered domain `host` belongs to, lowercased, or `undefined` when
+   * none covers it.
+   *
+   * NAMED DEVIATION — upstream takes the first registered pattern that
+   * matches, so a wildcard declared before `admin.example.com` swallows the
+   * admin host and its routes become unreachable. An exact domain wins here
+   * over any wildcard, and among wildcards the first registered still wins.
+   */
+  #matchingDomain(host: string): string | undefined {
+    if (this.#domains.length === 0) return undefined
+    const exact = this.#domains.find((d) => !d.startsWith('*.') && matchDomain(d, host))
+    return exact ?? this.#domains.find((d) => d.startsWith('*.') && matchDomain(d, host))
   }
 
   // ─── URL generation ───────────────────────────────────────

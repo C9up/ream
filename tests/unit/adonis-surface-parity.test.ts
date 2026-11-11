@@ -235,3 +235,75 @@ describe('Router > a host matches case-insensitively', () => {
     expect(router.match('GET', '/admin', 'admin.example.com')).toBeDefined()
   })
 })
+
+describe('Router > the matching domain owns the request', () => {
+  function tenantRouter() {
+    const router = new Router()
+    router.get('/dashboard', () => {}).as('root.dashboard')
+    router
+      .get('/dashboard', () => {})
+      .domain('*.app.test')
+      .as('tenant.dashboard')
+    router.get('/users/:id', () => {}).as('root.user')
+    router
+      .get('/users/:id', () => {})
+      .domain('*.app.test')
+      .as('tenant.user')
+    router.get('/pricing', () => {}).as('root.pricing')
+    router.commit()
+    return router
+  }
+
+  it('serves the domain-bound route, not the domain-less one on the same static path', () => {
+    const match = tenantRouter().match('GET', '/dashboard', 'acme.app.test')
+    expect(match?.route.name).toBe('tenant.dashboard')
+  })
+
+  it('does the same for a parametric path', () => {
+    const match = tenantRouter().match('GET', '/users/7', 'acme.app.test')
+    expect(match?.route.name).toBe('tenant.user')
+    expect(match?.params).toEqual({ id: '7' })
+  })
+
+  it('serves the domain-less routes when no domain matches the host', () => {
+    const router = tenantRouter()
+    expect(router.match('GET', '/dashboard', 'app.test')?.route.name).toBe('root.dashboard')
+    expect(router.match('GET', '/dashboard', undefined)?.route.name).toBe('root.dashboard')
+    expect(router.match('GET', '/users/7', 'evil.test')?.route.name).toBe('root.user')
+  })
+
+  it('does not fall back to a domain-less route once a domain matched', () => {
+    // The host belongs to a tenant: a path only the root domain declares is
+    // not that tenant's to serve.
+    expect(tenantRouter().match('GET', '/pricing', 'acme.app.test')).toBeUndefined()
+    expect(tenantRouter().match('GET', '/pricing', 'app.test')?.route.name).toBe('root.pricing')
+  })
+
+  it('a group domain behaves the same way', () => {
+    const router = new Router()
+    router.get('/', () => {}).as('home')
+    router
+      .group(() => {
+        router.get('/', () => {}).as('admin.home')
+      })
+      .domain('admin.example.com')
+    router.commit()
+    expect(router.match('GET', '/', 'admin.example.com')?.route.name).toBe('admin.home')
+    expect(router.match('GET', '/', 'www.example.com')?.route.name).toBe('home')
+  })
+
+  it('prefers an exact domain over a wildcard covering the same host, whatever the order', () => {
+    const router = new Router()
+    router
+      .get('/', () => {})
+      .domain('*.example.com')
+      .as('tenant.home')
+    router
+      .get('/', () => {})
+      .domain('admin.example.com')
+      .as('admin.home')
+    router.commit()
+    expect(router.match('GET', '/', 'admin.example.com')?.route.name).toBe('admin.home')
+    expect(router.match('GET', '/', 'acme.example.com')?.route.name).toBe('tenant.home')
+  })
+})
