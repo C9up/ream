@@ -228,7 +228,6 @@
     "index.*.node",
     "scheduler.*.node",
     "events.*.node",
-    "scripts",
     "src",
     "swcrc.app.json",
     "tsconfig.app.json",
