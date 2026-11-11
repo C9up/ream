@@ -51,12 +51,17 @@ function isMimeType(value: string): value is MimeType {
  *
  * Like AdonisJS MultipartFile:
  *   const avatar = request.file('avatar', { size: '2mb', extnames: ['jpg', 'png'] })
- *   await avatar.moveToDisk('uploads')
+ *   await avatar.move(app.makePath('uploads'))
+ *
+ * Macroable: a package extends every upload at boot, the way a storage
+ * package adds `moveToDisk(key, disk?, options?)` to write it to a configured
+ * disk. `moveToDisk` is deliberately not defined here, so that macro owns it.
  */
 
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { errorCode } from '../helpers/errors.js'
+import { Macroable } from '../utils/Macroable.js'
 import { parseSize } from './parseSize.js'
 import { parseFormFields } from './qsParse.js'
 
@@ -66,7 +71,7 @@ export interface FileValidationOptions {
   extnames?: string[]
 }
 
-export class MultipartFile {
+export class MultipartFile extends Macroable {
   /** Original filename from the client. */
   readonly clientName: string
 
@@ -157,6 +162,12 @@ export class MultipartFile {
   /** The name it was written under, once it has been moved. */
   fileName?: string
 
+  /**
+   * Free-form data about the file, for whoever moves it: a storage macro
+   * records the URL of the stored object here.
+   */
+  meta: Record<string, unknown> = {}
+
   /** File size in bytes. */
   readonly size: number
 
@@ -192,6 +203,7 @@ export class MultipartFile {
     type: string
     content: Buffer
   }) {
+    super()
     this.fieldName = options.fieldName
     this.clientName = options.clientName
     this.headers = { 'content-type': options.type }
@@ -323,40 +335,6 @@ export class MultipartFile {
   }
 
   /**
-   * Move file to a directory on disk. When `name` is supplied it must be
-   * a plain filename — no path separators, no `.`/`..` segments. The
-   * common footgun is passing the client-supplied `clientName` directly
-   * (`await file.moveToDisk('uploads', file.clientName)`); a malicious
-   * upload could otherwise traverse out of `directory` via `../../etc/...`.
-   */
-  async moveToDisk(directory: string, name?: string): Promise<string> {
-    const { mkdirSync, writeFileSync } = await import('node:fs')
-    const { join } = await import('node:path')
-
-    if (name !== undefined && !isSafeFilename(name)) {
-      throw new Error(
-        `MultipartFile.moveToDisk: 'name' must be a plain filename (no path separators, '.', or '..'). Got: ${JSON.stringify(name)}`,
-      )
-    }
-
-    mkdirSync(directory, { recursive: true })
-    const fileName = name ?? `${randomBytes(16).toString('hex')}.${this.extname}`
-    // Defense-in-depth: the default branch interpolates `extname` (derived
-    // from attacker-controlled `clientName`) into the filename, bypassing
-    // the `name` guard above. Re-validate the synthesized fileName before
-    // join to reject a hostile extname (separators, NUL).
-    if (!isSafeFilename(fileName)) {
-      throw new Error(
-        `MultipartFile.moveToDisk: derived filename '${fileName}' is unsafe (separator or invalid char in clientName-derived extname).`,
-      )
-    }
-    const filePath = join(directory, fileName)
-    writeFileSync(filePath, this.content)
-    this.markAsMoved(fileName, filePath)
-    return filePath
-  }
-
-  /**
    * Write the file into `location` (AdonisJS `move`).
    *
    * NAMED DEVIATION — upstream renames a temporary file it streamed to disk;
@@ -364,19 +342,31 @@ export class MultipartFile {
    * construction), so this writes the buffer. There is therefore no
    * `E_MISSING_FILE_TMP_PATH`: there is no temporary file to be missing.
    *
-   * `overwrite` defaults to true, as upstream. The generated name carries the
-   * detected extension, and both it and a caller-supplied `name` go through the
-   * same plain-filename guard {@link moveToDisk} uses — the common footgun is
-   * passing `file.clientName` straight through.
+   * `overwrite` defaults to true, as upstream.
+   *
+   * NAMED DEVIATION — without `name`, upstream writes under `clientName`, a
+   * value the client chose; Ream generates a random name carrying the
+   * detected extension, so an upload neither picks its own path nor
+   * overwrites another one by sharing its name.
+   *
+   * A caller-supplied `name` must be a plain filename (no separator, no `.`
+   * or `..`): the common footgun is passing `file.clientName` straight
+   * through. The generated name is checked too, since its extension comes
+   * from the client's filename when the bytes are not recognised.
    */
   async move(location: string, options?: { name?: string; overwrite?: boolean }): Promise<void> {
     const { mkdir, writeFile } = await import('node:fs/promises')
     const { join } = await import('node:path')
 
+    if (options?.name !== undefined && !isSafeFilename(options.name)) {
+      throw new Error(
+        `MultipartFile.move: 'name' must be a plain filename (no path separators, '.', or '..'). Got: ${JSON.stringify(options.name)}`,
+      )
+    }
     const name = options?.name ?? `${randomBytes(16).toString('hex')}.${this.extname || 'unknown'}`
     if (!isSafeFilename(name)) {
       throw new Error(
-        `MultipartFile.move: 'name' must be a plain filename (no path separators, '.', or '..'). Got: ${JSON.stringify(name)}`,
+        `MultipartFile.move: the derived file name ${JSON.stringify(name)} is unsafe (a separator or NUL in the extension of the client's filename).`,
       )
     }
 

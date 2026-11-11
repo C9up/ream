@@ -27,12 +27,12 @@ export type MacroFn = (...args: unknown[]) => unknown
 /** A getter implementation — declare `this` in your callback to type the receiver. */
 export type GetterFn = () => unknown
 
-// biome-ignore lint/complexity/noStaticOnlyClass: eight classes extend this one to inherit macro()/getter(); it is a base class, not a namespace.
+// biome-ignore lint/complexity/noStaticOnlyClass: nine classes extend this one to inherit macro()/getter(); it is a base class, not a namespace.
 export class Macroable {
   /**
    * Attach a method to every instance of THIS class (AdonisJS `macro`).
    *
-   * `this.prototype`, not `Macroable.prototype`: eight classes extend this one,
+   * `this.prototype`, not `Macroable.prototype`: nine classes extend this one,
    * and defining on the base put every macro on all of them — a
    * `Response.macro('json', …)` also landed on `Request`, `Router` and
    * `HttpContext`, and two subclasses declaring the same name clobbered each

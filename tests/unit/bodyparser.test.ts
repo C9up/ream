@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import BodyParserMiddleware from '../../src/bodyparser/BodyParserMiddleware.js'
+import { MultipartFile } from '../../src/bodyparser/MultipartFile.js'
 import { HttpContext } from '../../src/http/HttpContext.js'
 import type { RawRequest } from '../../src/http/Request.js'
 
@@ -343,6 +344,74 @@ describe('BodyParserMiddleware — multipart limits', () => {
     })
     expect(ctx.request.input('user.address.city')).toBe('Geneva')
     expect(Reflect.get(Object.prototype, 'admin')).toBeUndefined()
+  })
+})
+
+describe('MultipartFile macros on a parsed upload', () => {
+  it('a storage package can attach moveToDisk(key, disk) and call it on request.file()', async () => {
+    // What a storage package does at boot: the local move is `move()`, so the
+    // name is free for a macro that writes the upload to a configured disk.
+    const disks = new Map<string, Map<string, Buffer>>()
+    MultipartFile.macro('moveToDisk', async function (this: MultipartFile, ...args: unknown[]) {
+      const [key, disk = 'local'] = args
+      if (typeof key !== 'string' || typeof disk !== 'string') throw new TypeError('bad args')
+      const store = disks.get(disk) ?? new Map<string, Buffer>()
+      store.set(key, this.content)
+      disks.set(disk, store)
+      this.markAsMoved(key, key)
+    })
+    try {
+      const raw: RawRequest = {
+        method: 'POST',
+        path: '/',
+        query: '',
+        headers: { 'content-type': 'multipart/form-data; boundary=x', 'content-length': '1' },
+        body: '',
+        multipart: {
+          fields: [],
+          files: [
+            {
+              fieldName: 'avatar',
+              clientName: 'me.txt',
+              contentType: 'text/plain',
+              size: 5,
+              contentB64: Buffer.from('hello').toString('base64'),
+            },
+          ],
+        },
+      }
+      const ctx = new HttpContext('test', raw, {}, { pattern: '/', middleware: [] })
+      await new BodyParserMiddleware().handle(ctx, noop)
+
+      const avatar = ctx.request.file('avatar')
+      expect(avatar).toBeInstanceOf(MultipartFile)
+      const moveToDisk: unknown = avatar ? Reflect.get(avatar, 'moveToDisk') : undefined
+      if (typeof moveToDisk !== 'function') throw new Error('moveToDisk macro not reachable')
+      await moveToDisk.call(avatar, 'avatars/me.txt', 's3')
+
+      expect(disks.get('s3')?.get('avatars/me.txt')?.toString()).toBe('hello')
+      expect(avatar?.state).toBe('moved')
+      expect(avatar?.fileName).toBe('avatars/me.txt')
+    } finally {
+      Reflect.deleteProperty(MultipartFile.prototype, 'moveToDisk')
+    }
+  })
+
+  it('MultipartFile.getter adds a computed property to every upload', async () => {
+    MultipartFile.getter('sizeInKb', function (this: MultipartFile) {
+      return this.size / 1024
+    })
+    try {
+      const file = new MultipartFile({
+        fieldName: 'f',
+        clientName: 'a.bin',
+        type: 'application/octet-stream',
+        content: Buffer.alloc(2048),
+      })
+      expect(Reflect.get(file, 'sizeInKb')).toBe(2)
+    } finally {
+      Reflect.deleteProperty(MultipartFile.prototype, 'sizeInKb')
+    }
   })
 })
 

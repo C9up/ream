@@ -86,7 +86,7 @@ describe('MultipartFile.stream()', () => {
   })
 })
 
-describe('MultipartFile.moveToDisk()', () => {
+describe('MultipartFile.move() — the file name guard', () => {
   let workDir: string
 
   beforeEach(() => {
@@ -108,48 +108,42 @@ describe('MultipartFile.moveToDisk()', () => {
 
   it('rejects a name containing path traversal (..)', async () => {
     const file = makeFile('attack.png')
-    await expect(file.moveToDisk(workDir, '../../etc/passwd')).rejects.toThrow(
+    await expect(file.move(workDir, { name: '../../etc/passwd' })).rejects.toThrow(
       /must be a plain filename/,
     )
   })
 
-  it('rejects a name containing path separators', async () => {
+  it('rejects a name containing backslash separators', async () => {
     const file = makeFile('attack.png')
-    await expect(file.moveToDisk(workDir, 'sub/dir/evil.txt')).rejects.toThrow(
+    await expect(file.move(workDir, { name: 'sub\\dir\\evil.txt' })).rejects.toThrow(
       /must be a plain filename/,
     )
-    await expect(file.moveToDisk(workDir, 'sub\\dir\\evil.txt')).rejects.toThrow(
-      /must be a plain filename/,
-    )
-  })
-
-  it('writes a plain filename inside the target directory', async () => {
-    const file = makeFile('upload.png')
-    const written = await file.moveToDisk(workDir, 'safe.png')
-    expect(written).toBe(join(workDir, 'safe.png'))
-    expect(readFileSync(written, 'utf8')).toBe('payload')
   })
 
   it('rejects a name containing a NUL byte', async () => {
-    // Node's writeFileSync rejects NUL at the syscall layer, but
-    // defense-in-depth: the guard must reject before path.join.
+    // Node rejects NUL at the syscall layer, but defense-in-depth: the guard
+    // must reject before path.join.
     const file = makeFile('attack.png')
-    await expect(file.moveToDisk(workDir, 'safe\0.png')).rejects.toThrow(/must be a plain filename/)
+    await expect(file.move(workDir, { name: 'safe\0.png' })).rejects.toThrow(
+      /must be a plain filename/,
+    )
   })
 
   it('rejects a hostile clientName-derived extname when no name is supplied', async () => {
-    // clientName "../etc/passwd" → split('.') → last segment "/etc/passwd"
-    // → extname "/etc/passwd". Without the second guard the default
-    // fileName would be "<hex>./etc/passwd" — a path with separators.
+    // clientName "../etc/passwd" splits on '.' to a last segment
+    // "/etc/passwd", so the generated name would be "<hex>./etc/passwd": a
+    // path with separators.
     const file = makeFile('../etc/passwd')
-    await expect(file.moveToDisk(workDir)).rejects.toThrow(/derived filename .* unsafe/)
+    await expect(file.move(workDir)).rejects.toThrow(/derived file name .* unsafe/)
+    expect(file.state).toBe('consumed')
   })
 
-  it('writes with a generated random name when none is supplied', async () => {
-    const written = await makeFile('upload.png').moveToDisk(workDir)
-    expect(written.startsWith(join(workDir, ''))).toBe(true)
-    expect(written.endsWith('.png')).toBe(true)
-    expect(readFileSync(written, 'utf8')).toBe('payload')
+  it('writes under a generated random name carrying the extension when none is supplied', async () => {
+    const file = makeFile('upload.png')
+    await file.move(workDir)
+    expect(file.fileName).toMatch(/^[0-9a-f]{32}\.png$/)
+    expect(file.filePath).toBe(join(workDir, file.fileName ?? ''))
+    expect(readFileSync(join(workDir, file.fileName ?? ''), 'utf8')).toBe('payload')
   })
 })
 
@@ -364,14 +358,6 @@ describe('MultipartFile > AdonisJS surface', () => {
     expect(f.sizeLimit).toBe('1kb')
     expect(f.validate()).toBe(false)
     expect(f.errors[0]).toMatch(/exceeds limit/)
-  })
-
-  it('moveToDisk records the move the same way move() does', async () => {
-    const f = upload('a.txt')
-    const path = await f.moveToDisk(dir, 'legacy.txt')
-    expect(f.state).toBe('moved')
-    expect(f.filePath).toBe(path)
-    expect(f.fileName).toBe('legacy.txt')
   })
 })
 

@@ -304,7 +304,7 @@ function assertNoEnabledFlag(config?: BodyParserConfig): void {
     throw new Error(
       '[E_BODYPARSER_CONFIG] `multipart.tmpDir` is not supported — uploaded files are held in ' +
         'memory and never written to a temporary directory. Choose the destination when you ' +
-        'store the file: `await file.moveToDisk(directory)`.',
+        'store the file: `await file.move(directory)`.',
     )
   }
 }

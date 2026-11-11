@@ -1,7 +1,7 @@
 /**
  * A macro belongs to the class it was declared on.
  *
- * Eight classes extend `Macroable`. Defining on the base prototype put every
+ * Nine classes extend `Macroable`. Defining on the base prototype put every
  * macro on all of them: `Response.macro('json', …)` also landed on `Request`,
  * `Router` and `HttpContext`, and two subclasses declaring the same name
  * clobbered each other with no warning. AdonisJS scopes to the calling class,
