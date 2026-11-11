@@ -39,8 +39,9 @@ describe('stub templates — interpolation', () => {
   it('leaves a backtick and a dollar-brace alone', () => {
     // The literal text ends up inside a template literal; unescaped, these
     // would end the string or interpolate.
-    const out = render('const a = `x ${y}`', {})
-    expect(out).toBe('const a = `x ${y}`')
+    const source = `const a = \`x \${y}\``
+    const out = render(source, {})
+    expect(out).toBe(source)
   })
 })
 
@@ -123,7 +124,7 @@ describe('stub templates — the generated source', () => {
     // Exposed on purpose: the compiled body is the only place to see what a
     // template actually became.
     expect(generate('Hi {{ name }}', { props: ['name'] })).toBe(
-      'var{name}=$$s,x=`Hi ${$$e(name)}`;return x',
+      `var{name}=$$s,x=\`Hi \${$$e(name)}\`;return x`,
     )
   })
 })
