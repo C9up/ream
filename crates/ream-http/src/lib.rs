@@ -18,7 +18,6 @@ pub mod response;
 pub mod security;
 pub mod server;
 pub mod stream_registry;
-pub mod websocket;
 
 pub use cookies::parse_cookie_header;
 pub use grpc::{GrpcCall, GrpcHandler, GrpcLimits, GrpcReply};
