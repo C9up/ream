@@ -1,6 +1,13 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
+import BodyParserMiddleware from '../../src/bodyparser/BodyParserMiddleware.js'
+import type { HttpContext } from '../../src/http/HttpContext.js'
 import { Container, createHttpKernel, MiddlewareRegistry, Router } from '../../src/index.js'
+
+/** The body parser in front of every route, as an application registers it. */
+const serverMiddleware = [
+  (ctx: HttpContext, next: () => Promise<void>) => new BodyParserMiddleware().handle(ctx, next),
+]
 
 function hasStringName(data: unknown): data is { name: string } {
   return (
@@ -26,7 +33,11 @@ function postJson(kernel: ReturnType<typeof createHttpKernel>, path: string, bod
     method: 'POST',
     path,
     query: '',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'content-length': String(Buffer.byteLength(JSON.stringify(body))),
+    },
     body: JSON.stringify(body),
   })
 }
@@ -46,7 +57,7 @@ describe('route .validate() — runtime validation', () => {
       })
       .validate('createUser')
 
-    const kernel = createHttpKernel({ router, middleware, container })
+    const kernel = createHttpKernel({ router, middleware, container, serverMiddleware })
     const res = await postJson(kernel, '/users', { name: '  Ada  ' })
 
     expect(res.status).toBe(200)
@@ -67,7 +78,7 @@ describe('route .validate() — runtime validation', () => {
       })
       .validate('createUser')
 
-    const kernel = createHttpKernel({ router, middleware, container })
+    const kernel = createHttpKernel({ router, middleware, container, serverMiddleware })
     const res = await postJson(kernel, '/users', { name: '' })
 
     expect(res.status).toBe(422)
@@ -87,6 +98,7 @@ describe('route .validate() — runtime validation', () => {
       router,
       middleware,
       container,
+      serverMiddleware,
       onError: (err) => errors.push(err),
     })
     const res = await postJson(kernel, '/users', { name: 'Ada' })
@@ -135,7 +147,7 @@ describe('route .validate() — async validator contracts', () => {
       })
       .validate('createUser')
 
-    const kernel = createHttpKernel({ router, middleware, container })
+    const kernel = createHttpKernel({ router, middleware, container, serverMiddleware })
     const res = await postJson(kernel, '/users', { name: '  Ada  ' })
 
     expect(res.status).toBe(200)
@@ -150,7 +162,7 @@ describe('route .validate() — async validator contracts', () => {
 
     router.post('/users', async () => {}).validate('createUser')
 
-    const kernel = createHttpKernel({ router, middleware, container })
+    const kernel = createHttpKernel({ router, middleware, container, serverMiddleware })
     const res = await postJson(kernel, '/users', { name: 'taken' })
 
     expect(res.status).toBe(422)
@@ -184,7 +196,7 @@ describe('route .validate() — async validator contracts', () => {
       })
       .validate('createUser')
 
-    const kernel = createHttpKernel({ router, middleware, container })
+    const kernel = createHttpKernel({ router, middleware, container, serverMiddleware })
 
     const ok = await postJson(kernel, '/users', { name: 'Ada' })
     expect(ok.status).toBe(200)

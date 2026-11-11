@@ -7,12 +7,11 @@ import { describe, expect, it } from 'vitest'
 import { Request } from '../../src/http/Request.js'
 
 /**
- * A JSON body, which `Request` parses on its own. A real HTML form sends
- * urlencoded and is decoded by BodyParserMiddleware first; what is under test
+ * A body as BodyParserMiddleware leaves it once decoded. What is under test
  * here is the spoofing decision, not the decoding.
  */
 function post(body: Record<string, string>) {
-  return new Request(
+  const request = new Request(
     {
       method: 'POST',
       url: '/posts/1',
@@ -22,6 +21,8 @@ function post(body: Record<string, string>) {
     } as never,
     {},
   )
+  request.setParsedBody(body)
+  return request
 }
 
 describe('ream > _method spoofing', () => {

@@ -7,8 +7,11 @@ import { describe, expect, it } from 'vitest'
 import { Request } from '../../src/http/Request.js'
 import { Response } from '../../src/http/Response.js'
 
+/** A request whose JSON body, if any, the body parser has already decoded. */
 function request(query: string, body = '', headers: Record<string, string> = {}): Request {
-  return new Request({ method: 'POST', path: '/orders', query, headers, body })
+  const r = new Request({ method: 'POST', path: '/orders', query, headers, body })
+  if (body !== '') r.setParsedBody(JSON.parse(body))
+  return r
 }
 
 describe('Request > the query string wins over the body', () => {

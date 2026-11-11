@@ -65,6 +65,7 @@ describe('Request > over-limit body', () => {
 
   it('leaves a request without the marker alone', () => {
     const request = new Request({ ...overLimit, bodyTooLarge: undefined, body: '{"a":1}' })
-    expect(request.body()).toEqual({ a: 1 })
+    expect(request.raw()).toBe('{"a":1}')
+    expect(request.body()).toEqual({})
   })
 })

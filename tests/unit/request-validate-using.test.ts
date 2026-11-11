@@ -23,11 +23,15 @@ function raw(over: Partial<RawRequest> = {}): RawRequest {
   }
 }
 
+/** A request whose JSON body the body parser has already decoded. */
 function request(
   over: Partial<RawRequest> = {},
   params: Record<string, string | string[]> = {},
 ): Request {
-  return new Request(raw(over), params)
+  const r = new Request(raw(over), params)
+  const body = raw(over).body
+  if (body !== '') r.setParsedBody(JSON.parse(body))
+  return r
 }
 
 /** Records what it was handed instead of validating. */

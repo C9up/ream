@@ -93,6 +93,43 @@ describe('BodyParserMiddleware — which requests get parsed', () => {
   })
 })
 
+describe('BodyParserMiddleware — JSON is read only under a JSON media type', () => {
+  const payload = '{"admin":true}'
+
+  it('parses a JSON body sent as application/json', async () => {
+    const ctx = makeCtx(payload, 'application/json; charset=utf-8')
+    await new BodyParserMiddleware().handle(ctx, noop)
+    expect(ctx.request.input('admin')).toBe(true)
+  })
+
+  it('never reads a CORS simple request as JSON', async () => {
+    // A foreign page sends these cross-site with the user's cookies and no
+    // preflight: a Blob with an empty type carries no Content-Type at all.
+    for (const contentType of ['', 'application/octet-stream', 'text/plain']) {
+      const ctx = makeCtx(payload, contentType)
+      await new BodyParserMiddleware().handle(ctx, noop)
+      expect(ctx.request.input('admin')).toBeUndefined()
+      expect(ctx.request.body()).not.toHaveProperty('admin')
+    }
+  })
+
+  it('leaves the body empty when no parser runs at all', () => {
+    const ctx = makeCtx(payload, 'application/json')
+    expect(ctx.request.body()).toEqual({})
+    expect(ctx.request.raw()).toBe(payload)
+  })
+
+  it('keeps a JSON value that is not an object under _body, and malformed JSON as {}', async () => {
+    const array = makeCtx('[1,2]', 'application/json')
+    await new BodyParserMiddleware().handle(array, noop)
+    expect(array.request.body()).toEqual({ _body: [1, 2] })
+
+    const broken = makeCtx('{"a":', 'application/json')
+    await new BodyParserMiddleware().handle(broken, noop)
+    expect(broken.request.body()).toEqual({})
+  })
+})
+
 describe('BodyParserMiddleware — body size', () => {
   it('throws 413 rather than writing its own JSON envelope', async () => {
     const ctx = makeCtxWith(`a=${'x'.repeat(2000)}`, 'application/x-www-form-urlencoded', {})

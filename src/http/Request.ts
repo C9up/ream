@@ -1119,39 +1119,21 @@ export class Request extends Macroable {
     }
   }
 
+  /**
+   * The body is whatever the body parser decided it is, and `{}` when no
+   * parser claimed it. Nothing is parsed here: a JSON body is only JSON when
+   * its Content-Type says so. Reading any body as JSON let a foreign page
+   * drive a JSON route with a CORS simple request (no Content-Type, or
+   * `text/plain`), which a browser sends cross-site with the user's cookies
+   * and without a preflight.
+   */
   #ensureParsedBody(): void {
     if (this.#parsedBody !== undefined) return
     this.#assertBodyKept()
-    const raw = this.#raw.body
-    if (!raw || raw.length === 0) {
-      this.#parsedBody = {}
-      return
-    }
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      this.#parsedBody = isPlainObject(parsed) ? parsed : { _body: parsed }
-    } catch {
-      this.#parsedBody = {}
-    }
+    this.#parsedBody = {}
   }
 }
 
-/** Parse a query string (key=value&key2=value2) into an object. */
-/**
- * Test whether an IPv4 address is within a CIDR range. Bare IP entries
- * (`10.0.0.42`) are accepted as `/32`. IPv6 falls back to string equality
- * — a full v6 implementation isn't required by the current security tests.
- */
-/**
- * Type guard for plain JSON-decoded objects. Excludes `null` (which is
- * `typeof === 'object'`) and arrays so consumers can index by string key
- * without a separate runtime check.
- */
-function isPlainObject(value: unknown): value is Dict<unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** True for an IPv4 dotted-quad or a (bracketed) IPv6 literal — hosts with no subdomains. */
 /**
  * Headers whose VALUE is a credential. Listing them is useful; printing them
  * hands whoever reads the log a working key.

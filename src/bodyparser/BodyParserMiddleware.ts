@@ -148,9 +148,10 @@ export default class BodyParserMiddleware {
       throw entityTooLarge('request entity too large')
     }
 
-    // JSON
+    // JSON — parsed here and only here, under one of `json.types`. A body
+    // with any other media type (or none) is never read as JSON.
     if (matchesType(contentType, this.#config.json.types)) {
-      // `Request` lazy-parses JSON on first read; nothing to do here.
+      ctx.request.setParsedBody(parseJsonBody(rawBody))
     }
 
     // Form URL-encoded
@@ -223,6 +224,24 @@ export default class BodyParserMiddleware {
   }
 }
 
+/**
+ * A JSON body as the request body: an object as is, any other JSON value under
+ * `_body` (the shape the raw-text parser uses), and `{}` for malformed JSON.
+ */
+function parseJsonBody(raw: string): Record<string, unknown> {
+  if (raw.length === 0) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return { ...parsed }
+  }
+  return { _body: parsed }
+}
+
 /** The one exception every body-size limit raises (AdonisJS parity). */
 function entityTooLarge(message: string): Exception {
   return new Exception(message, { status: 413, code: 'E_REQUEST_ENTITY_TOO_LARGE' })
@@ -250,8 +269,7 @@ function matchesType(contentType: string, types: string[]): boolean {
 
 /**
  * `enabled` was an atlas-era invention: AdonisJS has no such flag, and a parser
- * is turned off by giving it no `types`. It also never worked for JSON, which
- * `Request` lazy-parses on first read regardless.
+ * is turned off by giving it no `types`.
  *
  * Silently ignoring a config key that used to mean something would re-enable a
  * parser an app deliberately switched off, so it fails loudly with the

@@ -65,6 +65,7 @@ describe('Request.original', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ a: 1 }),
     })
+    req.setParsedBody({ a: 1 })
     expect(req.all()).toEqual({ a: 1 })
     req.setParsedBody({ a: 2, b: 3 })
     expect(req.all()).toEqual({ a: 2, b: 3 })

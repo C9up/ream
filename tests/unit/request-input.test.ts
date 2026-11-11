@@ -12,11 +12,14 @@ function req(raw: Partial<RawRequest>): Request {
   })
 }
 
-function withBody(body: unknown, headers: Record<string, string> = {}): Request {
-  return req({
+/** A request whose JSON body the body parser has already decoded. */
+function withBody(body: Record<string, unknown>, headers: Record<string, string> = {}): Request {
+  const request = req({
     body: JSON.stringify(body),
     headers: { 'content-type': 'application/json', ...headers },
   })
+  request.setParsedBody(body)
+  return request
 }
 
 describe('Request.input — dot-notation (AdonisJS parity)', () => {
@@ -39,11 +42,8 @@ describe('Request.input — dot-notation (AdonisJS parity)', () => {
     // AdonisJS composes `{ ...requestBody, ...requestQs }`, so a key present in
     // both reads its query value. This test used to assert the opposite while
     // claiming parity, which is how the divergence survived.
-    const r = req({
-      query: 'page=2&q=x',
-      body: JSON.stringify({ q: 'body' }),
-      headers: { 'content-type': 'application/json' },
-    })
+    const r = withBody({ q: 'body' })
+    r.updateQs({ page: '2', q: 'x' })
     expect(r.input('page')).toBe('2')
     expect(r.input('q')).toBe('x')
   })

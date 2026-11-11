@@ -280,8 +280,19 @@ export class GraphQLEngine {
       return
     }
 
-    const rawBody = ctx.request.body()
-    const body = parseGraphQLBody(rawBody)
+    // Only a JSON body is a GraphQL request. A form post, a text/plain body or
+    // one with no Content-Type is a CORS simple request: a foreign page sends
+    // it with the user's cookies and no preflight, so a mutation would run
+    // cross-site. Refused before the body is read.
+    const mediaType = (ctx.request.header('content-type')?.split(';')[0] ?? '').trim().toLowerCase()
+    if (mediaType !== 'application/json') {
+      ctx.response.status(415).json({ errors: [{ message: 'Unsupported Media Type' }] })
+      return
+    }
+
+    // Read from the raw body rather than `request.body()`, so the endpoint
+    // works whether or not the body parser runs in front of it.
+    const body = parseGraphQLBody(parseJson(ctx.request.raw()))
     if (!body) {
       ctx.response.status(400).json({ errors: [{ message: 'Missing or invalid query' }] })
       return
@@ -518,6 +529,14 @@ export class GraphQLEngine {
 /** GraphQL `variables` must be a keyed object — never an array or null. */
 function isVariablesRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return undefined
+  }
 }
 
 function parseGraphQLBody(body: unknown): GraphQLRequest | null {

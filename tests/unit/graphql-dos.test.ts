@@ -54,3 +54,60 @@ describe('GraphQLEngine > DoS guards', () => {
     expect(body).not.toContain('maximum size')
   })
 })
+
+describe('GraphQLEngine > CORS simple requests', () => {
+  class Mutations {
+    static runs = 0
+    promote(): boolean {
+      Mutations.runs += 1
+      return true
+    }
+  }
+
+  function mutationEngine(): GraphQLEngine {
+    const dir = mkdtempSync(join(tmpdir(), 'ream-gql-csrf-'))
+    const schemaPath = join(dir, 'schema.graphql')
+    writeFileSync(schemaPath, 'type Query { ping: String } type Mutation { promote: Boolean }')
+    const engine = new GraphQLEngine({ schemaPath })
+    engine.resolver('Mutation', 'promote', Mutations, 'promote')
+    return engine
+  }
+
+  async function send(headers: Record<string, string>): Promise<HttpContext> {
+    const raw: RawRequest = {
+      method: 'POST',
+      path: '/graphql',
+      query: '',
+      headers,
+      body: JSON.stringify({ query: 'mutation { promote }' }),
+    }
+    const ctx = new HttpContext('t', raw, {}, { pattern: '/graphql', middleware: [] })
+    await mutationEngine().handle(ctx)
+    return ctx
+  }
+
+  it('refuses a body that is not labelled JSON with 415, before any resolver runs', async () => {
+    // A foreign page sends these cross-site with the user's cookies and no
+    // preflight; a Blob with an empty type carries no Content-Type at all.
+    Mutations.runs = 0
+    const simple: Record<string, string>[] = [
+      {},
+      { 'content-type': 'text/plain' },
+      { 'content-type': 'application/x-www-form-urlencoded' },
+      { 'content-type': 'application/octet-stream' },
+    ]
+    for (const headers of simple) {
+      const ctx = await send(headers)
+      expect(ctx.response.getStatus()).toBe(415)
+    }
+    expect(Mutations.runs).toBe(0)
+  })
+
+  it('runs the same mutation sent as application/json', async () => {
+    Mutations.runs = 0
+    const ctx = await send({ 'content-type': 'application/json; charset=utf-8' })
+    expect(ctx.response.getStatus()).toBe(200)
+    expect(JSON.parse(ctx.response.getBody())).toEqual({ data: { promote: true } })
+    expect(Mutations.runs).toBe(1)
+  })
+})

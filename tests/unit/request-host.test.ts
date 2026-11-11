@@ -51,6 +51,7 @@ describe('Request.method — _method spoofing (opt-in)', () => {
       body: JSON.stringify({ _method: 'DELETE' }),
       headers: { 'content-type': 'application/json' },
     })
+    r.setParsedBody({ _method: 'DELETE' })
     expect(r.method()).toBe('POST')
     expect(r.intended()).toBe('POST')
   })
@@ -61,6 +62,7 @@ describe('Request.method — _method spoofing (opt-in)', () => {
       body: JSON.stringify({ _method: 'delete' }),
       headers: { 'content-type': 'application/json' },
     })
+    r.setParsedBody({ _method: 'delete' })
     r.setMethodSpoofing(true)
     expect(r.method()).toBe('DELETE')
     // intended() always reports the real verb.
