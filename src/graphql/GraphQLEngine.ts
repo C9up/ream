@@ -24,6 +24,7 @@
 import * as fs from 'node:fs'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import { loadNapi } from '../helpers/napi-loader.js'
+import { Exception } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { holdsPermissions } from '../http/permissions.js'
 
@@ -170,6 +171,14 @@ export interface GraphQLConfig {
    * (default: 1000).
    */
   maxComplexity?: number
+  /**
+   * Echo the message of any error a resolver throws to the client. Default:
+   * only when NODE_ENV is development. Otherwise only a deliberate
+   * `Exception`, a client error (status below 500) or an error flagged
+   * `expose: true` keeps its message; anything else reads "Internal server
+   * error", and the real error goes to `ctx.logger`.
+   */
+  debug?: boolean
 }
 
 export interface ResolverOptions {
@@ -208,6 +217,7 @@ export class GraphQLEngine {
   #container?: { make<T>(target: abstract new (...args: never[]) => T): Promise<T> }
   readonly path: string
   #playground: boolean
+  readonly #debug: boolean
   #maxQueryBytes: number
   #maxDepth: number
   #maxComplexity: number
@@ -237,6 +247,7 @@ export class GraphQLEngine {
     this.#maxQueryBytes = config.maxQueryBytes ?? 100_000
     this.#maxDepth = config.maxDepth ?? 12
     this.#maxComplexity = config.maxComplexity ?? 1000
+    this.#debug = config.debug ?? currentNodeEnv() === 'development'
   }
 
   /** Set IoC container for resolver instantiation. */
@@ -302,11 +313,7 @@ export class GraphQLEngine {
       const result = await this.#execute(body, ctx)
       ctx.response.status(200).json(result)
     } catch (err) {
-      const message =
-        currentNodeEnv() !== 'production' && err instanceof Error
-          ? err.message
-          : 'Internal server error'
-      ctx.response.status(500).json({ errors: [{ message }] })
+      ctx.response.status(500).json({ errors: [{ message: this.#publicMessage(err, ctx) }] })
     }
   }
 
@@ -407,9 +414,24 @@ export class GraphQLEngine {
       // ask for. Empty selection (scalar field) returns the value as-is.
       return { ok: true, value: pruneToSelection(result, field.selection) }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Resolver error'
-      return { ok: false, error: { message: msg, path: [field.name] } }
+      return { ok: false, error: { message: this.#publicMessage(err, ctx), path: [field.name] } }
     }
+  }
+
+  /**
+   * The message a client may see for a thrown error — the rule the HTTP
+   * exception handler applies. A driver or library error carries internal
+   * hosts, credentials and stored values in its text, so outside debug it is
+   * collapsed, and the original is logged for the operator instead.
+   */
+  #publicMessage(err: unknown, ctx: HttpContext): string {
+    const message = err instanceof Error ? err.message : String(err)
+    if (this.#debug || isPublicError(err)) return message
+    ctx.logger.error('GraphQL resolver failed', {
+      message,
+      stack: err instanceof Error ? err.stack : undefined,
+    })
+    return 'Internal server error'
   }
 
   /**
@@ -529,6 +551,14 @@ export class GraphQLEngine {
 /** GraphQL `variables` must be a keyed object — never an array or null. */
 function isVariablesRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** A deliberate `Exception`, a client error, or an error flagged `expose: true`. */
+function isPublicError(err: unknown): boolean {
+  if (err instanceof Exception) return true
+  if (err === null || typeof err !== 'object') return false
+  if ('expose' in err && err.expose === true) return true
+  return 'status' in err && typeof err.status === 'number' && err.status < 500
 }
 
 function parseJson(raw: string): unknown {
