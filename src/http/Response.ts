@@ -1133,7 +1133,9 @@ export class Response extends Macroable {
         'encryptedCookie() requires APP_KEY — set it so the encryption service is registered.',
       )
     }
-    return this.#writeCookie(name, this.#cookieSigner.encrypt(value), options)
+    // The cookie name is the purpose, as for a signed cookie: a value issued
+    // as one encrypted cookie cannot be replayed under another one's name.
+    return this.#writeCookie(name, this.#cookieSigner.encrypt(value, undefined, name), options)
   }
 
   #writeCookie(name: string, value: string, options?: CookieOptions): this {

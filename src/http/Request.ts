@@ -478,7 +478,9 @@ export class Request extends Macroable {
   encryptedCookie(name: string, defaultValue?: string): string | null
   encryptedCookie(name: string, defaultValue?: string): string | null {
     const raw = this.plainCookie<string>(name, undefined, { encoded: false })
-    const value = raw === null || !this.#cookieSigner ? null : this.#cookieSigner.decrypt(raw)
+    // Decrypted for the purpose it was written under — its own name — so a
+    // value issued as another encrypted cookie is refused here.
+    const value = raw === null || !this.#cookieSigner ? null : this.#cookieSigner.decrypt(raw, name)
     return value ?? defaultValue ?? null
   }
 

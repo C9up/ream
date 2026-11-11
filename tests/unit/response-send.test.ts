@@ -349,6 +349,24 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
     expect(req.encryptedCookie('secret')).toBe('top')
   })
 
+  it('encryptedCookie() refuses a value issued under another cookie name', () => {
+    // A low-value cookie the app issued must not decrypt when the client
+    // replays it under the name of a more sensitive one.
+    const res = new Response()
+    res.setCookieSigner(signer)
+    res.encryptedCookie('theme', 'dark')
+    const sc = res.getHeaders()['set-cookie'] ?? ''
+    const enc = defined(sc.split(';')[0]).split('=').slice(1).join('=')
+
+    const replayed = new Request(rawWithCookie('user_id', enc), {})
+    replayed.setCookieSigner(signer)
+    expect(replayed.encryptedCookie('user_id')).toBeNull()
+
+    const genuine = new Request(rawWithCookie('theme', enc), {})
+    genuine.setCookieSigner(signer)
+    expect(genuine.encryptedCookie('theme')).toBe('dark')
+  })
+
   it('encryptedCookie() throws without an encryption service', () => {
     expect(() => new Response().encryptedCookie('x', 'y')).toThrow(/APP_KEY/)
   })
