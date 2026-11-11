@@ -289,6 +289,7 @@ export {
   createCodemods,
   type EnvValidationNode,
   type GeneratedStub,
+  type MiddlewarePosition,
   type PreloadEnvironment,
   type StubState,
 } from './Codemods.js'

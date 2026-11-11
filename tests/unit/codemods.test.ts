@@ -357,6 +357,59 @@ describe('Codemods', () => {
       expect(routerBlock?.[1]).not.toContain('@community/headers/middleware.js')
     })
 
+    const sessionKernel = `import router from '@c9up/ream/services/router'\nimport server from '@c9up/ream/services/server'\n\nserver.use([\n])\n\nrouter.use([\n  () => import('@c9up/ream/session_middleware'),\n])\n`
+
+    function routerEntries(content: string): string[] {
+      const block = content.match(/router\.use\(\[([\s\S]*?)\]\)/)?.[1] ?? ''
+      return [...block.matchAll(/import\('([^']+)'\)/g)].map((match) => match[1] ?? '')
+    }
+
+    it('appends after the entries already there by default, as execution order needs', async () => {
+      // A CSRF guard reads the session: written ahead of the session
+      // middleware, every request would be refused.
+      const kernelPath = writeKernel(tmpDir, sessionKernel)
+      const codemods = createCodemods({ cwd: tmpDir })
+      await codemods.registerMiddleware('@c9up/blackhole/middleware', { position: 'after' })
+      await codemods.registerMiddleware('@community/audit/middleware.js')
+      expect(routerEntries(fs.readFileSync(kernelPath, 'utf8'))).toEqual([
+        '@c9up/ream/session_middleware',
+        '@c9up/blackhole/middleware',
+        '@community/audit/middleware.js',
+      ])
+    })
+
+    it("prepends only when position is 'before'", async () => {
+      const kernelPath = writeKernel(tmpDir, sessionKernel)
+      const codemods = createCodemods({ cwd: tmpDir })
+      await codemods.registerMiddleware('@community/first/middleware.js', { position: 'before' })
+      expect(routerEntries(fs.readFileSync(kernelPath, 'utf8'))).toEqual([
+        '@community/first/middleware.js',
+        '@c9up/ream/session_middleware',
+      ])
+    })
+
+    it('adds the comma a last entry lacks, even behind a line comment', async () => {
+      const kernelPath = writeKernel(
+        tmpDir,
+        `import router from '@c9up/ream/services/router'\n\nrouter.use([\n  () => import('@c9up/ream/session_middleware') // sessions\n])\n`,
+      )
+      const codemods = createCodemods({ cwd: tmpDir })
+      await codemods.registerMiddleware('@c9up/blackhole/middleware')
+      const content = fs.readFileSync(kernelPath, 'utf8')
+      expect(content).toContain(
+        "  () => import('@c9up/ream/session_middleware'), // sessions\n  () => import('@c9up/blackhole/middleware'),\n])",
+      )
+    })
+
+    it('rejects an invalid position', async () => {
+      writeKernel(tmpDir, canonicalKernel)
+      const codemods = createCodemods({ cwd: tmpDir })
+      const opts = bypassTypeCheck<{ position?: 'before' | 'after' }>({ position: 'middle' })
+      await expect(codemods.registerMiddleware('@community/x/middleware.js', opts)).rejects.toThrow(
+        "[configure] Invalid middleware position: 'middle'.",
+      )
+    })
+
     it('is idempotent per-tier on re-run', async () => {
       const kernelPath = writeKernel(tmpDir, canonicalKernel)
       const codemods = createCodemods({ cwd: tmpDir })

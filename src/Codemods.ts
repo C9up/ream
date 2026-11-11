@@ -43,7 +43,10 @@ export interface Codemods {
     options?: { force?: boolean },
   ): Promise<GeneratedStub>
   registerCommand(importPath: string): Promise<void>
-  registerMiddleware(importPath: string, options?: { tier?: 'server' | 'router' }): Promise<void>
+  registerMiddleware(
+    importPath: string,
+    options?: { tier?: 'server' | 'router'; position?: MiddlewarePosition },
+  ): Promise<void>
   defineEnvValidations(definition: EnvValidationNode): Promise<string[]>
   addPreloadFile(modulePath: string, environments?: PreloadEnvironment[]): Promise<void>
 }
@@ -129,6 +132,40 @@ function findTierBlock(
   const closeMatch = /\]\s*,?\s*\)/.exec(content.slice(start))
   if (closeMatch === null) return null
   return { start, end: start + closeMatch.index }
+}
+
+/**
+ * Where a middleware entry goes in its tier's array: at the end (`after`, the
+ * default, as the upstream assembler does) or at the head (`before`). Order is
+ * execution order, so a middleware that needs another one's work — a CSRF
+ * guard reading the session — is appended after it.
+ */
+export type MiddlewarePosition = 'before' | 'after'
+
+/**
+ * Insert `text` after the last element of the array whose contents span
+ * `block`, adding the comma the previous element may lack. A trailing line
+ * comment is stepped over so the comma never lands inside it.
+ */
+function appendToArray(
+  content: string,
+  block: { start: number; end: number },
+  text: string,
+): string {
+  const inner = content.slice(block.start, block.end)
+  const trimmed = inner.trimEnd()
+  const insertAt = block.start + trimmed.length
+  if (trimmed.trim() === '' || trimmed.endsWith(',')) {
+    return `${content.slice(0, insertAt)}${text}${content.slice(insertAt)}`
+  }
+  const lineStart = trimmed.lastIndexOf('\n') + 1
+  const commentAt = trimmed.indexOf('//', lineStart)
+  const code = (commentAt === -1 ? trimmed : trimmed.slice(0, commentAt)).trimEnd()
+  if (code.trim() === '' || code.endsWith(',')) {
+    return `${content.slice(0, insertAt)}${text}${content.slice(insertAt)}`
+  }
+  const commaAt = block.start + code.length
+  return `${content.slice(0, commaAt)},${content.slice(commaAt, insertAt)}${text}${content.slice(insertAt)}`
 }
 
 /**
@@ -566,8 +603,14 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
      */
     async registerMiddleware(
       importPath: string,
-      options?: { tier?: MiddlewareTier },
+      options?: { tier?: MiddlewareTier; position?: MiddlewarePosition },
     ): Promise<void> {
+      const position = options?.position ?? 'after'
+      if (position !== 'before' && position !== 'after') {
+        throw new Error(
+          `[configure] Invalid middleware position: '${String(position)}'. Expected 'before' or 'after'.`,
+        )
+      }
       const requestedTier = options?.tier ?? 'router'
       if (!isMiddlewareTier(requestedTier)) {
         throw new Error(
@@ -612,7 +655,10 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
 
       const eol = detectLineEnding(content)
       const entry = `  () => import('${importPath}'),`
-      content = `${content.slice(0, targetBlock.start)}${eol}${entry}${content.slice(targetBlock.start)}`
+      content =
+        position === 'before'
+          ? `${content.slice(0, targetBlock.start)}${eol}${entry}${content.slice(targetBlock.start)}`
+          : appendToArray(content, targetBlock, `${eol}${entry}`)
       fs.writeFileSync(kernelPath, content)
     },
 
