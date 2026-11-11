@@ -7,8 +7,10 @@
  * signed email-verification token. Those two claims travel inside the payload,
  * which is why they are added before signing rather than checked after.
  *
- * Ported from `@poppinss/utils`; `CookieSigner` and `SignedUrl` sign what this
- * produces.
+ * Ported from `@poppinss/utils`, as a helper for application code. Ream's own
+ * signers do not use it: `CookieSigner` seals its values in a compact envelope
+ * of its own (`{ m, e, p }`, an epoch-millisecond expiry), and `SignedUrl`
+ * carries the expiry and the purpose as query parameters.
  */
 
 import { milliseconds } from './duration.js'
