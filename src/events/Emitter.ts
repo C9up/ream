@@ -235,10 +235,9 @@ export class Emitter {
    * event it does not own.
    */
   async #dispatchListeners(event: string, data: unknown, serial: boolean): Promise<void> {
-    const listeners = [
-      ...(this.#stringListeners.get(event) ?? []),
-      ...this.#wildcardListenersFor(event),
-    ]
+    // `onAny` listeners are not here: they subscribe through the native bus,
+    // which delivers every matching event to them on its own.
+    const listeners = this.#stringListeners.get(event) ?? []
     if (listeners.length === 0) return
     const run = async (fn: ListenerFn): Promise<void> => {
       try {
@@ -252,11 +251,6 @@ export class Emitter {
       return
     }
     await Promise.all(listeners.map(run))
-  }
-
-  /** Listeners registered through `onAny` whose pattern matches `event`. */
-  #wildcardListenersFor(_event: string): ListenerFn[] {
-    return []
   }
 
   /**
