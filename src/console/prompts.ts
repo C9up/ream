@@ -513,7 +513,9 @@ export class Prompt {
       rl.question(query, (answer) => {
         if (masked) stdout.write('\n')
         rl.close()
-        resolve(answer.trim())
+        // A secret is returned as typed: a password may begin or end with a
+        // space, and trimming it would store or compare a different one.
+        resolve(masked ? answer : answer.trim())
       })
     })
   }
