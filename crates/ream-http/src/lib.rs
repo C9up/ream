@@ -33,5 +33,5 @@ pub use ratelimit::{RateLimitConfig, RateLimitOutcome, RateLimiter};
 pub use request::ReamRequest;
 pub use response::ReamResponse;
 pub use security::{FilterResult, NoopFilter, SecurityFilter, ShieldConfig, ShieldFilter};
-pub use server::{ReamServer, RequestHandler, ResponseBody, ResponseFilter};
+pub use server::{ReamServer, RequestHandler, ResponseBody};
 pub use stream_registry::{StreamChunk, StreamId, StreamRegistry};

@@ -41,9 +41,6 @@ pub type RequestHandler = Arc<
         + Sync,
 >;
 
-/// Optional response filter applied after the handler returns, before Hyper sends.
-pub type ResponseFilter = Arc<dyn Fn(ReamResponse) -> ReamResponse + Send + Sync>;
-
 /// Pause after a failed `accept()` before trying again. The usual failure is
 /// running out of file descriptors (`EMFILE`); retrying at once would spin a
 /// core until a descriptor frees up.
@@ -55,7 +52,6 @@ pub struct ReamServer {
     port: u16,
     handler: Option<RequestHandler>,
     security_filter: Option<Arc<dyn crate::SecurityFilter>>,
-    response_filter: Option<ResponseFilter>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Accept-loop task handle. Held so `shutdown()` can AWAIT the loop's end —
     /// the loop owns a clone of the request handler, which (in the NAPI layer)
@@ -98,7 +94,6 @@ impl ReamServer {
             port,
             handler: None,
             security_filter: None,
-            response_filter: None,
             shutdown_tx: None,
             accept_handle: None,
             conn_shutdown_tx: None,
@@ -163,12 +158,6 @@ impl ReamServer {
         self.security_filter = Some(filter);
     }
 
-    /// Set a response filter applied after the handler, before Hyper sends.
-    /// Used for XSS sanitization of HTML/text responses.
-    pub fn set_response_filter(&mut self, filter: ResponseFilter) {
-        self.response_filter = Some(filter);
-    }
-
     /// Register the gRPC handler: from then on, `application/grpc` requests
     /// are served as gRPC calls on this same port (see [`crate::grpc`]).
     pub fn on_grpc(&mut self, handler: crate::GrpcHandler) {
@@ -203,7 +192,6 @@ impl ReamServer {
         let context = Arc::new(ServeContext {
             handler,
             security_filter: self.security_filter.clone(),
-            response_filter: self.response_filter.clone(),
             trusted_proxies: self.trusted_proxies.clone(),
             rate_limiter: self.rate_limiter.clone(),
             stream_registry: self.stream_registry.clone(),
@@ -330,7 +318,6 @@ impl ReamServer {
 struct ServeContext {
     handler: RequestHandler,
     security_filter: Option<Arc<dyn crate::SecurityFilter>>,
-    response_filter: Option<ResponseFilter>,
     trusted_proxies: Arc<TrustedProxies>,
     rate_limiter: Option<Arc<crate::RateLimiter>>,
     stream_registry: StreamRegistry,
@@ -581,15 +568,6 @@ async fn handle_request(
     }
 
     let mut ream_res = (context.handler)(ream_req).await;
-
-    // Apply response filter (XSS sanitization for HTML/text) — skipped for
-    // streamed bodies. A sanitizer that scans an SSE wire (`event:
-    // foo\ndata: bar\n\n`) would butcher the framing.
-    if !ream_res.is_streaming() {
-        if let Some(ref rf) = context.response_filter {
-            ream_res = (rf)(ream_res);
-        }
-    }
 
     // Stitch rate-limit headers onto allowed responses so well-behaved
     // clients can self-throttle.

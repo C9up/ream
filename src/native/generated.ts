@@ -350,44 +350,6 @@ export declare class RustScheduler {
   nextRun(name: string): number | null
 }
 
-/**
- * Sign a JWT payload with HMAC-SHA256 (Rust-native).
- * Returns the complete JWT token string.
- */
-
-export declare function jwtSign(payload: string, secret: string): string
-
-/**
- * Verify a JWT token and return the decoded payload JSON string.
- * Validates signature (constant-time), exp, and nbf claims.
- */
-
-export declare function jwtVerify(token: string, secret: string): string
-
-/**
- * Hash a password with Argon2id (Rust-native).
- * Returns the PHC-formatted hash string.
- */
-
-export declare function argon2Hash(password: string): string
-
-/** Verify a password against an Argon2id hash. */
-
-export declare function argon2Verify(password: string, hash: string): boolean
-
-/**
- * Hash a password with bcrypt (Rust-native).
- * `rounds` defaults to 12 when not supplied — matches the previous
- * warden-engine default and the OWASP-recommended cost floor enforced
- * by `sigil-engine`.
- */
-
-export declare function bcryptHash(password: string, rounds?: number | undefined | null): string
-
-/** Verify a password against a bcrypt hash. */
-
-export declare function bcryptVerify(password: string, hash: string): boolean
-
 /** Constant-time string comparison. */
 
 export declare function constantTimeEq(a: string, b: string): boolean

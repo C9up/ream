@@ -110,6 +110,27 @@ describeIfNetwork('hyper-server > basic', () => {
   })
 })
 
+describeIfNetwork('hyper-server > response bodies', () => {
+  it('sends an HTML fragment exactly as the handler wrote it', async () => {
+    // The server used to run every text/html fragment through an HTML
+    // sanitiser, which strips what its allow-list does not know: a partial
+    // carrying a form lost the form, its inputs and its button.
+    const fragment =
+      '<form method="post" action="/todos"><input name="title"><button>Add</button></form>' +
+      '<script type="module">init()</script>'
+    const { port, close } = await createServer(async () => ({
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+      body: fragment,
+    }))
+    try {
+      expect((await httpGet(port, '/partial')).body).toBe(fragment)
+    } finally {
+      await close()
+    }
+  })
+})
+
 describeIfNetwork('hyper-server > concurrency', () => {
   it('handles multiple concurrent requests', async () => {
     let requestCount = 0

@@ -738,20 +738,6 @@ impl HyperServer {
         };
         srv.set_rate_limiter(limiter);
 
-        // Wire XSS response sanitization via the standalone blackhole-engine.
-        // The adapter closure bridges between ream-http's ReamResponse type and
-        // blackhole-engine's standalone (body, content_type) → String API.
-        srv.set_response_filter(Arc::new(|mut response: ream_http::ReamResponse| {
-            let ct = response
-                .headers
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-                .map(|(_, v)| v.as_str())
-                .unwrap_or("");
-            response.body = blackhole_engine::sanitize_response(&response.body, ct);
-            response
-        }));
-
         // Use a oneshot channel to signal when the server is ready
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Option<String>>();
         let server_ref_clone = server_ref.clone();
@@ -948,87 +934,6 @@ impl HyperServer {
 }
 
 // ─── Security bindings ──────────────────────────────────────
-
-/// Sign a JWT payload with HMAC-SHA256 (Rust-native).
-/// Returns the complete JWT token string.
-#[napi]
-pub fn jwt_sign(payload: String, secret: String) -> napi::Result<String> {
-    catch_unwind_napi(|| {
-        warden_engine::jwt_sign(&payload, secret.as_bytes())
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
-    })
-}
-
-/// Verify a JWT token and return the decoded payload JSON string.
-/// Validates signature (constant-time), exp, and nbf claims.
-#[napi]
-pub fn jwt_verify(token: String, secret: String) -> napi::Result<String> {
-    catch_unwind_napi(|| {
-        warden_engine::jwt_verify(&token, secret.as_bytes())
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
-    })
-}
-
-// Argon2id + bcrypt routed through `sigil-engine`, the canonical password
-// hashing crate since Story 40.1. Story 52.1 (2026-05-08) dropped the
-// redundant copies from `warden-engine`; this NAPI surface migrated to
-// `sigil-engine` to follow.
-
-/// Hash a password with Argon2id (Rust-native).
-/// Returns the PHC-formatted hash string.
-#[napi]
-pub fn argon2_hash(password: String) -> napi::Result<String> {
-    catch_unwind_napi(|| {
-        sigil_engine::argon2_hash(
-            &password,
-            // Every field `None`: sigil owns the defaults, and restating
-            // them here would pin this binding to the values of the day it
-            // was written. `secret` is the pepper — left unset because it
-            // must be supplied identically at verify, and this entry point
-            // takes no place to carry one.
-            sigil_engine::Argon2Options {
-                memory_kib: None,
-                iterations: None,
-                parallelism: None,
-                secret: None,
-                variant: None,
-                hash_length: None,
-                salt_length: None,
-            },
-        )
-        .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
-    })
-}
-
-/// Verify a password against an Argon2id hash.
-#[napi]
-pub fn argon2_verify(password: String, hash: String) -> napi::Result<bool> {
-    // `None` pepper, matching `argon2_hash` above: a verify with a secret
-    // the hash was not made with fails, so the two must agree.
-    catch_unwind_napi(|| Ok(sigil_engine::argon2_verify(&password, &hash, None)))
-}
-
-/// Hash a password with bcrypt (Rust-native).
-/// `rounds` defaults to 12 when not supplied — matches the previous
-/// warden-engine default and the OWASP-recommended cost floor enforced
-/// by `sigil-engine`.
-#[napi]
-pub fn bcrypt_hash(password: String, rounds: Option<u32>) -> napi::Result<String> {
-    catch_unwind_napi(|| {
-        // `version` and `salt_length` left to sigil's defaults.
-        sigil_engine::bcrypt_hash(&password, rounds.unwrap_or(12), None, None)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
-    })
-}
-
-/// Verify a password against a bcrypt hash.
-#[napi]
-pub fn bcrypt_verify(password: String, hash: String) -> napi::Result<bool> {
-    catch_unwind_napi(|| {
-        sigil_engine::bcrypt_verify(&password, &hash)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
-    })
-}
 
 /// Constant-time string comparison.
 #[napi]
