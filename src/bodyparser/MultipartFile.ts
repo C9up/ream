@@ -57,6 +57,7 @@ function isMimeType(value: string): value is MimeType {
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { parseSize } from './parseSize.js'
+import { parseFormFields } from './qsParse.js'
 
 export interface FileValidationOptions {
   /** Largest accepted size: bytes, or a value such as `'2mb'` or `'1.5 mb'`. */
@@ -449,11 +450,13 @@ export function hydrateMultipartPayload(payload: {
     size: number
     contentB64: string
   }>
-}): { fields: Record<string, string>; files: MultipartFile[] } {
-  const fields: Record<string, string> = {}
-  for (const field of payload.fields) {
-    fields[field.name] = field.value
-  }
+}): { fields: Record<string, unknown>; files: MultipartFile[] } {
+  // Nested and collected exactly like a urlencoded body: `tags[]` repeated is
+  // an array, `user[name]` an object. Flat, a repeated name kept only its
+  // last value once a file input was added to the form.
+  // The multipart part count is already bounded natively (`maxFields`), so
+  // no parameter cap applies on top of it here.
+  const fields = parseFormFields(payload.fields, { parameterLimit: Number.POSITIVE_INFINITY })
   const files = payload.files.map(
     (f) =>
       new MultipartFile({

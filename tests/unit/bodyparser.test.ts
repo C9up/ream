@@ -297,6 +297,28 @@ describe('BodyParserMiddleware — multipart limits', () => {
     })
     expect(nextCalled).toBe(true)
   })
+
+  it('nests and collects multipart fields the way a urlencoded body is', async () => {
+    // A `<select multiple name="tags[]">` must keep every value once the form
+    // also carries a file input, and `user[name]` must nest.
+    const ctx = makeMultipartCtx([
+      { name: 'tags[]', value: 'a' },
+      { name: 'tags[]', value: 'b' },
+      { name: 'user[name]', value: 'Ada' },
+      { name: 'user[address][city]', value: 'Geneva' },
+      { name: 'note', value: 'one' },
+      { name: 'note', value: 'two' },
+      { name: '__proto__[admin]', value: 'true' },
+    ])
+    await new BodyParserMiddleware().handle(ctx, noop)
+    expect(ctx.request.body()).toEqual({
+      tags: ['a', 'b'],
+      user: { name: 'Ada', address: { city: 'Geneva' } },
+      note: ['one', 'two'],
+    })
+    expect(ctx.request.input('user.address.city')).toBe('Geneva')
+    expect(Reflect.get(Object.prototype, 'admin')).toBeUndefined()
+  })
 })
 
 describe('BodyParserMiddleware — disabling a parser', () => {

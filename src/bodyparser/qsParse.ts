@@ -207,28 +207,43 @@ export function parseQueryString(
   body: string,
   options: QsParseOptions = {},
 ): Record<string, unknown> {
+  if (!body) return {}
+  const parameterLimit = options.parameterLimit ?? DEFAULT_PARAMETER_LIMIT
+  const fields: Array<{ name: string; value: string }> = []
+  for (const pair of body.split('&')) {
+    if (!pair) continue
+    // Nothing past the limit is even decoded.
+    if (fields.length >= parameterLimit) break
+    const eqIdx = pair.indexOf('=')
+    const rawKey = eqIdx === -1 ? pair : pair.slice(0, eqIdx)
+    const rawValue = eqIdx === -1 ? '' : pair.slice(eqIdx + 1)
+    fields.push({ name: decodeFormComponent(rawKey), value: decodeFormComponent(rawValue) })
+  }
+  return parseFormFields(fields, options)
+}
+
+/**
+ * Nest form fields that arrive as decoded name/value pairs — a multipart
+ * body's text parts — with the key grammar and the guards of a urlencoded
+ * body. A `<select multiple name="tags[]">` keeps every value, and
+ * `user[name]` nests, whether or not the form also carries a file input.
+ */
+export function parseFormFields(
+  fields: Iterable<{ name: string; value: string }>,
+  options: QsParseOptions = {},
+): Record<string, unknown> {
   const depth = options.depth ?? DEFAULT_DEPTH
   const parameterLimit = options.parameterLimit ?? DEFAULT_PARAMETER_LIMIT
   const arrayLimit = options.arrayLimit ?? DEFAULT_ARRAY_LIMIT
   const result: Record<string, unknown> = {}
-  if (!body) return result
 
-  const pairs = body.split('&')
   let seen = 0
-  for (const pair of pairs) {
-    if (!pair) continue
+  for (const field of fields) {
     if (++seen > parameterLimit) break
-
-    const eqIdx = pair.indexOf('=')
-    const rawKey = eqIdx === -1 ? pair : pair.slice(0, eqIdx)
-    const rawValue = eqIdx === -1 ? '' : pair.slice(eqIdx + 1)
-
-    const key = decodeFormComponent(rawKey)
-    let value: unknown = decodeFormComponent(rawValue)
+    let value: unknown = field.value
     if (options.trimWhitespaces && typeof value === 'string') value = value.trim()
     if (options.convertEmptyStringsToNull && value === '') value = null
-
-    assign(result, splitKey(key, depth, options.allowDots ?? true), value, arrayLimit)
+    assign(result, splitKey(field.name, depth, options.allowDots ?? true), value, arrayLimit)
   }
   return result
 }
