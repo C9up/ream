@@ -298,6 +298,31 @@ describe('BodyParserMiddleware — multipart limits', () => {
     expect(nextCalled).toBe(true)
   })
 
+  it('throws 413 E_REQUEST_ENTITY_TOO_LARGE when files exceed maxFiles', async () => {
+    let nextCalled = false
+    const ctx = makeMultipartCtx([], [{ size: 1 }, { size: 1 }, { size: 1 }])
+    await expect(
+      new BodyParserMiddleware({ multipart: { maxFiles: 2 } }).handle(ctx, async () => {
+        nextCalled = true
+      }),
+    ).rejects.toMatchObject({
+      status: 413,
+      code: 'E_REQUEST_ENTITY_TOO_LARGE',
+      message: 'Files length limit exceeded',
+    })
+    expect(nextCalled).toBe(false)
+  })
+
+  it('allows the request when files are within maxFiles', async () => {
+    let nextCalled = false
+    const ctx = makeMultipartCtx([], [{ size: 1 }, { size: 1 }])
+    await new BodyParserMiddleware({ multipart: { maxFiles: 2 } }).handle(ctx, async () => {
+      nextCalled = true
+    })
+    expect(nextCalled).toBe(true)
+    expect([...ctx.request.allFiles().keys()]).toEqual(['f0', 'f1'])
+  })
+
   it('nests and collects multipart fields the way a urlencoded body is', async () => {
     // A `<select multiple name="tags[]">` must keep every value once the form
     // also carries a file input, and `user[name]` must nest.
