@@ -183,6 +183,13 @@ jobs:
       - name: Build TS (tsc -> dist/)
         run: pnpm build
       - run: pnpm exec vitest run --coverage
+      # The native scheduler's ticker, end to end. Cron is minute-grained, so
+      # this waits up to a minute; it runs here, on its own, rather than in the
+      # suite above, and is never skipped.
+      - name: Slow tests (native ticker)
+        run: pnpm exec vitest run tests/slow
+        env:
+          REAM_RUN_SLOW_TESTS: '1'
 
   publish:
     name: Publish to npm

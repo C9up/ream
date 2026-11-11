@@ -1,9 +1,8 @@
 /**
  * NAPI integration tests — exercise the real `ream-scheduler-napi`
  * binary. Skipped entirely when `scheduler.*.node` is not present or
- * the binary fails to load. The 75-second ticker integration test is
- * additionally gated on `REAM_RUN_SLOW_TESTS=1` so CI does not pay its
- * wall-clock cost by default.
+ * the binary fails to load. The ticker itself, which needs up to a minute
+ * of wall clock, is proven in `tests/slow/scheduler-ticker.test.ts`.
  *
  * @implements Story 28.2 Task 7.3
  */
@@ -84,27 +83,4 @@ describeIfAvailable('Scheduler (NAPI integration)', () => {
     s.unregister('napi-test-list-a')
     s.unregister('napi-test-list-b')
   })
-})
-
-// Real-time slow integration: only runs when explicitly enabled.
-const slow = process.env.REAM_RUN_SLOW_TESTS === '1'
-const describeIfSlow = realScheduler && slow ? describe : describe.skip
-
-describeIfSlow('Scheduler (NAPI slow integration)', () => {
-  it('ticker fires a `*/1 * * * *` task at least once within 75 seconds', async () => {
-    const s = tryBuildRealScheduler() as Scheduler
-    let fires = 0
-    s.register('napi-slow-tick', '*/1 * * * *', () => {
-      fires += 1
-    })
-    s.start()
-
-    const deadline = Date.now() + 75_000
-    while (fires === 0 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 500))
-    }
-    s.stop()
-    s.unregister('napi-slow-tick')
-    expect(fires).toBeGreaterThanOrEqual(1)
-  }, 80_000)
 })

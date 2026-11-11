@@ -1,7 +1,15 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
+
+// `tests/slow` holds what needs real wall-clock time (the native scheduler's
+// minute-grained ticker). Left out of the default run, and run on its own,
+// never skipped, when REAM_RUN_SLOW_TESTS=1 — CI has a step for it.
+const slow = process.env.REAM_RUN_SLOW_TESTS === "1";
 
 export default defineConfig({
 	test: {
+		exclude: slow
+			? configDefaults.exclude
+			: [...configDefaults.exclude, "tests/slow/**"],
 		coverage: {
 			provider: "v8",
 			include: ["src/**"],
