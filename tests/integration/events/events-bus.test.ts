@@ -143,6 +143,19 @@ describe('events > request/reply', () => {
     expect(response).toBeDefined()
   })
 
+  it('reports a handler that never replies as a timeout, not as a panic', async () => {
+    const reqBus = new EventBus(30)
+    reqBus.onRequest('never.replies', () => {})
+
+    const failure = await reqBus
+      .request('never.replies', '{}', 2000)
+      .catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(Error)
+    const message = failure instanceof Error ? failure.message : ''
+    expect(message).toContain('request handler timed out after 30ms')
+    expect(message).not.toContain('panicked')
+  })
+
   it('the handler is reachable the instant onRequest returns', async () => {
     // Registration used to be spawned onto the tokio runtime, so this exact
     // sequence raced the scheduler: it passed in isolation and failed under

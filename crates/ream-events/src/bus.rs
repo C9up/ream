@@ -13,7 +13,10 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 /// Request handler — receives event, returns response data string.
-pub type RequestHandler = Arc<dyn Fn(Event) -> String + Send + Sync>;
+/// Answers a request: the reply, or why there is none (the handler gave up
+/// waiting for its own answer, for instance). Never a panic: an error is a
+/// value the caller receives as such.
+pub type RequestHandler = Arc<dyn Fn(Event) -> Result<String, String> + Send + Sync>;
 
 /// Default max retries for events stored via the event store.
 const DEFAULT_MAX_RETRIES: u8 = 3;
@@ -129,7 +132,7 @@ impl Bus {
         .await;
 
         match result {
-            Ok(Ok(response)) => Ok(response),
+            Ok(Ok(reply)) => reply,
             Ok(Err(e)) => Err(format!("Handler panicked: {:?}", e)),
             Err(_) => Err(format!(
                 "Request '{}' timed out after {}ms",
@@ -296,9 +299,9 @@ mod tests {
             Arc::new(|event| {
                 let data: serde_json::Value = serde_json::from_str(&event.data).unwrap();
                 if data["amount"].as_f64().unwrap_or(0.0) > 0.0 {
-                    r#"{"valid":true}"#.to_string()
+                    Ok(r#"{"valid":true}"#.to_string())
                 } else {
-                    r#"{"valid":false,"error":"Amount must be positive"}"#.to_string()
+                    Ok(r#"{"valid":false,"error":"Amount must be positive"}"#.to_string())
                 }
             }),
         );
@@ -326,13 +329,26 @@ mod tests {
             "slow",
             Arc::new(|_| {
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                "response".to_string()
+                Ok("response".to_string())
             }),
         );
 
         let result = bus.request("slow", "{}", 50).await; // 50ms timeout
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn a_handler_error_reaches_the_caller_as_itself() {
+        let bus = Bus::new();
+        bus.on_request(
+            "gave.up",
+            Arc::new(|_| Err("request handler timed out after 10ms".to_string())),
+        );
+
+        let error = bus.request("gave.up", "{}", 5000).await.unwrap_err();
+        assert_eq!(error, "request handler timed out after 10ms");
+        assert!(!error.contains("panicked"));
     }
 
     #[tokio::test]

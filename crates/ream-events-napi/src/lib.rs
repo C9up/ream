@@ -198,10 +198,8 @@ impl EventBus {
                     napi::threadsafe_function::ThreadsafeFunctionCallMode::Blocking,
                 );
 
-                match rx.recv_timeout(StdDuration::from_millis(timeout_ms)) {
-                    Ok(response) => response,
-                    Err(_) => panic!("request handler timeout after {}ms", timeout_ms),
-                }
+                rx.recv_timeout(StdDuration::from_millis(timeout_ms))
+                    .map_err(|_| format!("request handler timed out after {}ms", timeout_ms))
             }),
         );
 
