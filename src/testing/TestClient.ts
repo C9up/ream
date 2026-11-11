@@ -195,7 +195,7 @@ export class TestClient {
         m,
         p,
         { ...this.#headers, ...init.headers },
-        init.body.toString('utf8'),
+        init.body,
         init.timeoutMs,
       )
     }
@@ -288,7 +288,7 @@ async function sendRequest(
   method: string,
   path: string,
   headers: Dict,
-  body: string,
+  body: Buffer,
   timeoutMs?: number,
 ): Promise<TestResponse> {
   const { connect } = await import('node:net')
@@ -300,7 +300,10 @@ async function sendRequest(
         .map(([k, v]) => `${k}: ${v}`)
         .join('\r\n')
 
-      const contentLength = Buffer.byteLength(body, 'utf8')
+      // The body stays a Buffer end to end: a multipart upload of a PNG or a
+      // PDF is not valid UTF-8, and a round trip through a string replaced
+      // every such byte with U+FFFD before the server ever saw it.
+      const contentLength = body.length
 
       let request = `${method} ${path} HTTP/1.1\r\n`
       request += `Host: localhost:${port}\r\n`
@@ -312,9 +315,9 @@ async function sendRequest(
         request += `${headerLines}\r\n`
       }
       request += '\r\n'
-      request += body
 
       socket.write(request)
+      if (contentLength > 0) socket.write(body)
     })
 
     const chunks: Buffer[] = []
