@@ -301,6 +301,11 @@ export interface HyperServerLike {
   // a clean `STREAMING_UNSUPPORTED` error when called on such a host.
   registerStream?(streamId: string): Promise<boolean>
   writeStream?(streamId: string, chunk: string): Promise<boolean>
+  /**
+   * Byte-exact writes. Without it a download, `response.stream()` or a static
+   * file is buffered whole and shipped base64-encoded in one response.
+   */
+  writeStreamBytes?(streamId: string, chunk: Uint8Array): Promise<boolean>
   closeStream?(streamId: string): Promise<boolean>
   onStreamDisconnect?(streamId: string, callback: () => void): void
 }
@@ -874,6 +879,12 @@ export class Ignitor {
             return {
               registerStream: server.registerStream.bind(server),
               writeStream: server.writeStream.bind(server),
+              // The byte channel is what lets a download be streamed rather
+              // than read whole into memory; a host without it still gets SSE.
+              writeStreamBytes:
+                typeof server.writeStreamBytes === 'function'
+                  ? server.writeStreamBytes.bind(server)
+                  : undefined,
               closeStream: server.closeStream.bind(server),
               onStreamDisconnect: server.onStreamDisconnect.bind(server),
             }
