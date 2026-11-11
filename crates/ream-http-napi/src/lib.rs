@@ -223,6 +223,21 @@ fn merge_body_limit(
     })
 }
 
+/// A bind address: an IPv4 or IPv6 literal, an IPv6 one possibly in the
+/// bracketed form a URL writes it in (`[::1]`).
+fn parse_bind_host(host: &str) -> Option<std::net::IpAddr> {
+    match host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        Some(v6) => v6
+            .parse::<std::net::Ipv6Addr>()
+            .ok()
+            .map(std::net::IpAddr::V6),
+        None => host.parse().ok(),
+    }
+}
+
 fn optional_millis(value: Option<u32>, default: Option<Duration>) -> Option<Duration> {
     match value {
         None => default,
@@ -235,7 +250,7 @@ fn optional_millis(value: Option<u32>, default: Option<Duration>) -> Option<Dura
 #[napi]
 pub struct HyperServer {
     port: u16,
-    host: [u8; 4],
+    host: std::net::IpAddr,
     handler: Arc<std::sync::Mutex<Option<ream_http::RequestHandler>>>,
     /// Same lifecycle as `handler`: set before `listen()`, cleared by
     /// `close()` so its threadsafe function stops pinning the event loop.
@@ -258,9 +273,10 @@ pub struct HyperServer {
 
 #[napi]
 impl HyperServer {
-    /// `host` is the bind address: an IPv4 literal (`0.0.0.0` to accept from
-    /// every interface) or the `localhost` alias. Omitted → loopback only,
-    /// the safe default for a dev machine.
+    /// `host` is the bind address: an IPv4 or IPv6 literal (`0.0.0.0` or `::`
+    /// to accept from every interface, a bracketed `[::1]` too) or the
+    /// `localhost` alias. Omitted → loopback only, the safe default for a dev
+    /// machine.
     #[napi(constructor)]
     pub fn new(port: Option<u32>, host: Option<String>) -> napi::Result<Self> {
         catch_unwind_napi(|| {
@@ -274,14 +290,14 @@ impl HyperServer {
             }
             let port = port_val as u16;
             let host = match host.as_deref() {
-                None | Some("localhost") => [127, 0, 0, 1],
-                Some(h) => match h.parse::<std::net::Ipv4Addr>() {
-                    Ok(addr) => addr.octets(),
-                    Err(_) => {
+                None | Some("localhost") => std::net::IpAddr::from([127, 0, 0, 1]),
+                Some(h) => match parse_bind_host(h) {
+                    Some(addr) => addr,
+                    None => {
                         return Err(ream_napi_core::ream_error!(
                             "INVALID_HOST",
                             format!(
-                                "Invalid host '{}' — expected an IPv4 address or 'localhost'",
+                                "Invalid host '{}' — expected an IPv4 or IPv6 address or 'localhost'",
                                 h
                             )
                         )

@@ -215,8 +215,23 @@ describeIfNetwork('hyper-server > bind address', () => {
     await server.close()
   })
 
-  it('rejects a host that is neither an IPv4 literal nor localhost', () => {
+  it('binds an IPv6 literal, bracketed or not', async () => {
+    for (const host of ['::1', '[::1]']) {
+      const server = new HyperServer(0, host)
+      server.onRequest(async () => ({ status: 200, headers: {}, body: 'v6' }))
+      await server.listen()
+      try {
+        const port = await server.port()
+        expect(await (await fetch(`http://[::1]:${port}/`)).text()).toBe('v6')
+      } finally {
+        await server.close()
+      }
+    }
+  })
+
+  it('rejects a host that is neither an IP literal nor localhost', () => {
     expect(() => new HyperServer(0, 'not-a-host')).toThrow(/INVALID_HOST|not-a-host/)
+    expect(() => new HyperServer(0, '[127.0.0.1]')).toThrow(/INVALID_HOST/)
   })
 })
 

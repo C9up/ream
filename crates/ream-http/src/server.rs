@@ -18,7 +18,7 @@ use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -51,7 +51,7 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 /// Hyper-based HTTP server for the Ream framework.
 pub struct ReamServer {
-    host: [u8; 4],
+    host: IpAddr,
     port: u16,
     handler: Option<RequestHandler>,
     security_filter: Option<Arc<dyn crate::SecurityFilter>>,
@@ -94,7 +94,7 @@ impl ReamServer {
     /// Create a new server bound to 127.0.0.1 on the given port (0 for random).
     pub fn new(port: u16) -> Self {
         Self {
-            host: [127, 0, 0, 1],
+            host: IpAddr::from([127, 0, 0, 1]),
             port,
             handler: None,
             security_filter: None,
@@ -151,9 +151,10 @@ impl ReamServer {
         self.connection_limits = limits;
     }
 
-    /// Set the bind address (e.g., [0, 0, 0, 0] for all interfaces).
-    pub fn with_host(mut self, host: [u8; 4]) -> Self {
-        self.host = host;
+    /// Set the bind address: an IPv4 or IPv6 address (`[0, 0, 0, 0]` or
+    /// `Ipv6Addr::UNSPECIFIED` for every interface).
+    pub fn with_host(mut self, host: impl Into<IpAddr>) -> Self {
+        self.host = host.into();
         self
     }
 
@@ -1923,6 +1924,25 @@ mod tests {
         // host, as in Node.
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert_eq!(body_of(&response), "app.example.com");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn binds_an_ipv6_address() {
+        let mut server = ReamServer::new(0).with_host(std::net::Ipv6Addr::LOCALHOST);
+        server.on_request(Arc::new(|_req| {
+            Box::pin(async { ReamResponse::text(200, "v6") })
+        }));
+        server.listen().await.unwrap();
+        let port = server.actual_port().await;
+        let mut stream = TcpStream::connect(("::1", port)).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        assert_eq!(body_of(&response), "v6");
         server.shutdown().await;
     }
 }
