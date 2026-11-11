@@ -3,6 +3,7 @@
  * Uses Rust NAPI via crypto facade when available.
  */
 
+import { durationToSeconds } from '../helpers/duration.js'
 import { constantTimeEq, hmacSign } from './crypto.js'
 
 export interface SignedUrlConfig {
@@ -56,22 +57,17 @@ export class SignedUrl {
   }
 }
 
+/**
+ * The lifetime of a signed URL in seconds. Read with the duration grammar
+ * used everywhere else (`'30 minutes'`, `'1 week'`, `'2h'`), and refused when
+ * it cannot be read: signing with a default instead turned "one week" into
+ * one hour without a word.
+ */
 function parseExpiry(value: string | number): number {
-  if (typeof value === 'number') return value
-  const match = value.match(/^(\d+)(s|m|h|d)$/)
-  if (!match) return 3600
-  const [, digits, unit] = match
-  const num = parseInt(digits ?? '0', 10)
-  switch (unit) {
-    case 's':
-      return num
-    case 'm':
-      return num * 60
-    case 'h':
-      return num * 3600
-    case 'd':
-      return num * 86400
-    default:
-      return 3600
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error(
+      `Cannot read ${value} as a signed URL expiry: it must be a finite number of seconds.`,
+    )
   }
+  return durationToSeconds(value, 'a signed URL expiry')
 }

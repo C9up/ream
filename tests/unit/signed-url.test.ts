@@ -96,12 +96,27 @@ describe('ream > SignedUrl > expiration', () => {
     }
   })
 
-  it('falls back to 1h when expiresIn string is malformed', () => {
+  it('reads the long duration spellings instead of signing for an hour', () => {
     const su = new SignedUrl({ secret: SECRET })
-    const signed = su.make('/p', { expiresIn: 'garbage' })
-    const url = new URL(signed, 'http://x')
-    const expires = parseInt(url.searchParams.get('expires') ?? '0', 10)
-    expect(expires).toBe(Math.floor(Date.now() / 1000) + 3600)
+    const cases: Array<[string, number]> = [
+      ['30 minutes', 1800],
+      ['1 week', 604800],
+      ['2 hours', 7200],
+    ]
+    for (const [exp, secs] of cases) {
+      const before = Math.floor(Date.now() / 1000)
+      const url = new URL(su.make('/p', { expiresIn: exp }), 'http://x')
+      const expires = parseInt(url.searchParams.get('expires') ?? '0', 10)
+      expect(expires - before, exp).toBeGreaterThanOrEqual(secs)
+      expect(expires - before, exp).toBeLessThanOrEqual(secs + 1)
+    }
+  })
+
+  it('refuses an expiry it cannot read rather than signing for a default', () => {
+    const su = new SignedUrl({ secret: SECRET })
+    for (const expiresIn of ['garbage', 'one week', Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => su.make('/p', { expiresIn }), String(expiresIn)).toThrow(/signed URL expiry/)
+    }
   })
 })
 
