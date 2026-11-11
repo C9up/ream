@@ -38,8 +38,8 @@ await app.start()
 
 ## Testing
 
-Declare your suites in `reamrc.ts`, the way AdonisJS declares them in
-`adonisrc.ts`, and `ream test` runs them:
+Declare your suites in the `tests` block of `reamrc.ts`, and `ream test`
+runs them:
 
 ```ts
 // reamrc.ts
@@ -79,10 +79,9 @@ of waiting for the event loop to drain — the answer to a pool or a server the 
 process exits on its own, so a leaked handle surfaces as a diagnosable
 hang rather than being swallowed.
 
-The stratification is AdonisJS's: ream reads its rc file and hands the
-suites to the runner ([`@c9up/helix`](../helix)), exactly as
-`@adonisjs/core` reads `adonisrc.ts` and hands them to its own runner. helix knows
-nothing about ream, and ream owns no test execution. `tests/bootstrap.ts`
+The work is split in two: ream reads its rc file and hands the suites to the
+runner ([`@c9up/helix`](../helix)), which runs them. helix knows nothing
+about ream, and ream owns no test execution. `tests/bootstrap.ts`
 — plugins, `runnerHooks`, `configureSuite` — is helix's, unchanged.
 
 Driving it yourself (a `bin/test.ts`, a console command) is the same call:
