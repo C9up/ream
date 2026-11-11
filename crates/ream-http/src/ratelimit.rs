@@ -9,7 +9,7 @@
 //!    cost zero JS time.
 //!
 //! The implementation is intentionally simple — fixed window, in-process
-//! storage. Distributed setups will plug a Redis-backed limiter into the
+//! storage, a bounded number of tracked keys. Distributed setups will plug a Redis-backed limiter into the
 //! same `RateLimiter` trait surface in a later phase.
 
 use std::collections::HashMap;
@@ -48,20 +48,51 @@ struct Bucket {
     reset_at: Instant,
 }
 
+/// How many distinct keys the limiter tracks before new ones share a single
+/// overflow bucket. Keys are client addresses, and one client holding an
+/// IPv6 /64 has more of them than any map should hold.
+const DEFAULT_MAX_KEYS: usize = 100_000;
+
+/// The buckets, and when they are next swept for expired ones.
+struct State {
+    buckets: HashMap<String, Bucket>,
+    overflow: Bucket,
+    next_sweep: Instant,
+}
+
 /// In-memory rate limiter. Thread-safe (`Mutex<HashMap>`), suitable for the
-/// single-process Hyper server. Counters are reset lazily — buckets older
-/// than the window are dropped on the next access for that key, and the
-/// whole map is swept opportunistically when it grows past 1024 entries.
+/// single-process Hyper server. A bucket older than the window is reset on
+/// the next access for its key; expired buckets are swept at most once per
+/// window, so the O(n) pass is amortised over every request of a window
+/// instead of paid by each one. The map is capped at `max_keys`: past it, a
+/// key that is not tracked yet counts against one shared overflow bucket, so
+/// rotating through fresh addresses neither grows the map nor escapes the
+/// limit.
 pub struct RateLimiter {
     config: RateLimitConfig,
-    buckets: Mutex<HashMap<String, Bucket>>,
+    max_keys: usize,
+    state: Mutex<State>,
 }
 
 impl RateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
+        Self::with_max_keys(config, DEFAULT_MAX_KEYS)
+    }
+
+    /// A limiter tracking at most `max_keys` distinct keys.
+    pub fn with_max_keys(config: RateLimitConfig, max_keys: usize) -> Self {
+        let now = Instant::now();
         Self {
             config,
-            buckets: Mutex::new(HashMap::new()),
+            max_keys,
+            state: Mutex::new(State {
+                buckets: HashMap::new(),
+                overflow: Bucket {
+                    count: 0,
+                    reset_at: now + config.window,
+                },
+                next_sweep: now + config.window,
+            }),
         }
     }
 
@@ -70,7 +101,7 @@ impl RateLimiter {
     /// the request and attaches rate-limit headers to the response.
     pub fn check(&self, key: &str) -> RateLimitOutcome {
         let now = Instant::now();
-        let mut buckets = match self.buckets.lock() {
+        let mut state = match self.state.lock() {
             Ok(g) => g,
             // Mutex poisoned — fall through allow-all rather than refuse
             // every request. Better to ship a request than to brick the
@@ -84,17 +115,21 @@ impl RateLimiter {
                 };
             }
         };
+        let state = &mut *state;
 
-        // Opportunistic sweep so a long-running server doesn't accumulate
-        // dead keys forever. Only fires when the map is already large.
-        if buckets.len() > 1024 {
-            buckets.retain(|_, b| b.reset_at > now);
+        if now >= state.next_sweep {
+            state.buckets.retain(|_, b| b.reset_at > now);
+            state.next_sweep = now + self.config.window;
         }
 
-        let bucket = buckets.entry(key.to_string()).or_insert(Bucket {
-            count: 0,
-            reset_at: now + self.config.window,
-        });
+        let bucket = if state.buckets.contains_key(key) || state.buckets.len() < self.max_keys {
+            state.buckets.entry(key.to_string()).or_insert(Bucket {
+                count: 0,
+                reset_at: now + self.config.window,
+            })
+        } else {
+            &mut state.overflow
+        };
 
         // Window elapsed for this key — start fresh.
         if bucket.reset_at <= now {
@@ -102,10 +137,9 @@ impl RateLimiter {
             bucket.reset_at = now + self.config.window;
         }
 
-        bucket.count += 1;
+        bucket.count = bucket.count.saturating_add(1);
         let count = bucket.count;
         let reset_at = bucket.reset_at;
-        drop(buckets);
 
         // Block only AFTER the limit has been exceeded — `max=2` means two
         // successful requests then the third fails. Mirrors the prior JS
@@ -120,6 +154,14 @@ impl RateLimiter {
             remaining,
             reset_in,
         }
+    }
+}
+
+#[cfg(test)]
+impl RateLimiter {
+    /// How many keys hold their own bucket.
+    fn tracked(&self) -> usize {
+        self.state.lock().map_or(0, |state| state.buckets.len())
     }
 }
 
@@ -166,6 +208,47 @@ mod tests {
         sleep(Duration::from_millis(60));
         // Window elapsed — counter reset.
         assert!(limiter.check("ip1").allowed);
+    }
+
+    #[test]
+    fn keys_past_the_cap_share_one_overflow_bucket() {
+        let limiter = RateLimiter::with_max_keys(
+            RateLimitConfig {
+                max: 1,
+                window: Duration::from_secs(60),
+            },
+            2,
+        );
+        assert!(limiter.check("ip1").allowed);
+        assert!(limiter.check("ip2").allowed);
+        // The map is full: a fresh address is counted in the shared bucket,
+        // so rotating addresses does not escape the limit.
+        assert!(limiter.check("ip3").allowed);
+        assert!(!limiter.check("ip4").allowed);
+        assert!(!limiter.check("ip5").allowed);
+        assert_eq!(limiter.tracked(), 2);
+        // A key already tracked keeps its own bucket.
+        assert!(!limiter.check("ip1").allowed);
+    }
+
+    #[test]
+    fn expired_keys_are_swept_once_the_window_has_passed() {
+        let limiter = RateLimiter::with_max_keys(
+            RateLimitConfig {
+                max: 1,
+                window: Duration::from_millis(50),
+            },
+            2,
+        );
+        assert!(limiter.check("ip1").allowed);
+        assert!(limiter.check("ip2").allowed);
+        sleep(Duration::from_millis(60));
+        // The sweep frees both slots, so a new address gets its own bucket
+        // again rather than the overflow one.
+        assert!(limiter.check("ip3").allowed);
+        assert_eq!(limiter.tracked(), 1);
+        assert!(limiter.check("ip4").allowed);
+        assert_eq!(limiter.tracked(), 2);
     }
 
     #[test]
