@@ -108,7 +108,7 @@ pub(crate) async fn serve(
     handler: GrpcHandler,
     guards: Guards<'_>,
 ) -> Response<tonic::body::Body> {
-    let headers = crate::server::collect_headers(req.headers());
+    let headers = crate::server::request_headers(req.uri(), req.headers());
     let ip = crate::ip::resolve_client_ip(guards.peer_ip, &headers, guards.trusted_proxies);
 
     if let Some(limiter) = guards.rate_limiter {

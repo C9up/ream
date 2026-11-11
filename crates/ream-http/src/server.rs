@@ -706,6 +706,26 @@ pub(crate) fn collect_headers(map: &hyper::HeaderMap) -> HashMap<String, String>
     headers
 }
 
+/// The request headers as JavaScript reads them: [`collect_headers`], plus a
+/// `host` taken from the URI's authority when no `Host` line was sent. Over
+/// HTTP/2 the authority travels as the `:authority` pseudo-header, which
+/// hyper keeps in the URI and never in the header map, so without this every
+/// HTTP/2 request reached the application with no host at all.
+pub(crate) fn request_headers(uri: &hyper::Uri, map: &hyper::HeaderMap) -> HashMap<String, String> {
+    let mut headers = collect_headers(map);
+    if !headers.contains_key("host") {
+        if let Some(authority) = uri.authority() {
+            // `host[:port]` only: an authority's userinfo is never a host.
+            let host = match authority.port() {
+                Some(port) => format!("{}:{}", authority.host(), port),
+                None => authority.host().to_owned(),
+            };
+            headers.insert("host".to_owned(), host);
+        }
+    }
+    headers
+}
+
 /// The most of an over-limit body the server reads and throws away while the
 /// request is answered without it, so a client still uploading receives the
 /// answer instead of a reset connection (Node discards an unread body the
@@ -829,7 +849,7 @@ async fn hyper_to_ream_request(
     // carries `:scheme` and `:authority` — and `to_string()` handed the router
     // `http://host:port/path` to match its routes against.
     let uri = origin_form(req.uri());
-    let headers = collect_headers(req.headers());
+    let headers = request_headers(req.uri(), req.headers());
     let content_type = headers.get("content-type").cloned().unwrap_or_default();
 
     // The body-parser limit for this content type, applied while reading:
@@ -1744,6 +1764,29 @@ mod tests {
     fn an_obs_text_header_value_is_read_as_latin1_not_dropped() {
         let headers = collect_headers(&header_map(&[("x-name", b"caf\xe9")]));
         assert_eq!(headers["x-name"], "caf\u{e9}");
+    }
+
+    #[test]
+    fn the_host_comes_from_the_authority_when_no_host_line_was_sent() {
+        let uri: hyper::Uri = "http://app.example.com:8443/h2?x=1".parse().unwrap();
+        let headers = request_headers(&uri, &hyper::HeaderMap::new());
+        assert_eq!(headers["host"], "app.example.com:8443");
+
+        let uri: hyper::Uri = "http://user@[::1]/x".parse().unwrap();
+        assert_eq!(
+            request_headers(&uri, &hyper::HeaderMap::new())["host"],
+            "[::1]"
+        );
+    }
+
+    #[test]
+    fn a_host_line_wins_over_the_authority_and_an_origin_form_adds_nothing() {
+        let uri: hyper::Uri = "http://other.example.com/x".parse().unwrap();
+        let headers = request_headers(&uri, &header_map(&[("host", b"app.example.com")]));
+        assert_eq!(headers["host"], "app.example.com");
+
+        let uri: hyper::Uri = "/x".parse().unwrap();
+        assert!(!request_headers(&uri, &hyper::HeaderMap::new()).contains_key("host"));
     }
 
     #[tokio::test]

@@ -248,4 +248,32 @@ describeIfNetwork('hyper-server > HTTP/2', () => {
       await close()
     }
   })
+
+  it('hands the handler the :authority as its host', async () => {
+    // HTTP/2 carries the authority as a pseudo-header, never as a Host line.
+    // Without it the application saw no host at all: host() was null, every
+    // absolute URL it built read http://null, and domain routing was blind.
+    const seen: NapiRequest[] = []
+    const { port, close } = await createServer(async (req) => {
+      seen.push(req)
+      return { status: 200, headers: {}, body: 'ok' }
+    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const session = connect(`http://127.0.0.1:${port}`)
+        session.on('error', reject)
+        const request = session.request({ ':path': '/h2', ':authority': `app.test:${port}` })
+        request.on('error', reject)
+        request.resume()
+        request.on('end', () => {
+          session.close()
+          resolve()
+        })
+        request.end()
+      })
+      expect(seen[0]?.headers.host).toBe(`app.test:${port}`)
+    } finally {
+      await close()
+    }
+  })
 })
