@@ -179,6 +179,17 @@ describe('MultipartFile metadata + validate()', () => {
     expect(file('c.bin', 'x'.repeat(2000)).validate({ size: '1gb' })).toBe(true)
   })
 
+  it('reads a fractional or spaced size rather than capping at 1mb', () => {
+    // '1.5mb' used to fall back to 1 MB, refusing a 1.2 MB file it allows.
+    const file12mb = file('d.bin', 'x'.repeat(1.2 * 1024 * 1024))
+    expect(file12mb.validate({ size: '1.5mb' })).toBe(true)
+    expect(file('e.bin', 'x'.repeat(2000)).validate({ size: '1.5 kb' })).toBe(false)
+  })
+
+  it('throws on a size rule it cannot read', () => {
+    expect(() => file('f.bin', 'x').validate({ size: 'big' })).toThrow(/Cannot read the size/)
+  })
+
   it('rejects a disallowed extension and accepts an allowed one', () => {
     expect(file('a.exe', 'x').validate({ extnames: ['png', 'jpg'] })).toBe(false)
     expect(file('a.png', 'x').validate({ extnames: ['png', 'jpg'] })).toBe(true)

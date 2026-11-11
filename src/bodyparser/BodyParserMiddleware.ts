@@ -21,11 +21,11 @@ export interface BodyParserConfig {
    */
   allowedMethods?: string[]
   json?: {
-    limit?: string // e.g. '1mb'
+    limit?: string | number // e.g. '1mb', '1.5 mb' or a number of bytes
     types?: string[]
   }
   form?: {
-    limit?: string
+    limit?: string | number
     types?: string[]
     /**
      * Turn `''` into `null`. AdonisJS defaults this to `true`, so an empty
@@ -39,12 +39,12 @@ export interface BodyParserConfig {
     queryString?: QsParseOptions
   }
   raw?: {
-    limit?: string
+    limit?: string | number
     types?: string[]
   }
   multipart?: {
     /** Total multipart body size cap (sum of all file sizes). Default: '20mb'. */
-    limit?: string
+    limit?: string | number
     /**
      * Maximum number of files per request. AdonisJS has no such option — it
      * bounds a multipart body by total size and field count only, so ten
@@ -98,6 +98,8 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
 
 export default class BodyParserMiddleware {
   #config: ResolvedBodyParserConfig
+  /** Each section's limit in bytes, read once so a bad size fails at boot. */
+  readonly #limits: { json: number; form: number; raw: number; multipart: number }
 
   constructor(explicitConfig: BodyParserConfig | undefined = undefined) {
     // The default value is load-bearing: an OPTIONAL parameter still counts
@@ -117,6 +119,12 @@ export default class BodyParserMiddleware {
       form: { ...DEFAULT_CONFIG.form, ...config?.form },
       raw: { ...DEFAULT_CONFIG.raw, ...config?.raw },
       multipart: { ...DEFAULT_CONFIG.multipart, ...config?.multipart },
+    }
+    this.#limits = {
+      json: parseSize(this.#config.json.limit),
+      form: parseSize(this.#config.form.limit),
+      raw: parseSize(this.#config.raw.limit),
+      multipart: parseSize(this.#config.multipart.limit),
     }
   }
 
@@ -144,7 +152,7 @@ export default class BodyParserMiddleware {
     // Size check. Thrown rather than written: the app's exception handler
     // negotiates the response, so an HTML app gets an error page instead of a
     // JSON envelope it never asked for — and can override the rendering.
-    if (Buffer.byteLength(rawBody, 'utf8') > parseSize(this.#getLimit(contentType))) {
+    if (Buffer.byteLength(rawBody, 'utf8') > this.#getLimit(contentType)) {
       throw entityTooLarge('request entity too large')
     }
 
@@ -192,11 +200,11 @@ export default class BodyParserMiddleware {
     await next()
   }
 
-  #getLimit(contentType: string): string {
-    if (matchesType(contentType, this.#config.json.types)) return this.#config.json.limit
-    if (matchesType(contentType, this.#config.form.types)) return this.#config.form.limit
-    if (matchesType(contentType, this.#config.multipart.types)) return this.#config.multipart.limit
-    return this.#config.raw.limit
+  #getLimit(contentType: string): number {
+    if (matchesType(contentType, this.#config.json.types)) return this.#limits.json
+    if (matchesType(contentType, this.#config.form.types)) return this.#limits.form
+    if (matchesType(contentType, this.#config.multipart.types)) return this.#limits.multipart
+    return this.#limits.raw
   }
 
   /**
@@ -218,7 +226,7 @@ export default class BodyParserMiddleware {
     }
 
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
-    if (totalBytes > parseSize(cfg.limit)) {
+    if (totalBytes > this.#limits.multipart) {
       throw entityTooLarge('request entity too large')
     }
   }

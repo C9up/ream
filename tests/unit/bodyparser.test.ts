@@ -130,6 +130,21 @@ describe('BodyParserMiddleware — JSON is read only under a JSON media type', (
   })
 })
 
+describe('BodyParserMiddleware — size limits', () => {
+  it('refuses at construction a limit it cannot read', () => {
+    expect(() => new BodyParserMiddleware({ json: { limit: 'fifty megabytes' } })).toThrow(
+      /Cannot read the size/,
+    )
+  })
+
+  it('reads a spaced limit instead of capping the body at 1mb', async () => {
+    const body = `a=${'x'.repeat(2 * 1024 * 1024)}`
+    const ctx = makeCtx(body, 'application/x-www-form-urlencoded')
+    await new BodyParserMiddleware({ form: { limit: '50 mb' } }).handle(ctx, noop)
+    expect(ctx.request.input('a')).toHaveLength(2 * 1024 * 1024)
+  })
+})
+
 describe('BodyParserMiddleware — body size', () => {
   it('throws 413 rather than writing its own JSON envelope', async () => {
     const ctx = makeCtxWith(`a=${'x'.repeat(2000)}`, 'application/x-www-form-urlencoded', {})

@@ -22,9 +22,16 @@ describe('ream > parseSize', () => {
     expect(parseSize('2GB')).toBe(2 * 1024 * 1024 * 1024)
   })
 
-  it('falls back to 1mb default on malformed input', () => {
-    expect(parseSize('garbage')).toBe(1024 * 1024)
-    expect(parseSize('100tb')).toBe(1024 * 1024) // unsupported suffix
-    expect(parseSize('')).toBe(1024 * 1024)
+  it('reads the spellings the bytes grammar allows', () => {
+    expect(parseSize('50 mb')).toBe(50 * 1024 * 1024)
+    expect(parseSize('1.5mb')).toBe(1.5 * 1024 * 1024)
+    expect(parseSize('1tb')).toBe(1024 ** 4)
+    expect(parseSize(2048)).toBe(2048)
+  })
+
+  it('throws on a size it cannot read instead of falling back to 1mb', () => {
+    for (const size of ['garbage', '', 'mb', '-5mb', Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => parseSize(size)).toThrow(/E_BODYPARSER_INVALID_SIZE|Cannot read the size/)
+    }
   })
 })

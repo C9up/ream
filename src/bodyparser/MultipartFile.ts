@@ -56,9 +56,11 @@ function isMimeType(value: string): value is MimeType {
 
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
+import { parseSize } from './parseSize.js'
 
 export interface FileValidationOptions {
-  size?: string
+  /** Largest accepted size: bytes, or a value such as `'2mb'` or `'1.5 mb'`. */
+  size?: string | number
   extnames?: string[]
 }
 
@@ -272,8 +274,8 @@ export class MultipartFile {
    * spells it.
    */
   validate(options: FileValidationOptions = this.#validationOptions): boolean {
-    if (options.size) {
-      const maxBytes = parseFileSize(options.size)
+    if (options.size !== undefined) {
+      const maxBytes = parseSize(options.size)
       if (this.size > maxBytes) {
         this.errors.push(`File size ${this.size} exceeds limit ${options.size}`)
       }
@@ -430,23 +432,6 @@ function isSafeFilename(name: string): boolean {
   if (name === '.' || name === '..') return false
   if (/[\\/\0]/.test(name)) return false
   return true
-}
-
-function parseFileSize(size: string): number {
-  const match = size.match(/^(\d+)(kb|mb|gb)?$/i)
-  if (!match) return 1024 * 1024
-  const [, digits, unit] = match
-  const num = parseInt(digits ?? '0', 10)
-  switch (unit?.toLowerCase()) {
-    case 'kb':
-      return num * 1024
-    case 'mb':
-      return num * 1024 * 1024
-    case 'gb':
-      return num * 1024 * 1024 * 1024
-    default:
-      return num
-  }
 }
 
 /**

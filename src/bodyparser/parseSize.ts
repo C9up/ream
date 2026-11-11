@@ -1,21 +1,21 @@
+import { ReamError } from '../errors/ReamError.js'
+import { parse } from '../helpers/bytes.js'
+
 /**
- * Parse a human-readable size string (e.g. '1mb', '512kb', '2gb') to bytes.
- * Single source of truth, imported by BodyParserMiddleware (which previously
- * carried an identical inline copy — consolidated 2026-06-15).
+ * Read a size limit (`'1mb'`, `'50 mb'`, `'1.5kb'`, `1024`) into bytes, with
+ * the `bytes` grammar every size option of the body parser accepts.
+ *
+ * Throws on anything it cannot read, or on a negative size. A silent fallback
+ * is what turned `limit: '50 mb'` into a 1 MB cap with no word: a limit the
+ * application did not set is worse than a boot that refuses to start.
  */
-export function parseSize(size: string): number {
-  const match = size.match(/^(\d+)(kb|mb|gb)?$/i)
-  if (!match) return 1024 * 1024 // default 1mb
-  const [, digits, unit] = match
-  const num = parseInt(digits ?? '0', 10)
-  switch (unit?.toLowerCase()) {
-    case 'kb':
-      return num * 1024
-    case 'mb':
-      return num * 1024 * 1024
-    case 'gb':
-      return num * 1024 * 1024 * 1024
-    default:
-      return num
+export function parseSize(size: string | number): number {
+  const bytes = parse(size)
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) {
+    throw new ReamError(
+      'E_BODYPARSER_INVALID_SIZE',
+      `Cannot read the size ${JSON.stringify(size)}: expected a number of bytes or a value such as '512kb', '1.5mb' or '2 gb'.`,
+    )
   }
+  return bytes
 }
