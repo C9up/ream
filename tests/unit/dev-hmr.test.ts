@@ -127,6 +127,20 @@ describe('dev > injecting the script into a response', () => {
     expect(res.body).toBe(`<html><body><h1>hi</h1>${SCRIPT}</body></html>`)
   })
 
+  it('leaves a base64-encoded HTML body alone', async () => {
+    // A buffer sent as HTML crosses to the server base64-encoded. A script
+    // appended to the encoded text makes it undecodable, and the browser
+    // receives the base64 instead of the page.
+    const html = '<html><body><h1>hi</h1></body></html>'
+    const res = await respond(({ response }) => {
+      response.header('content-type', 'text/html; charset=utf-8')
+      response.sendBuffer(Buffer.from(html))
+    }, SCRIPT)
+
+    expect(res.headers['x-ream-body-encoding']).toBe('base64')
+    expect(Buffer.from(res.body, 'base64').toString('utf8')).toBe(html)
+  })
+
   it('still injects into a fragment with no </body>', async () => {
     const res = await respond(({ response }) => {
       response.send('<div>fragment</div>')

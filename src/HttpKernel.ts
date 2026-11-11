@@ -554,8 +554,10 @@ function reconcileRepresentation(
 /**
  * Append the development script to an HTML body.
  *
- * Only HTML, and never a stream: appending to an SSE or a download would
- * corrupt it, and a page is the only thing that can act on the script anyway.
+ * Only HTML, and never a stream or a base64-encoded body (`sendBuffer`, a
+ * buffered download): appending to any of them corrupts it — Rust fails to
+ * decode the base64 and the client receives the encoded text — and a page is
+ * the only thing that can act on the script anyway.
  * Before `</body>` when there is one, so the script is inside the document
  * rather than trailing after it.
  */
@@ -567,6 +569,7 @@ function withDevScript(
 ): string {
   if (script === undefined || streamId !== undefined || body === '') return body
   if (!(headers['content-type'] ?? '').includes('text/html')) return body
+  if (headers['x-ream-body-encoding'] === 'base64') return body
   const closing = body.lastIndexOf('</body>')
   return closing === -1 ? body + script : body.slice(0, closing) + script + body.slice(closing)
 }
