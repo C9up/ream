@@ -142,3 +142,38 @@ describe('RpcRouter > malformed JSON', () => {
     })
   })
 })
+
+describe('RpcRouter > batch size', () => {
+  function batch(size: number): string {
+    return JSON.stringify(
+      Array.from({ length: size }, (_, i) => ({
+        jsonrpc: '2.0',
+        method: 'bank.transfer',
+        params: { n: i },
+        id: i,
+      })),
+    )
+  }
+
+  it('refuses a batch of 51 calls with 400 / -32600 before running any of them', async () => {
+    // Each call of a batch runs a handler on the same request; the cap is the
+    // request-side bound on that work.
+    const { rpc, calls } = transferRouter()
+    const out = await sendRpc(rpc, batch(51))
+    expect(out.status).toBe(400)
+    expect(out.payload).toEqual({
+      jsonrpc: '2.0',
+      error: { code: -32600, message: 'Batch too large (max 50)' },
+      id: null,
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('runs a batch of exactly 50 calls', async () => {
+    const { rpc, calls } = transferRouter()
+    const out = await sendRpc(rpc, batch(50))
+    expect(out.status).toBe(200)
+    expect(Array.isArray(out.payload) ? out.payload : []).toHaveLength(50)
+    expect(calls).toHaveLength(50)
+  })
+})
