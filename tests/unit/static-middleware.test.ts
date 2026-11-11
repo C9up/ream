@@ -372,6 +372,26 @@ describe('StaticMiddleware > AdonisJS parity', () => {
     expect(denied.ctx.response.getStatus()).toBe(403)
   })
 
+  it('leaves a dotted path outside its prefix to the application', async () => {
+    // `/.well-known/...` is an application route here (an ACME challenge):
+    // a middleware mounted under /static has no say over it, not even a 403.
+    const denying = new StaticMiddleware({ root, prefix: '/static', dotFiles: 'deny' })
+    const outside = makeCtx('/.well-known/acme-challenge/token')
+    const next = vi.fn<() => Promise<void>>(async () => {})
+    await denying.handle(outside.ctx, next)
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(outside.ctx.response.getStatus()).toBe(200)
+
+    // Inside the prefix the policy still holds, encoded or not.
+    for (const path of ['/static/.env', '/static/%2eenv', '/static/sub/.git/config']) {
+      const inside = makeCtx(path)
+      const insideNext = vi.fn<() => Promise<void>>(async () => {})
+      await denying.handle(inside.ctx, insideNext)
+      expect(insideNext, path).not.toHaveBeenCalled()
+      expect(inside.ctx.response.getStatus(), path).toBe(403)
+    }
+  })
+
   it('serves index.html for a directory, and nothing when index is off', async () => {
     writeFileSync(join(root, 'index.html'), '<h1>home</h1>')
     const { ctx, backend } = makeCtx('/')

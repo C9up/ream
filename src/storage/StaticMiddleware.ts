@@ -147,7 +147,11 @@ export class StaticMiddleware {
     const method = ctx.request.method()
     if (method !== 'GET' && method !== 'HEAD') return next()
 
-    const reqPath = ctx.request.path()
+    // Outside the prefix the request is none of this middleware's business —
+    // not even a dot-file refusal, or `{ prefix: '/static', dotFiles: 'deny' }`
+    // answers 403 to an application route such as `/.well-known/...`.
+    const reqPath = this.#withinPrefix(ctx.request.path())
+    if (reqPath === null) return next()
 
     // A dotfile under `deny` is answered, not passed on: falling through would
     // leak its existence through whatever the router answers next. The check
@@ -327,17 +331,22 @@ export class StaticMiddleware {
    * from the descriptor: what gets served is then the same file that passed the
    * checks, which a path re-read after the fact cannot promise.
    */
+  /**
+   * The request path below the prefix, or `null` when it lies outside it.
+   * Match only when the prefix is followed by `/` or end-of-path — otherwise
+   * `/staticx/foo.js` would be intercepted when the configured prefix is
+   * `/static`, hijacking unrelated routes.
+   */
+  #withinPrefix(reqPath: string): string | null {
+    if (this.#prefix === '') return reqPath
+    if (!(reqPath === this.#prefix || reqPath.startsWith(`${this.#prefix}/`))) return null
+    return reqPath.slice(this.#prefix.length) || '/'
+  }
+
+  /** `reqPath` is already relative to the prefix ({@link #withinPrefix}). */
   async #openServableFile(
     reqPath: string,
   ): Promise<{ handle: FileHandle; filePath: string; stat: fs.Stats } | null> {
-    if (this.#prefix !== '') {
-      // Match only when the prefix is followed by `/` or end-of-path —
-      // otherwise `/staticx/foo.js` would be intercepted when the configured
-      // prefix is `/static`, hijacking unrelated routes.
-      if (!(reqPath === this.#prefix || reqPath.startsWith(`${this.#prefix}/`))) return null
-      reqPath = reqPath.slice(this.#prefix.length) || '/'
-    }
-
     // Percent-decoding happens BEFORE any check and BEFORE resolution on
     // purpose: the dot-file policy has to see the name that will be opened
     // (`%2eenv` is `.env`), and `%2e%2e%2f` is `../`, which has to be
