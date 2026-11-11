@@ -383,6 +383,30 @@ describe('ExceptionHandler > production messages', () => {
     expect((await jsonError(error, true)).message).toBe('connect ECONNREFUSED 10.0.12.5:5432')
   })
 
+  it('never sends the stack trace outside debug mode, in any rendering', async () => {
+    // The stack holds the application's file paths and line numbers. One
+    // guard keeps it out of a production error page; nothing else does.
+    const error = () => new Error('boom')
+    const payload = await jsonError(error())
+    expect(payload).not.toHaveProperty('stack')
+
+    const frame = String(error().stack).split('\n')[1]?.trim() ?? ''
+    expect(frame).toMatch(/^at /)
+    for (const accept of ['text/html', 'application/vnd.api+json', 'application/json']) {
+      const ctx = ctxWith(accept)
+      await new ExceptionHandler().handle(error(), ctx)
+      const body = String(ctx.response.getBody())
+      expect(body, accept).not.toContain('exception-parity.test')
+      expect(body, accept).not.toContain(frame)
+    }
+  })
+
+  it('sends the stack trace in debug mode', async () => {
+    const payload = await jsonError(new Error('boom'), true)
+    expect(String(payload.stack)).toContain('at ')
+    expect(String(payload.stack)).toContain('exception-parity.test')
+  })
+
   it('hides the message in HTML and JSON:API renderings too', async () => {
     const error = () =>
       Object.assign(new Error('connect ECONNREFUSED 10.0.12.5:5432'), { code: 'ECONNREFUSED' })
