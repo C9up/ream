@@ -17,3 +17,5 @@ coverage/
 
 # Local-only working notes (not part of the published source tree)
 CORRECTIONS.md
+# Workstream: the maintainer's local tracking, never published
+.workstream/
