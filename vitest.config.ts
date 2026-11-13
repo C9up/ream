@@ -13,7 +13,13 @@ export default defineConfig({
 		coverage: {
 			provider: "v8",
 			include: ["src/**"],
-			exclude: ["src/**/*.d.ts"],
+			exclude: [
+				"src/**/*.d.ts",
+				// The debug toolbar's browser code: Node never loads it, so v8 sees
+				// a thousand uncovered lines. It is checked as the embedded string
+				// it ships as, and in a real browser.
+				"src/profiler/client/**",
+			],
 			reporter: ["text-summary", "json-summary"],
 			// Just under what the suite reaches, and now actually run. They read
 			// 55/53/45/53 — some thirty points below reality — while nothing
