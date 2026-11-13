@@ -41,6 +41,21 @@ async function handler(req: NapiRequest): Promise<{
     }
   }
 
+  // A first visit: the CSRF token and the session cookie in one answer, the
+  // session written last, as a session middleware placed outside does.
+  if (req.method === 'GET' && req.path === '/first-visit') {
+    return {
+      status: 200,
+      headers: {
+        'set-cookie': [
+          `XSRF-TOKEN=${ISSUED_TOKEN}; Path=/; SameSite=Lax`,
+          'ream_session=s1; Path=/; HttpOnly; Expires=Wed, 21 Oct 2037 07:28:00 GMT',
+        ].join('\n'),
+      },
+      body: '{}',
+    }
+  }
+
   // Unsafe verb — enforce the double-submit: cookie token must equal the header.
   if (req.method === 'POST' && req.path === '/protected') {
     const cookieToken = readCookie(req.headers.cookie, 'XSRF-TOKEN')
@@ -93,6 +108,24 @@ describeIfNetwork('TestClient > withCsrf + visit (real HyperServer)', () => {
       .json({ name: 'x' })
       .assertOk()
       .assertBodyContains({ ok: true })
+  })
+
+  it('keeps every cookie of an answer that sets several', async () => {
+    const first = await client.fluent('GET', '/first-visit').send()
+    const cookies = first.cookies()
+    expect(Object.keys(cookies).sort()).toEqual(['XSRF-TOKEN', 'ream_session'])
+    expect(cookies.ream_session).toMatchObject({
+      value: 's1',
+      httponly: '',
+      expires: 'Wed, 21 Oct 2037 07:28:00 GMT',
+    })
+
+    await client
+      .fluent('POST', '/protected')
+      .cookie('XSRF-TOKEN', first.cookie('XSRF-TOKEN')?.value ?? '')
+      .withCsrf()
+      .json({ name: 'x' })
+      .assertOk()
   })
 
   it('visit() resolves a named route and GETs it', async () => {

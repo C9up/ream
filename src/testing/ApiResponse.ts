@@ -78,7 +78,13 @@ export function partialMatch(actual: unknown, expected: unknown): boolean {
 
 /** Split a `Set-Cookie` header value into its individual cookie strings. */
 function splitSetCookie(setCookie: string): string[] {
-  return setCookie.split(/,(?=\s*[\w-]+=)/).map((c) => c.trim())
+  // One cookie per line, as the response parser stores them; a header folded
+  // with commas by another source is still split where a new `name=` starts.
+  return setCookie
+    .split('\n')
+    .flatMap((line) => line.split(/,(?=\s*[\w-]+=)/))
+    .map((c) => c.trim())
+    .filter((c) => c !== '')
 }
 
 /** A parsed response cookie — `name` + `value` plus any attributes present. */

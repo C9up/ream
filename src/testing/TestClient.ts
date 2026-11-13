@@ -374,13 +374,19 @@ export function parseHttpResponse(raw: string | Buffer): TestResponse {
   const [, statusDigits] = statusLine.match(/HTTP\/\d+\.\d+ (\d+)/) ?? []
   const status = statusDigits === undefined ? 0 : Number.parseInt(statusDigits, 10)
 
+  // A repeated header is never overwritten. Set-Cookie lines are joined with
+  // `\n`, the way `Response.getHeaders()` hands them to the serializer: a
+  // cookie's `Expires` holds a comma, so a comma cannot separate two of them
+  // (RFC 6265 §3). Any other field is combined with `, ` (RFC 9110 §5.3).
   const headers: Dict = {}
   for (const line of lines.slice(1)) {
     const colonIdx = line.indexOf(':')
     if (colonIdx === -1) continue
     const key = line.slice(0, colonIdx).trim().toLowerCase()
     const value = line.slice(colonIdx + 1).trim()
-    headers[key] = value
+    const existing = headers[key]
+    if (existing === undefined) headers[key] = value
+    else headers[key] = `${existing}${key === 'set-cookie' ? '\n' : ', '}${value}`
   }
 
   // RFC 7230 §4.1: when Transfer-Encoding includes `chunked`, the message body

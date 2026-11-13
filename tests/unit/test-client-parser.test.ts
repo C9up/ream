@@ -105,4 +105,23 @@ describe('TestClient > parseHttpResponse', () => {
     ])
     expect(parseHttpResponse(Buffer.concat([headerBuf, chunkBuf])).body).toBe('café')
   })
+
+  it('keeps every Set-Cookie line, one per line, and combines any other repeated field', () => {
+    const raw = rawResponse(
+      [
+        'HTTP/1.1 200 OK',
+        'Set-Cookie: XSRF-TOKEN=t; Path=/',
+        'Vary: Accept',
+        'Set-Cookie: ream_session=s; Expires=Wed, 21 Oct 2037 07:28:00 GMT',
+        'Vary: Cookie',
+        'Content-Length: 0',
+      ].join('\r\n'),
+      '',
+    )
+    const res = parseHttpResponse(raw)
+    expect(res.headers['set-cookie']).toBe(
+      'XSRF-TOKEN=t; Path=/\nream_session=s; Expires=Wed, 21 Oct 2037 07:28:00 GMT',
+    )
+    expect(res.headers.vary).toBe('Accept, Cookie')
+  })
 })
