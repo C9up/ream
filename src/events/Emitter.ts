@@ -96,6 +96,8 @@ export class Emitter {
   #fakedEvents?: Set<BufferedEventName>
   /** Wildcard subscriptions, so `offAny(listener)` can find its Rust handle. */
   readonly #anySubscriptions = new Map<(eventName: string, data: unknown) => void, Set<number>>()
+  /** Observers told of every emission as it happens — see {@link tap}. */
+  readonly #taps = new Set<(event: string, data: unknown) => void>()
 
   constructor(bus: EventBus, resolver?: EmitterResolver) {
     this.#bus = bus
@@ -228,6 +230,34 @@ export class Emitter {
   // ─── Emit ─────────────────────────────────────────────────
 
   /**
+   * Watch every emission — string and class-based — as it happens.
+   *
+   * Development tooling: the profiler's events panel. `onAny` is not enough for
+   * it, because a wildcard subscription goes through the native bus and is
+   * called later, outside the request that emitted. A tap runs synchronously,
+   * in the emitting code's own async context, before any listener.
+   *
+   * It observes and nothing more: it sees a faked event too, it cannot change
+   * or cancel the emission, and a tap that throws is ignored.
+   */
+  tap(observer: (event: string, data: unknown) => void): UnsubscribeFunction {
+    this.#taps.add(observer)
+    return () => {
+      this.#taps.delete(observer)
+    }
+  }
+
+  #notifyTaps(event: string, data: unknown): void {
+    for (const observer of this.#taps) {
+      try {
+        observer(event, data)
+      } catch {
+        // Observation must never break the emission it watches.
+      }
+    }
+  }
+
+  /**
    * Run an event's listeners, in parallel or one after another.
    *
    * A listener that throws is reported and does NOT stop the others: one
@@ -259,6 +289,7 @@ export class Emitter {
    * Use it when order matters — a listener that seeds what the next one reads.
    */
   async emitSerial(event: string, data: unknown): Promise<void> {
+    this.#notifyTaps(event, data)
     if (this.#capture(event, data)) return
     await this.#dispatchListeners(event, data, true)
     this.#publishToBus(event, data)
@@ -276,6 +307,7 @@ export class Emitter {
    * rejects is reported through `emitError`, never left unhandled.
    */
   async emit(event: string, data: unknown): Promise<void> {
+    this.#notifyTaps(event, data)
     if (this.#capture(event, data)) return
     await this.#dispatchListeners(event, data, false)
     this.#publishToBus(event, data)
@@ -325,11 +357,12 @@ export class Emitter {
    */
   async dispatchEvent<T extends object>(event: T): Promise<void> {
     const EventClass = event.constructor as EventConstructor<T>
+    const name = (EventClass as { eventName?: string }).eventName ?? classToEventName(EventClass)
+    this.#notifyTaps(name, event)
     // Faked by the class, as AdonisJS does — `fake([TaskDeclared])` catches
     // `new TaskDeclared(...).emit()`.
     if (this.#capture(EventClass, event)) return
     const listeners = this.#classListeners.get(EventClass) ?? []
-    const name = (EventClass as { eventName?: string }).eventName ?? classToEventName(EventClass)
 
     // Per-listener error isolation — mirrors the string `emit()` contract.
     // A side-effect listener that throws (SMTP down, etc.) MUST NOT abort
