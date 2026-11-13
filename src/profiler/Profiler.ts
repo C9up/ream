@@ -68,7 +68,10 @@ export class Profiler {
     const token = newToken()
     const startedAt = Date.now()
     const started = performance.now()
-    const active: ActiveProfile = { scope: { token, startedAt }, bags: new Map() }
+    const active: ActiveProfile = {
+      scope: { token, startedAt, elapsed: () => performance.now() - started },
+      bags: new Map(),
+    }
 
     for (const collector of this.#collectors) {
       // A collector that throws while starting must not fail the request it was

@@ -1425,7 +1425,13 @@ export class Ignitor {
     const events = this.#app.container.has('events')
       ? await this.#app.container.resolve<Emitter>('events')
       : { on: () => undefined }
-    this.#profiler = createProfiler(events)
+    // Imported here, at start, rather than at the top: the barrel imports this
+    // module, and its `VERSION` is what the release bump rewrites.
+    const { VERSION } = await import('./index.js')
+    this.#profiler = createProfiler(events, [], {
+      version: VERSION,
+      environment: process.env.REAM_ENV ?? process.env.NODE_ENV ?? 'development',
+    })
   }
 
   #profiler?: Profiler

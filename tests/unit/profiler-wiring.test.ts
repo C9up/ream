@@ -9,7 +9,12 @@
 import { describe, expect, it } from 'vitest'
 import { HMR_PATH } from '../../src/dev/hmr.js'
 import type { HttpContext } from '../../src/http/HttpContext.js'
-import { createHttpKernel, MiddlewareRegistry, Router } from '../../src/index.js'
+import {
+  BodyParserMiddleware,
+  createHttpKernel,
+  MiddlewareRegistry,
+  Router,
+} from '../../src/index.js'
 import {
   createProfiler,
   PROFILER_PATH,
@@ -42,17 +47,22 @@ function devKernel(routes: (router: Router) => void) {
   const profiler = createProfiler(bus.source)
   const router = new Router()
   routes(router)
+  const bodyParser = new BodyParserMiddleware({})
   const kernel = createHttpKernel({
     router,
     middleware: new MiddlewareRegistry(),
-    serverMiddleware: [profilerEndpoint(profiler), profileRequest(profiler)],
+    serverMiddleware: [
+      profilerEndpoint(profiler),
+      profileRequest(profiler),
+      (ctx: HttpContext, next: () => Promise<void>) => bodyParser.handle(ctx, next),
+    ],
     devScript: (ctx: HttpContext) => {
       const token = ctx.response.getHeader(PROFILER_TOKEN_HEADER)
       return token === undefined ? '<script>RELOAD</script>' : toolbarScript(token)
     },
   })
   const send = (path: string) => kernel({ method: 'GET', path, query: '', headers: {}, body: '' })
-  return { profiler, send, bus }
+  return { profiler, send, bus, kernel }
 }
 
 describe('profiler > wired into the kernel', () => {
@@ -78,7 +88,7 @@ describe('profiler > wired into the kernel', () => {
     const token = res.headers[PROFILER_TOKEN_HEADER]
 
     // A bar that showed a different token would open someone else's profile.
-    expect(String(res.body)).toContain(`"token":"${token}"`)
+    expect(String(res.body)).toContain(`data-token="${token}"`)
   })
 
   it('keeps the profile the toolbar then asks for', async () => {
@@ -160,6 +170,42 @@ describe('profiler > wired into the kernel', () => {
     expect(profiler.store.find(token)?.data.request).toMatchObject({
       controller: 'OrderController.list',
     })
+  })
+
+  it('shows the request and its answer, with secrets hidden', async () => {
+    const { kernel, profiler } = devKernel((router) => {
+      router.post('/orders/:id', ({ response }: HttpContext) => {
+        response.header('x-trace', 'abc')
+        response.status(201).send({ ok: true })
+      })
+    })
+
+    const sent = JSON.stringify({ name: 'bolt', password: 'hunter2' })
+    const res = await kernel({
+      method: 'POST',
+      path: '/orders/7',
+      query: 'page=2',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(sent)),
+        authorization: 'Bearer s3cret',
+        cookie: 'session=abc; theme=dark',
+      },
+      body: sent,
+    })
+    const request = profiler.store.find(res.headers[PROFILER_TOKEN_HEADER] ?? '')?.data.request
+
+    expect(request).toMatchObject({
+      pattern: '/orders/:id',
+      path: '/orders/7',
+      params: { id: '7' },
+      query: { page: '2' },
+      body: { name: 'bolt', password: '[redacted]' },
+      cookies: ['session', 'theme'],
+      response: { status: 201, headers: { 'x-trace': 'abc' } },
+    })
+    expect(JSON.stringify(request)).not.toContain('s3cret')
+    expect(JSON.stringify(request)).not.toContain('hunter2')
   })
 
   it('attributes a log line the same way it attributes a query', async () => {

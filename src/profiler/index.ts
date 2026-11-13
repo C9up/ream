@@ -7,7 +7,11 @@
  */
 
 import {
+  appCollector,
   databaseCollector,
+  type EventBag,
+  type EventTapSource,
+  eventsCollector,
   exceptionCollector,
   type LogBag,
   logCollector,
@@ -25,7 +29,8 @@ export { profilerEndpoint } from './endpoint.js'
 export { MemoryProfileStore } from './MemoryProfileStore.js'
 export { profileRequest } from './middleware.js'
 export { PROFILER_PATH, PROFILER_TOKEN_HEADER, Profiler } from './Profiler.js'
-export { toolbarScript } from './toolbar.js'
+export { isSecretKey, preview, REDACTED } from './preview.js'
+export { PROFILER_ASSETS_PATH, toolbarScript } from './toolbar.js'
 export * from './types.js'
 
 /**
@@ -33,11 +38,12 @@ export * from './types.js'
  *
  * `events` is the application's emitter. The database panel comes from
  * `db:query` on it, which is how a data layer reports a statement without the
- * profiler importing one.
+ * profiler importing one; the events panel from its `tap`, when it has one.
  */
 export function createProfiler(
-  events: QueryEventSource,
+  events: QueryEventSource & Partial<EventTapSource>,
   extra: readonly ProfilerCollector[] = [],
+  info: { version?: string; environment?: string } = {},
 ): Profiler {
   // Built before the profiler so the database collector can read the bag of
   // whichever request is running — the reference is filled in a line later,
@@ -48,7 +54,15 @@ export function createProfiler(
     databaseCollector(events, () => profiler.current<QueryBag>('database')),
     exceptionCollector(),
     logCollector(events, () => profiler.current<LogBag>('logs')),
+    ...(typeof events.tap === 'function'
+      ? [
+          eventsCollector({ tap: events.tap.bind(events) }, () =>
+            profiler.current<EventBag>('events'),
+          ),
+        ]
+      : []),
     memoryCollector(),
+    appCollector(info),
     ...extra,
   ]
   profiler = new Profiler(collectors, new MemoryProfileStore(collectors))

@@ -45,8 +45,13 @@ export type ProfileSummary = Omit<Profile, 'data'> & {
  */
 export interface CollectionScope {
   token: string
-  /** Called by the framework when the request is done. */
+  /** When the request arrived, epoch milliseconds. */
   readonly startedAt: number
+  /**
+   * Milliseconds since the request arrived, on the monotonic clock. What a
+   * collector stamps an entry with, so the timeline can place it.
+   */
+  elapsed(): number
 }
 
 /**

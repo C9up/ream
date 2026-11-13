@@ -11,9 +11,13 @@
  * `db:query`, which is the shape atlas documents for bridging its own registry
  * (`onDbQuery((event) => emitter.emit('db:query', event))`). A project on
  * another data layer emits the same event and gets the same panel.
+ *
+ * Every entry is stamped with `at`, milliseconds since the request arrived, so
+ * the bar can lay queries, log lines and events out on one timeline.
  */
 
-import type { CollectedData, ProfilerCollector } from './types.js'
+import { preview } from './preview.js'
+import type { CollectedData, CollectionScope, ProfilerCollector } from './types.js'
 
 /** One SQL statement, as the panel shows it. */
 export interface RecordedQuery {
@@ -21,6 +25,8 @@ export interface RecordedQuery {
   bindings: readonly unknown[]
   /** Milliseconds. */
   duration: number
+  /** When it started, milliseconds since the request arrived. */
+  at: number
   connection?: string
   model?: string
   method?: string
@@ -53,9 +59,14 @@ export function databaseCollector(
   events.on('db:query', (payload) => {
     const bag = read()
     if (bag === undefined) return
+    const duration = durationOf(payload)
     bag.total += 1
-    bag.duration += durationOf(payload)
-    if (bag.queries.length < QUERY_CAP) bag.queries.push(toQuery(payload))
+    bag.duration += duration
+    if (isFailed(payload)) bag.failed += 1
+    if (bag.queries.length < QUERY_CAP) {
+      // The event arrives when the statement ENDS: it started `duration` ago.
+      bag.queries.push(toQuery(payload, Math.max(0, bag.scope.elapsed() - duration)))
+    }
   })
 
   return {
@@ -65,12 +76,13 @@ export function databaseCollector(
       const duration = typeof data.duration === 'number' ? data.duration : 0
       return `${total} ${total === 1 ? 'query' : 'queries'} · ${round(duration)} ms`
     },
-    start: () => ({ total: 0, duration: 0, queries: [] }),
+    start: (scope) => ({ scope, total: 0, failed: 0, duration: 0, queries: [] }),
     finish: (bag) =>
       bag === undefined
-        ? { total: 0, duration: 0, queries: [], capped: false }
+        ? { total: 0, failed: 0, duration: 0, queries: [], capped: false }
         : {
             total: bag.total,
+            failed: bag.failed,
             duration: round(bag.duration),
             queries: bag.queries,
             capped: bag.total > bag.queries.length,
@@ -79,12 +91,20 @@ export function databaseCollector(
 }
 
 export interface QueryBag {
+  scope: CollectionScope
   total: number
+  failed: number
   duration: number
   queries: RecordedQuery[]
 }
 
-/** The request and what it answered. */
+/**
+ * The request and what it answered.
+ *
+ * Filled by the profiling middleware once the handler has run — routing, the
+ * session and the user are only known then. Every value that came from the
+ * client goes through {@link preview}, which caps it and hides secrets.
+ */
 export function requestCollector(): ProfilerCollector<RequestBag> {
   return {
     name: 'request',
@@ -96,8 +116,21 @@ export function requestCollector(): ProfilerCollector<RequestBag> {
 
 export interface RequestBag {
   route?: string
+  pattern?: string
   controller?: string
   userId?: string
+  user?: unknown
+  path?: string
+  ip?: string
+  requestId?: string
+  ajax?: boolean
+  params?: unknown
+  query?: unknown
+  body?: unknown
+  headers?: unknown
+  cookies?: string[]
+  session?: unknown
+  response?: { status: number; contentType?: string; headers: unknown }
 }
 
 /**
@@ -139,8 +172,11 @@ export function logCollector(events: LogEventSource, read: () => LogBag | undefi
   events.on('log:line', (payload) => {
     const bag = read()
     if (bag === undefined) return
-    if (bag.lines.length < LINE_CAP) bag.lines.push(toLine(payload))
+    const line = toLine(payload, bag.scope.elapsed())
     bag.total += 1
+    if (line.level === 'error' || line.level === 'fatal') bag.errors += 1
+    if (line.level === 'warn') bag.warnings += 1
+    if (bag.lines.length < LINE_CAP) bag.lines.push(line)
   })
 
   return {
@@ -149,11 +185,13 @@ export function logCollector(events: LogEventSource, read: () => LogBag | undefi
       const total = typeof data.total === 'number' ? data.total : 0
       return total === 0 ? undefined : `${total} ${total === 1 ? 'log' : 'logs'}`
     },
-    start: () => ({ total: 0, lines: [] }),
+    start: (scope) => ({ scope, total: 0, errors: 0, warnings: 0, lines: [] }),
     // Nothing logged is nothing to show: an empty bag renders no panel at all,
     // rather than a heading over an empty list.
     finish: (bag) =>
-      bag === undefined || bag.total === 0 ? {} : { total: bag.total, lines: bag.lines },
+      bag === undefined || bag.total === 0
+        ? {}
+        : { total: bag.total, errors: bag.errors, warnings: bag.warnings, lines: bag.lines },
   } satisfies ProfilerCollector<LogBag>
 }
 
@@ -165,48 +203,147 @@ export interface LogEventSource {
 /** As many lines as are worth scrolling; the count stays true past it. */
 const LINE_CAP = 200
 
-export interface LogBag {
-  total: number
-  lines: Array<{ level: string; message: string; time?: string }>
+export interface LogLine {
+  level: string
+  message: string
+  time?: string
+  /** Milliseconds since the request arrived. */
+  at: number
+  context?: unknown
 }
 
-function toLine(payload: unknown): LogBag['lines'][number] {
+export interface LogBag {
+  scope: CollectionScope
+  total: number
+  errors: number
+  warnings: number
+  lines: LogLine[]
+}
+
+/** Fields of a log entry that are its envelope, not its context. */
+const LOG_ENVELOPE = new Set(['level', 'message', 'msg', 'timestamp', 'time'])
+
+function toLine(payload: unknown, at: number): LogLine {
   const entry = asRecord(payload)
+  const message = entry.message ?? entry.msg
+  const context = Object.fromEntries(
+    Object.entries(entry).filter(([key]) => !LOG_ENVELOPE.has(key)),
+  )
   return {
     level: typeof entry.level === 'string' ? entry.level : 'info',
-    message: typeof entry.message === 'string' ? entry.message : String(entry.message ?? ''),
+    message: typeof message === 'string' ? message : String(message ?? ''),
+    at: round(at),
     ...(typeof entry.timestamp === 'string' ? { time: entry.timestamp } : {}),
+    ...(Object.keys(context).length > 0 ? { context: preview(context) } : {}),
   }
 }
 
-/** Peak heap while the request ran, which is what a leak shows up in. */
+/**
+ * Every event the application emitted while the request ran — cache hits,
+ * mail sent, authorisation checks, the application's own domain events.
+ *
+ * It reads them through the emitter's `tap`, which runs in the emitting code's
+ * async context. `onAny` would not do: it is delivered through the native bus,
+ * later and outside the request. Queries and log lines are left out: they have
+ * their own panels.
+ */
+export function eventsCollector(
+  source: EventTapSource,
+  read: () => EventBag | undefined,
+): ProfilerCollector<EventBag> {
+  source.tap((name, data) => {
+    if (OWN_PANEL.has(name)) return
+    const bag = read()
+    if (bag === undefined) return
+    bag.total += 1
+    if (bag.events.length < EVENT_CAP) {
+      bag.events.push({ name, at: round(bag.scope.elapsed()), data: preview(data) })
+    }
+  })
+
+  return {
+    name: 'events',
+    badge: (data) => {
+      const total = typeof data.total === 'number' ? data.total : 0
+      return total === 0 ? undefined : `${total} ${total === 1 ? 'event' : 'events'}`
+    },
+    start: (scope) => ({ scope, total: 0, events: [] }),
+    finish: (bag) =>
+      bag === undefined || bag.total === 0
+        ? {}
+        : { total: bag.total, events: bag.events, capped: bag.total > bag.events.length },
+  }
+}
+
+/** Events that already have a panel of their own. */
+const OWN_PANEL = new Set(['db:query', 'log:line'])
+
+const EVENT_CAP = 300
+
+/** What the emitter must give the events collector. Structural. */
+export interface EventTapSource {
+  tap(observer: (event: string, data: unknown) => void): unknown
+}
+
+export interface EventBag {
+  scope: CollectionScope
+  total: number
+  events: Array<{ name: string; at: number; data: unknown }>
+}
+
+/** Heap and resident memory once the request is answered. */
 export function memoryCollector(): ProfilerCollector<{ start: number }> {
   return {
     name: 'memory',
     badge: (data) => (typeof data.usedMb === 'number' ? `${data.usedMb.toFixed(1)} MB` : undefined),
     start: () => ({ start: process.memoryUsage().heapUsed }),
     finish: (bag) => {
-      const used = process.memoryUsage().heapUsed
+      const usage = process.memoryUsage()
       return {
-        usedMb: used / 1024 / 1024,
-        deltaMb: bag === undefined ? 0 : (used - bag.start) / 1024 / 1024,
+        usedMb: usage.heapUsed / MB,
+        totalMb: usage.heapTotal / MB,
+        rssMb: usage.rss / MB,
+        deltaMb: bag === undefined ? 0 : (usage.heapUsed - bag.start) / MB,
       }
     },
   }
 }
 
-function toQuery(payload: unknown): RecordedQuery {
+const MB = 1024 * 1024
+
+/** The application and the runtime it answered on: the bar's right-hand item. */
+export function appCollector(info: { version?: string; environment?: string } = {}) {
+  return {
+    name: 'app',
+    start: () => undefined,
+    finish: () => ({
+      ...(info.version === undefined ? {} : { ream: info.version }),
+      node: process.version,
+      environment: info.environment ?? process.env.NODE_ENV ?? 'development',
+      platform: `${process.platform}-${process.arch}`,
+      pid: process.pid,
+      uptime: Math.round(process.uptime()),
+    }),
+  } satisfies ProfilerCollector<undefined>
+}
+
+function toQuery(payload: unknown, at: number): RecordedQuery {
   const event = asRecord(payload)
   return {
     sql: typeof event.sql === 'string' ? event.sql : String(event.sql ?? ''),
-    bindings: Array.isArray(event.bindings) ? event.bindings : [],
-    duration: durationOf(payload),
+    bindings: Array.isArray(event.bindings) ? event.bindings.map((value) => preview(value)) : [],
+    duration: round(durationOf(payload)),
+    at: round(at),
     ...pickString(event, 'connection'),
     ...pickString(event, 'model'),
     ...pickString(event, 'method'),
     ...(event.inTransaction === true ? { inTransaction: true } : {}),
     ...(event.error instanceof Error ? { error: event.error.message } : {}),
   }
+}
+
+function isFailed(payload: unknown): boolean {
+  return asRecord(payload).error instanceof Error
 }
 
 function durationOf(payload: unknown): number {

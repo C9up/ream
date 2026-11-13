@@ -58,7 +58,8 @@
 			"!**/package.json",
 			"!**/biome.json",
 			"!**/vitest.config.ts",
-			"!**/scripts/**"
+			"!**/scripts/**",
+			"!**/*.generated.ts"
 		]
 	},
 	"overrides": [

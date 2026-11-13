@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { TOOLBAR_CSS, TOOLBAR_JS } from '../../src/profiler/client.generated.js'
 import { databaseCollector, type QueryBag } from '../../src/profiler/collectors.js'
 import { profilerEndpoint } from '../../src/profiler/endpoint.js'
 import { MemoryProfileStore } from '../../src/profiler/MemoryProfileStore.js'
@@ -215,8 +216,16 @@ describe('profiler > what it renders', () => {
 describe('profiler > the injected bar', () => {
   it('carries its own token, because a page cannot read its own headers', () => {
     const script = toolbarScript('deadbeef')
-    expect(script).toContain('"token":"deadbeef"')
-    expect(script).toContain('/__ream/profiler')
+    expect(script).toContain('data-token="deadbeef"')
+    expect(script).toContain('data-path="/__ream/profiler"')
+  })
+
+  it('loads the bar from the profiler, with nothing inline', () => {
+    // An inline script runs only with the nonce; a same-origin one also runs
+    // under a plain `script-src 'self'`.
+    const script = toolbarScript('abc')
+    expect(script).toContain('src="/__ream/profiler/_assets/toolbar.js"')
+    expect(script).toMatch(/><\/script>$/)
   })
 
   it('carries the nonce, or a CSP drops it silently', () => {
@@ -229,19 +238,36 @@ describe('profiler > the injected bar', () => {
     expect(script).toContain('&quot;')
   })
 
-  it('styles through the CSSOM, which no CSP blocks', () => {
-    // A `<style>` element inserted at runtime is inline style: under a plain
-    // `default-src 'self'` it is dropped with no error, and the bar renders as
-    // a stack of grey text with nothing saying why.
-    const script = toolbarScript('abc')
-    expect(script).toContain('style.cssText')
-    expect(script).not.toContain("createElement('style')")
+  it('escapes a token that is not hex', () => {
+    expect(toolbarScript('a"b<c')).toContain('data-token="a&quot;b&lt;c"')
+  })
+})
+
+describe('profiler > the files of the bar', () => {
+  it('serves the script and the stylesheet, revalidated each time', async () => {
+    const { profiler } = recorded()
+    const endpoint = profilerEndpoint(profiler)
+
+    const js = context('/__ream/profiler/_assets/toolbar.js')
+    await endpoint(js.ctx, js.next)
+    expect(js.recordedResponse.headers['content-type']).toContain('text/javascript')
+    expect(js.recordedResponse.headers['cache-control']).toBe('no-cache')
+    expect(js.recordedResponse.body).toBe(TOOLBAR_JS)
+
+    const css = context('/__ream/profiler/_assets/toolbar.css')
+    await endpoint(css.ctx, css.next)
+    expect(css.recordedResponse.headers['content-type']).toContain('text/css')
+    expect(css.recordedResponse.body).toBe(TOOLBAR_CSS)
   })
 
-  it('builds its nodes rather than writing markup', () => {
-    // textContent, not innerHTML: whatever the bar shows came from a request.
-    const script = toolbarScript('abc')
-    expect(script).toContain('textContent')
-    expect(script).not.toContain('innerHTML')
+  it('answers 404 for any other name, an inherited key included', async () => {
+    const { profiler } = recorded()
+    const endpoint = profilerEndpoint(profiler)
+    for (const name of ['nope.js', 'constructor', '__proto__', '../toolbar.js']) {
+      const asked = context(`/__ream/profiler/_assets/${name}`)
+      await endpoint(asked.ctx, asked.next)
+      expect(asked.recordedResponse.status).toBe(404)
+      expect(asked.wasNexted()).toBe(false)
+    }
   })
 })

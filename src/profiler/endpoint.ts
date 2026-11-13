@@ -1,20 +1,29 @@
 /**
  * Where the toolbar and the profiler read from.
  *
- * Three routes, all under `/__ream/profiler` and all development-only:
+ * All under `/__ream/profiler` and all development-only:
  *
  *     /__ream/profiler                 the history, newest first
  *     /__ream/profiler/<token>         one request, every panel
  *     /__ream/profiler/<token>.json    the same, for the bar in the page
+ *     /__ream/profiler/_assets/…       the bar's own script and stylesheet
  *
  * Server middleware rather than routes, like the hot-reload endpoint: it
  * answers before the application's own middleware, so a profiler request does
  * not run the authentication stack and end up in its own history.
  */
 
+import { TOOLBAR_CSS, TOOLBAR_JS } from './client.generated.js'
 import type { Profiler } from './Profiler.js'
 import { PROFILER_PATH } from './Profiler.js'
 import { renderProfileList, renderProfilePage } from './render.js'
+import { PROFILER_ASSETS_PATH } from './toolbar.js'
+
+/** The bar's files, by the name the page asks for. */
+const ASSETS: Record<string, { type: string; body: string }> = {
+  'toolbar.js': { type: 'text/javascript; charset=utf-8', body: TOOLBAR_JS },
+  'toolbar.css': { type: 'text/css; charset=utf-8', body: TOOLBAR_CSS },
+}
 
 /** The slice of the context this endpoint uses. */
 export interface ProfilerContext {
@@ -33,6 +42,23 @@ export function profilerEndpoint(
     const path = ctx.request.url().split('?')[0] ?? ''
     if (path !== PROFILER_PATH && !path.startsWith(`${PROFILER_PATH}/`)) {
       await next()
+      return
+    }
+
+    if (path.startsWith(`${PROFILER_ASSETS_PATH}/`)) {
+      const asset = Object.hasOwn(ASSETS, path.slice(PROFILER_ASSETS_PATH.length + 1))
+        ? ASSETS[path.slice(PROFILER_ASSETS_PATH.length + 1)]
+        : undefined
+      if (asset === undefined) {
+        ctx.response.status(404)
+        ctx.response.send('')
+        return
+      }
+      ctx.response.header('content-type', asset.type)
+      // Revalidated each time: the bar changes with the framework, and a stale
+      // copy would show the last version's panels after an upgrade.
+      ctx.response.header('cache-control', 'no-cache')
+      ctx.response.send(asset.body)
       return
     }
 
