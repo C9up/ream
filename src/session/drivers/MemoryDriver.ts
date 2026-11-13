@@ -4,6 +4,16 @@ import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
 const SWEEP_THRESHOLD = 1000
 
 /**
+ * At most one sweep per this many milliseconds.
+ *
+ * A sweep walks the whole store. Run on every write past the threshold, a
+ * flood of anonymous requests turned each write into a 10 000-entry scan —
+ * quadratic, and 20 000 writes took seconds. Between two sweeps the cap below
+ * still bounds the store, and a read drops the expired entry it lands on.
+ */
+const SWEEP_INTERVAL_MS = 1000
+
+/**
  * Hard cap on live sessions.
  *
  * The sweep alone only removes EXPIRED entries, so within the TTL window
@@ -25,6 +35,8 @@ export class MemoryDriver implements SessionDriverWithTagging {
   /** user id → the sessions tagged with it. */
   #tags: Map<string, Set<string>> = new Map()
   readonly #maxEntries: number
+  /** When the last sweep ran, epoch milliseconds. */
+  #lastSweep = 0
 
   constructor(options: MemoryDriverOptions = {}) {
     this.#maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES)
@@ -40,8 +52,9 @@ export class MemoryDriver implements SessionDriverWithTagging {
   }
 
   async write(sessionId: string, data: Record<string, unknown>, ttl: number): Promise<void> {
-    if (this.#store.size >= SWEEP_THRESHOLD) {
-      const now = Date.now()
+    const now = Date.now()
+    if (this.#store.size >= SWEEP_THRESHOLD && now - this.#lastSweep >= SWEEP_INTERVAL_MS) {
+      this.#lastSweep = now
       for (const [id, entry] of this.#store) {
         if (entry.expiresAt < now) this.#store.delete(id)
       }
