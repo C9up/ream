@@ -30,10 +30,23 @@ import type { Binding, ServiceFactory, ServiceToken } from './types.js'
  */
 const RESERVED_TOKEN_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
 
-/** One resolution chain: the tokens on it, and a set for O(1) membership. */
+/**
+ * Where one resolution stands: the tokens above it (a list for the message, a
+ * set for O(1) membership), and what it carries down.
+ *
+ * **Never mutated once in the async context.** Every resolution, and every
+ * construction that changes the parent, runs on its OWN copy
+ * (`#chain.run({ ...chain, ... })`). The chain used to be one object pushed to
+ * and popped from in place, and a chain opened around a whole body
+ * (`container.call()` around a command's `run()`, `resolveFor`,
+ * `runWithScopedValues`) was then shared by every concurrent task inside it:
+ * two tasks asking for the same singleton at once read as `catalog → catalog`,
+ * and one task's class could stand as another's parent for a contextual
+ * binding. A copy per step costs an array and a set the depth of the chain.
+ */
 interface ResolutionChain {
-  stack: ServiceToken[]
-  set: Set<ServiceToken>
+  readonly stack: readonly ServiceToken[]
+  readonly set: ReadonlySet<ServiceToken>
   /**
    * Values bound on the {@link ContainerResolver} that opened this chain.
    *
@@ -51,8 +64,13 @@ interface ResolutionChain {
    * `HttpContext`. Comparing this counter before and after a build says whether
    * it actually read one, so a singleton that touched no request state still
    * caches exactly as before.
+   *
+   * A box, the one mutable part, so the copies a chain is walked on all count
+   * into it: a read three dependencies down is a read by the singleton being
+   * built at the top. Concurrent siblings count into it too, which can only
+   * keep a singleton out of the cache, never put a request's into it.
    */
-  scopedReads?: number
+  readonly scopedReads: { count: number }
   /**
    * The class whose dependencies are being resolved right now.
    *
@@ -60,12 +78,17 @@ interface ResolutionChain {
    * this", so the lookup needs the direct dependent. Carried on the chain for
    * the same reason the scoped values are: `#autoConstruct` knows it, and
    * every method between there and the lookup would otherwise have to pass it
-   * down. Saved and restored around each construction, so a dependency's own
+   * down. Each construction runs on a copy that names it, so a dependency's own
    * dependencies see IT as their parent, not its parent.
    */
-  parent?: abstract new (
+  readonly parent?: abstract new (
     ...args: never[]
   ) => unknown
+}
+
+/** A chain with nothing in it yet. */
+function openChain(extra: Partial<ResolutionChain> = {}): ResolutionChain {
+  return { stack: [], set: new Set(), scopedReads: { count: 0 }, ...extra }
 }
 
 export class Container {
@@ -320,9 +343,7 @@ export class Container {
     // it and nothing outside it does.
     const chain = this.#chain.getStore()
     if (chain === undefined) {
-      return this.#chain.run({ stack: [], set: new Set() }, () =>
-        this.resolve<T>(token, runtimeValues),
-      )
+      return this.#chain.run(openChain(), () => this.resolve<T>(token, runtimeValues))
     }
 
     if (chain.set.has(key)) {
@@ -332,15 +353,14 @@ export class Container {
         context: { chain: cycle },
       })
     }
-    chain.stack.push(key)
-    chain.set.add(key)
-
-    try {
-      return await this.#resolveInner<T>(key, token, runtimeValues)
-    } finally {
-      chain.stack.pop()
-      chain.set.delete(key)
+    // On a copy: see `ResolutionChain`. What this resolution triggers sees the
+    // key above it; a sibling running at the same time does not.
+    const own: ResolutionChain = {
+      ...chain,
+      stack: [...chain.stack, key],
+      set: new Set(chain.set).add(key),
     }
+    return this.#chain.run(own, () => this.#resolveInner<T>(key, token, runtimeValues))
   }
 
   /**
@@ -364,58 +384,61 @@ export class Container {
     // its own with nobody in it.
     const chain = this.#chain.getStore()
     if (chain === undefined) {
-      return this.#chain.run({ stack: [], set: new Set(), parent: target }, () =>
+      return this.#chain.run(openChain({ parent: target }), () =>
         this.call(instance, method, runtimeValues),
       )
     }
-    const outerParent = chain.parent
-    // Declared outside the try so the call below can still read it: only the
-    // RESOLUTION is guarded, because that is what can throw with the parent
-    // installed.
-    const args: unknown[] = []
-    chain.parent = target
-    try {
-      const paramTypes: unknown[] =
-        Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
-      // `@Inject('token')` on a method parameter — a named binding the reflected
-      // type cannot express (an interface, or a class registered under a name).
-      const injectTokens = getMethodInjectTokens(target.prototype, method)
-
-      // `@Inject` counts towards the parameter span too: a method may carry named
-      // tokens without `design:paramtypes` being emitted for it, and computing the
-      // span from the reflected types alone left the loop at zero iterations —
-      // the tokens were read and then never used.
-      const injectSpan = injectTokens.size === 0 ? 0 : Math.max(...injectTokens.keys()) + 1
-      const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0, injectSpan)
-      // Sequential resolution keeps the shared cycle-detection stack consistent.
-      for (let index = 0; index < len; index += 1) {
-        // Runtime values take precedence (and fill slots beyond paramTypes).
-        if (runtimeValues && index < runtimeValues.length) {
-          args.push(runtimeValues[index])
-          continue
-        }
-        const named = injectTokens.get(index)
-        if (named !== undefined) {
-          args.push(await this.resolve(named))
-          continue
-        }
-        const type = paramTypes[index]
-        args.push(isInjectableClass(type) ? await this.resolve(type) : undefined)
-      }
-    } finally {
-      // RESTORED whatever happened. Without the `finally`, a parameter that
-      // failed to resolve left the called class installed as the parent, so a
-      // caller that caught the error saw its contextual bindings applied to
-      // every later resolution — a binding meant for one handler leaking into
-      // the whole application.
-      chain.parent = outerParent
-    }
+    // The parameters are resolved with `target` as the parent, on a copy of
+    // the chain (see `ResolutionChain`), so nothing outside them sees it: not
+    // the caller once they are resolved, whatever happened, and not a task
+    // running beside them. The method itself runs on the caller's chain.
+    const args = await this.#chain.run({ ...chain, parent: target }, () =>
+      this.#methodArgs(target, method, runtimeValues),
+    )
 
     const member: unknown = instance[method]
     if (!isCallable(member)) {
       throw new Error(`Container.call: '${method}' is not a callable method`)
     }
     return member.apply(instance, args)
+  }
+
+  /** The arguments `call()` passes to `target.prototype[method]`. */
+  async #methodArgs(
+    target: new (...args: never[]) => unknown,
+    method: string,
+    runtimeValues?: unknown[],
+  ): Promise<unknown[]> {
+    const args: unknown[] = []
+    const paramTypes: unknown[] =
+      Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
+    // `@Inject('token')` on a method parameter — a named binding the reflected
+    // type cannot express (an interface, or a class registered under a name).
+    const injectTokens = getMethodInjectTokens(target.prototype, method)
+
+    // `@Inject` counts towards the parameter span too: a method may carry named
+    // tokens without `design:paramtypes` being emitted for it, and computing the
+    // span from the reflected types alone left the loop at zero iterations —
+    // the tokens were read and then never used.
+    const injectSpan = injectTokens.size === 0 ? 0 : Math.max(...injectTokens.keys()) + 1
+    const len = Math.max(paramTypes.length, runtimeValues?.length ?? 0, injectSpan)
+    // One at a time, in parameter order: a factory with side effects runs
+    // in the order the signature reads.
+    for (let index = 0; index < len; index += 1) {
+      // Runtime values take precedence (and fill slots beyond paramTypes).
+      if (runtimeValues && index < runtimeValues.length) {
+        args.push(runtimeValues[index])
+        continue
+      }
+      const named = injectTokens.get(index)
+      if (named !== undefined) {
+        args.push(await this.resolve(named))
+        continue
+      }
+      const type = paramTypes[index]
+      args.push(isInjectableClass(type) ? await this.resolve(type) : undefined)
+    }
+    return args
   }
 
   /**
@@ -441,10 +464,7 @@ export class Container {
     fn: () => Promise<T>,
   ): Promise<T> {
     const chain = this.#chain.getStore()
-    return this.#chain.run(
-      chain === undefined ? { stack: [], set: new Set(), values } : { ...chain, values },
-      fn,
-    )
+    return this.#chain.run(chain === undefined ? openChain({ values }) : { ...chain, values }, fn)
   }
 
   /** @internal Validate a token and hand back the value the container keys on. */
@@ -464,9 +484,8 @@ export class Container {
   ): Promise<T> {
     if (parent === null) return this.make<T>(token, runtimeValues)
     const chain = this.#chain.getStore()
-    return this.#chain.run(
-      chain === undefined ? { stack: [], set: new Set(), parent } : { ...chain, parent },
-      () => this.make<T>(token, runtimeValues),
+    return this.#chain.run(chain === undefined ? openChain({ parent }) : { ...chain, parent }, () =>
+      this.make<T>(token, runtimeValues),
     )
   }
 
@@ -588,7 +607,7 @@ export class Container {
     //    resolves in (`resolveFor`: swaps, resolver values, container values).
     //    No `resolving` hooks: the value was not constructed here.
     if (store?.values?.has(key)) {
-      store.scopedReads = (store.scopedReads ?? 0) + 1
+      store.scopedReads.count += 1
       return store.values.get(key) as T
     }
 
@@ -619,7 +638,7 @@ export class Container {
         if (this.#wasPublished(key, shared)) return shared as T
       }
 
-      const readsBefore = store?.scopedReads ?? 0
+      const readsBefore = store?.scopedReads.count ?? 0
       const building = (async (): Promise<unknown> => {
         const instance = binding.factory ? await binding.factory(this) : undefined
         // Only cache while this is still the binding that started the build.
@@ -731,7 +750,7 @@ export class Container {
 
     // Same rule as the explicit bindings: see `ResolutionChain.scopedReads`.
     const store = this.#chain.getStore()
-    const readsBefore = store?.scopedReads ?? 0
+    const readsBefore = store?.scopedReads.count ?? 0
     const building = (async (): Promise<unknown> => {
       const instance = await this.#autoConstruct(target, runtimeValues)
       await this.#runResolvingHooks(key, instance)
@@ -754,16 +773,13 @@ export class Container {
     runtimeValues?: unknown[],
   ): Promise<unknown> {
     // Everything resolved inside is a dependency OF `target`, which is what a
-    // contextual binding keys on. Restored on EVERY exit — the construction has
-    // three returns and can throw — so `target`'s own parent is back in place.
-    const store = this.#chain.getStore()
-    const outerParent = store?.parent
-    if (store !== undefined) store.parent = target
-    try {
-      return await this.#constructWithDeps(target, runtimeValues)
-    } finally {
-      if (store !== undefined) store.parent = outerParent
-    }
+    // contextual binding keys on. On a copy of the chain (see
+    // `ResolutionChain`): nothing to restore on any of the construction's
+    // exits, and a construction running beside this one keeps its own parent.
+    const store = this.#chain.getStore() ?? openChain()
+    return this.#chain.run({ ...store, parent: target }, () =>
+      this.#constructWithDeps(target, runtimeValues),
+    )
   }
 
   async #constructWithDeps(
@@ -902,7 +918,7 @@ export class Container {
     readsBefore: number,
   ): void {
     if (scope !== 'singleton') return
-    if ((store?.scopedReads ?? 0) !== readsBefore) return
+    if ((store?.scopedReads.count ?? 0) !== readsBefore) return
     this.#singletons.set(key, instance)
   }
 
