@@ -233,12 +233,22 @@ export class Session {
    *
    * Shared by the constructor and {@link initiate}, so a session loaded from
    * the store lands in exactly the same state as one handed its data directly.
+   *
+   * Taking the bag out MODIFIES the session, as upstream's
+   * `this.pull(this.flashKey)` marks its store modified: commit then writes
+   * the session back without it (and the cookie store re-emits its cookie).
+   * Moved out in memory only, the bag stayed in the store and came back on
+   * every request that merely read the session — "Saved!", validation errors
+   * and flashed old input stuck to every page.
    */
   #hydrate(data: Record<string, unknown>): void {
     this.#data = { ...data }
     const flash = data[FLASH_KEY]
     this.#previousFlash = isPlainRecord(flash) ? { ...flash } : {}
-    delete this.#data[FLASH_KEY]
+    if (Object.hasOwn(this.#data, FLASH_KEY)) {
+      delete this.#data[FLASH_KEY]
+      this.#dirty = true
+    }
   }
 
   /** Current session id. Mutated by `regenerate()`. */

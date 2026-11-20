@@ -41,6 +41,16 @@ function isTrustedRedirect(
   return authority !== undefined && parsed.host === authority
 }
 
+/**
+ * A URL path that can only resolve against the current origin: leading
+ * slashes (a WHATWG parser has already turned `\` into `/`) collapse to one,
+ * so `//evil.com/x` stays the path `/evil.com/x` instead of reading as the
+ * protocol-relative URL of another host.
+ */
+export function originRelativePath(pathname: string): string {
+  return pathname.replace(/^\/+/, '/')
+}
+
 /** The query string of a path or URL, without the "?". */
 function searchOf(url: string | undefined): string {
   if (url === undefined) return ''
@@ -68,6 +78,7 @@ export class RedirectBuilder {
   #qs: Record<string, unknown> = {}
   #forwardQs = false
   #requestUrl?: string
+  #requestMethod?: string
   #requestReferer?: string
   #requestAuthority?: string
   #routeUrlResolver?: RouteUrlResolver
@@ -80,6 +91,8 @@ export class RedirectBuilder {
     options?: {
       /** The request path with its query string. */
       requestUrl?: string
+      /** The request method — `withIntendedUrl` stores GETs only. */
+      requestMethod?: string
       requestReferer?: string
       /**
        * The request authority (`:authority` or `Host`, never X-Forwarded-Host)
@@ -97,6 +110,7 @@ export class RedirectBuilder {
   ) {
     this.#response = response
     this.#requestUrl = options?.requestUrl
+    this.#requestMethod = options?.requestMethod
     this.#requestReferer = options?.requestReferer
     this.#requestAuthority = options?.requestAuthority
     this.#routeUrlResolver = options?.routeUrlResolver
@@ -111,12 +125,15 @@ export class RedirectBuilder {
    *
    * Only a GET, non-XHR, route-matched request is stored, exactly as upstream:
    * remembering a POST would replay it as a GET after login, and remembering a
-   * 404 would send the user back to a dead end.
+   * 404 would send the user back to a dead end. The method is the request's
+   * own, as upstream reads it from the request; `method` overrides it for a
+   * builder made without one.
    */
-  withIntendedUrl(method = 'GET'): this {
+  withIntendedUrl(method?: string): this {
+    const verb = method ?? this.#requestMethod ?? 'GET'
     if (
       this.#session &&
-      method.toUpperCase() === 'GET' &&
+      verb.toUpperCase() === 'GET' &&
       !this.#isAjax &&
       this.#hasRoute &&
       this.#requestUrl
@@ -228,10 +245,16 @@ export class RedirectBuilder {
    * Redirect back to the previous page (AdonisJS `back`): the path of
    * {@link getPreviousUrl}, so the redirect never leaves the site; `withQs()`
    * forwards the previous page's query string, not the current request's.
+   *
+   * NAMED DEVIATION — upstream redirects to the whole validated Referer; this
+   * keeps its path only, so even an allowed host never takes the user
+   * off-site. That path is made origin-relative ({@link originRelativePath}):
+   * written as is, a same-host Referer such as `http://app.test//evil.com/x`
+   * gave the protocol-relative `Location: //evil.com/x`, an open redirect.
    */
   back(fallback = '/'): void {
     const previous = new URL(this.getPreviousUrl(fallback), 'http://localhost')
-    this.#send(previous.pathname, previous.search.slice(1))
+    this.#send(originRelativePath(previous.pathname), previous.search.slice(1))
   }
 
   /**

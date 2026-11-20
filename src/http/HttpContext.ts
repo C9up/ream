@@ -51,9 +51,13 @@ export interface AuthState {
    * bare `{ isAuthenticated: false }` default. Methods are OPTIONAL so Ream stays
    * agnostic: a non-Warden host, or the default state, remains a valid AuthState.
    */
-  authenticate?(): Promise<void>
+  /** Resolves to the authenticated user, as upstream's `authenticate()` does. */
+  authenticate?(): Promise<NonNullable<AuthState['user']>>
   check?(): Promise<boolean>
-  authenticateUsing?(guards?: string[], options?: { loginRoute?: string }): Promise<void>
+  authenticateUsing?(
+    guards?: string[],
+    options?: { loginRoute?: string },
+  ): Promise<NonNullable<AuthState['user']>>
   getUserOrFail?(): AuthState['user']
   /**
    * Whether the authenticated user holds every permission in `permissions`,
@@ -464,14 +468,25 @@ export class HttpContext extends Macroable {
     // (the container is async now, so a constructor can't resolve them itself).
     this.locale = parseAcceptLanguage(this.request.header('accept-language')) ?? 'en'
 
-    // Wire redirect builder with request context
+    // Wire redirect builder with request context. Built on every
+    // `redirect()` call, so `ctx.session` is read then — the session
+    // middleware seats it after this context exists. Without it the
+    // intended-URL methods had no session and silently did nothing.
     this.response.setRedirectFactory(
       () =>
         new RedirectBuilder(this.response, {
           requestUrl: this.request.url(true),
+          // The wire method: the one a browser repeats when it follows the
+          // stored URL. (Reading the spoof-aware `method()` here would parse
+          // the body on every redirect, and throw for an oversized one.)
+          requestMethod: this.request.intended(),
           requestReferer: this.request.header('referer'),
           requestAuthority: this.request.authority() ?? undefined,
           routeUrlResolver: this.#routeUrlResolver,
+          session: this.session,
+          isAjax: this.request.ajax(),
+          // A context built for a request no route matched has an empty pattern.
+          hasRoute: this.route.pattern !== '',
         }),
     )
   }

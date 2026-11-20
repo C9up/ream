@@ -22,6 +22,18 @@ function isIndexable(value: unknown): value is UnknownRecord {
 }
 
 /**
+ * Segments that would walk onto a prototype instead of an own key. lodash's
+ * `baseSet` refuses them; ream refuses them on every walk — reads included,
+ * where lodash.get would hand back the prototype — so no dotted key (config,
+ * request data) can read or write `Object.prototype`.
+ */
+const RESERVED_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function hasReservedSegment(segments: string[]): boolean {
+  return segments.some((segment) => RESERVED_SEGMENTS.has(segment))
+}
+
+/**
  * Split a dot/bracket path into segments: `a.b[0].c` → `['a','b','0','c']`.
  * A single already-simple key (no `.`/`[`) is returned as-is, so keys that
  * happen to contain neither delimiter cost nothing.
@@ -44,6 +56,7 @@ function toSegments(path: string): string[] {
  */
 export function getPath(source: unknown, path: string, defaultValue?: unknown): unknown {
   const segments = toSegments(path)
+  if (hasReservedSegment(segments)) return defaultValue
   let current: unknown = source
   for (const segment of segments) {
     if (!isIndexable(current)) return defaultValue
@@ -58,6 +71,7 @@ export function getPath(source: unknown, path: string, defaultValue?: unknown): 
  */
 export function hasPath(source: unknown, path: string): boolean {
   const segments = toSegments(path)
+  if (hasReservedSegment(segments)) return false
   let current: unknown = source
   for (const segment of segments) {
     if (!isIndexable(current) || !Object.hasOwn(current, segment)) return false
@@ -74,9 +88,13 @@ export function hasPath(source: unknown, path: string): boolean {
  * NOT arrays. Config trees and request-data picks are keyed objects; ream
  * never sets array indices through a path, so array auto-vivification would be
  * dead behaviour.
+ *
+ * A path holding a `__proto__`, `constructor` or `prototype` segment is
+ * refused: the target comes back unchanged (lodash `baseSet`).
  */
 export function setPath(target: UnknownRecord, path: string, value: unknown): UnknownRecord {
   const segments = toSegments(path)
+  if (hasReservedSegment(segments)) return target
   // The last segment is the one written; everything before it is walked. Split
   // off by name rather than by index, so neither has to be read back out of
   // the array afterwards and re-checked for existence.
@@ -119,6 +137,7 @@ export function omitPaths(source: UnknownRecord, paths: string[]): UnknownRecord
   const result = structuredClone(source)
   for (const path of paths) {
     const segments = toSegments(path)
+    if (hasReservedSegment(segments)) continue
     const last = segments.pop()
     if (last === undefined) continue
     let current: unknown = result
@@ -142,6 +161,9 @@ export function mergeDeep(target: unknown, source: unknown): unknown {
   if (!isIndexable(source) || Array.isArray(source)) return source === undefined ? target : source
   const out: UnknownRecord = { ...target }
   for (const key of Object.keys(source)) {
+    // An own `__proto__` key (JSON.parse makes one) would replace `out`'s
+    // prototype through the setter; lodash.merge skips it the same way.
+    if (key === '__proto__') continue
     out[key] = mergeDeep(out[key], source[key])
   }
   return out

@@ -15,7 +15,7 @@ import { debugHttp } from '../debug.js'
 import { ReamError } from '../errors/ReamError.js'
 import { E_FORBIDDEN, E_UNAUTHORIZED, E_VALIDATION_ERROR } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
-import { holdsPermissions } from '../http/permissions.js'
+import { authenticatedByGuards, holdsPermissions } from '../http/permissions.js'
 
 export type MiddlewareFunction = (
   ctx: HttpContext,
@@ -224,8 +224,13 @@ function createGuardMiddleware(
   permissions?: string[],
 ): MiddlewareFunction {
   return async (ctx, next) => {
-    const needsAuth =
-      guards.length > 0 || (roles && roles.length > 0) || (permissions && permissions.length > 0)
+    // A guard list names who may vouch for the request: authenticated by
+    // another guard is not enough (see authenticatedByGuards). A 401 from the
+    // guards themselves propagates, with its redirect or challenge.
+    if (guards.length > 0 && !(await authenticatedByGuards(ctx.auth, guards))) {
+      throw new E_UNAUTHORIZED()
+    }
+    const needsAuth = (roles && roles.length > 0) || (permissions && permissions.length > 0)
     if (needsAuth && !ctx.auth.isAuthenticated) {
       throw new E_UNAUTHORIZED()
     }
