@@ -58,7 +58,11 @@ describe('events > checkEventsConfig', () => {
 
   it('fails the provider boot with the same error', () => {
     const provider = new EventsProvider({
-      container: { singleton() {}, resolve: async () => undefined },
+      container: {
+        singleton() {},
+        // register() refuses the option before anything is resolved.
+        resolve: <T>(): Promise<T> => Promise.reject(new Error('not resolved in this test')),
+      },
       config: { get: (key: string) => (key === 'events' ? { store: 'redis' } : undefined) },
     })
     expect(() => provider.register()).toThrow(

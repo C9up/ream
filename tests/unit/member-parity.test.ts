@@ -81,6 +81,7 @@ function silentBus(): EventBus {
     request: () => Promise.resolve(''),
     matchesWildcard: () => false,
     subscriptionCount: () => Promise.resolve(0),
+    clear: () => Promise.resolve(),
   }
 }
 

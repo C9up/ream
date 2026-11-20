@@ -105,7 +105,7 @@ describe('route .guard() gate', () => {
       )
       const ctx = makeCtx()
       ctx.auth = authFor(scenario)
-      const outcome = await chain(ctx, async () => {}).then(
+      const outcome = await Promise.resolve(chain(ctx, async () => {})).then(
         () => 'ran',
         (error: unknown) => error,
       )
