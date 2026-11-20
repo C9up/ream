@@ -485,6 +485,12 @@ th {
   font-weight: 500;
 }
 
+/* Seven columns do not fit a phone: the table scrolls, not the page. */
+.stores {
+  margin-bottom: 10px;
+  overflow-x: auto;
+}
+
 td.key {
   width: 200px;
   color: var(--muted);
@@ -562,6 +568,10 @@ tr.pick[data-active] {
   background: var(--ok);
 }
 
+.legend[data-kind="cache"]::before {
+  background: #39c5cf;
+}
+
 .span[data-kind="request"] {
   background: #3b4250;
 }
@@ -576,6 +586,10 @@ tr.pick[data-active] {
 
 .span[data-kind="event"] {
   background: var(--ok);
+}
+
+.span[data-kind="cache"] {
+  background: #39c5cf;
 }
 
 @media (max-width: 760px) {

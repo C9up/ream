@@ -40,37 +40,19 @@ export class HealthCheck {
     this.#checkers.set(name, checker)
   }
 
-  /** Run all health checks and return aggregated status. */
+  /**
+   * Run all health checks and return aggregated status.
+   *
+   * The checks run concurrently, as AdonisJS's `HealthChecks.run()` does, so N
+   * slow checks cost one timeout rather than N; results keep registration
+   * order. Each timeout timer is cleared as soon as its check settles — a
+   * timer left armed kept the process alive for `checkTimeout` after every
+   * probe and delayed a graceful shutdown.
+   */
   async check(): Promise<HealthStatus> {
-    const checks: HealthCheckResult[] = []
-
-    for (const [name, checker] of this.#checkers) {
-      const start = Date.now()
-      try {
-        const result = await Promise.race([
-          Promise.resolve(checker()),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () =>
-                reject(new Error(`Health check '${name}' timed out after ${this.#checkTimeout}ms`)),
-              this.#checkTimeout,
-            ),
-          ),
-        ])
-        // Enforce authoritative name from registration key
-        result.name = name
-        result.latency = Date.now() - start
-        checks.push(result)
-      } catch (err) {
-        checks.push({
-          name,
-          status: 'error',
-          message: err instanceof Error ? err.message : String(err),
-          latency: Date.now() - start,
-        })
-      }
-    }
-
+    const checks = await Promise.all(
+      [...this.#checkers].map(([name, checker]) => this.#runOne(name, checker)),
+    )
     const hasError = checks.some((c) => c.status === 'error')
     const hasWarn = checks.some((c) => c.status === 'warn')
 
@@ -79,6 +61,36 @@ export class HealthCheck {
       uptime: Math.floor((Date.now() - this.#startTime) / 1000),
       timestamp: new Date().toISOString(),
       checks,
+    }
+  }
+
+  async #runOne(name: string, checker: HealthChecker): Promise<HealthCheckResult> {
+    const start = Date.now()
+    let timer: NodeJS.Timeout | undefined
+    try {
+      const result = await Promise.race([
+        Promise.resolve().then(checker),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(new Error(`Health check '${name}' timed out after ${this.#checkTimeout}ms`)),
+            this.#checkTimeout,
+          )
+        }),
+      ])
+      // Enforce authoritative name from registration key
+      result.name = name
+      result.latency = Date.now() - start
+      return result
+    } catch (err) {
+      return {
+        name,
+        status: 'error',
+        message: err instanceof Error ? err.message : String(err),
+        latency: Date.now() - start,
+      }
+    } finally {
+      clearTimeout(timer)
     }
   }
 

@@ -22,9 +22,14 @@ import {
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import { isReamError, ReamError } from '../errors/ReamError.js'
 import type { HttpContext } from '../http/HttpContext.js'
-import { holdsPermissions } from '../http/permissions.js'
+import {
+  authenticatedByGuards,
+  holdsPermissions,
+  isUnauthorizedError,
+} from '../http/permissions.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
 import { composeMiddleware, runValidator } from '../middleware/Pipeline.js'
+import { safeJsonParse } from '../utils/safeJsonParse.js'
 
 export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown> | unknown
 
@@ -89,6 +94,57 @@ function internalError(detail: string, id: JsonRpcId) {
   return rpcError(-32603, currentNodeEnv() !== 'production' ? detail : 'Internal error', id)
 }
 
+/**
+ * Put an unexpected failure where the operator will find it.
+ *
+ * The caller reads -32603, with the detail withheld in production, and the
+ * call returns normally, so nothing reaches the kernel's exception handler:
+ * without this the message, the stack and the method were written nowhere,
+ * and in an application whose traffic is all JSON-RPC every unhandled error
+ * vanished. Logged through `ctx.logger`, which carries the request's
+ * correlation id, at the level an HTTP route's error gets
+ * (`ExceptionHandler.getErrorLogLevel`): `error`, or `warn` for a refusal a
+ * middleware threw with a 4xx status. Also emitted as `exception`, as the
+ * kernel does for a route.
+ *
+ * Only for what becomes -32603: a JSON-RPC-shaped error (numeric `code`) is
+ * an answer the handler chose, not a failure.
+ */
+function reportFailure(
+  ctx: HttpContext,
+  error: unknown,
+  rpcMethod: string,
+  id: JsonRpcId,
+  message: string,
+): void {
+  const status: unknown =
+    typeof error === 'object' && error !== null ? Reflect.get(error, 'status') : undefined
+  const level = typeof status === 'number' && status >= 400 && status < 500 ? 'warn' : 'error'
+  // A report that fails must not take the answer with it: the caller still
+  // gets its -32603, and the failure to log goes where the kernel sends its
+  // own handler's failures.
+  try {
+    ctx.logger[level](message, {
+      requestId: ctx.id,
+      rpcMethod,
+      rpcId: id,
+      err:
+        error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack }
+          : { message: String(error) },
+    })
+    ctx.events?.emit('exception', {
+      id: ctx.id,
+      method: ctx.request.method(),
+      path: ctx.request.url(),
+      rpcMethod,
+      error: message,
+    })
+  } catch (reportError) {
+    console.error('RPC failure report failed:', reportError)
+  }
+}
+
 /** The public method names of a controller instance type. */
 export type ControllerMethodName<T> = {
   [K in keyof T]: T[K] extends (...args: never[]) => unknown ? K : never
@@ -145,7 +201,20 @@ async function checkRpcAuthorization(
   ctx: HttpContext,
   def: RpcMethodDefinition,
 ): Promise<{ code: number; message: string } | undefined> {
-  const needsAuth = def.guards.length > 0 || def.roles.length > 0 || def.permissions.length > 0
+  // A guard list names who may vouch for the call — shared with the route and
+  // GraphQL gates. A guard's 401 is a denial here; a crash behind it is not,
+  // and propagates to the caller's error path.
+  if (def.guards.length > 0) {
+    try {
+      if (!(await authenticatedByGuards(ctx.auth, def.guards))) {
+        return { code: -32003, message: 'Unauthorized' }
+      }
+    } catch (err) {
+      if (isUnauthorizedError(err)) return { code: -32003, message: 'Unauthorized' }
+      throw err
+    }
+  }
+  const needsAuth = def.roles.length > 0 || def.permissions.length > 0
   if (needsAuth && !ctx.auth?.isAuthenticated) {
     return { code: -32003, message: 'Unauthorized' }
   }
@@ -297,7 +366,9 @@ export class RpcRouter {
     const raw = ctx.request.raw()
     let body: unknown
     try {
-      body = JSON.parse(raw)
+      // Without prototype poisoning: a `__proto__` key in a call's params
+      // would swap the prototype of whatever a handler `Object.assign`s it into.
+      body = safeJsonParse(raw)
     } catch {
       ctx.response.status(200).json(rpcError(-32700, 'Parse error', null))
       return
@@ -396,10 +467,9 @@ export class RpcRouter {
       if (def.validator) {
         const token = `validator:${def.validator}`
         if (!this.#container?.has(token)) {
-          return internalError(
-            `Validator '${def.validator}' is not registered (bind container.singleton('${token}', () => schema)).`,
-            id,
-          )
+          const detail = `Validator '${def.validator}' is not registered (bind container.singleton('${token}', () => schema)).`
+          reportFailure(ctx, new Error(detail), method, id, detail)
+          return internalError(detail, id)
         }
         const validator = await this.#container.resolve<RuntimeValidator>(token)
         // `runValidator` picks the async result form first — the synchronous
@@ -412,12 +482,11 @@ export class RpcRouter {
           // Caught here rather than below so a validator's error is never
           // honoured as a domain error: a rule hitting the database throws
           // whatever the driver throws.
-          return internalError(
-            isReamError(err, 'E_VALIDATOR_UNUSABLE')
-              ? `Validator '${def.validator}' exposes no usable validate method.`
-              : `Validator '${def.validator}' failed: ${err instanceof Error ? err.message : String(err)}`,
-            id,
-          )
+          const detail = isReamError(err, 'E_VALIDATOR_UNUSABLE')
+            ? `Validator '${def.validator}' exposes no usable validate method.`
+            : `Validator '${def.validator}' failed: ${err instanceof Error ? err.message : String(err)}`
+          reportFailure(ctx, err, method, id, detail)
+          return internalError(detail, id)
         }
         if (!outcome.valid) return rpcError(-32602, 'Invalid params', id, outcome.errors)
         effectiveParams = outcome.data ?? params
@@ -433,7 +502,9 @@ export class RpcRouter {
         const message = typeof err.message === 'string' ? err.message : 'RPC error'
         return rpcError(err.code, message, id, err.data)
       }
-      return internalError(err instanceof Error ? err.message : 'Internal error', id)
+      const detail = err instanceof Error ? err.message : 'Internal error'
+      reportFailure(ctx, err, method, id, detail)
+      return internalError(detail, id)
     }
   }
 

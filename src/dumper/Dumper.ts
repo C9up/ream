@@ -2,7 +2,7 @@
  * Value dumping — AdonisJS's `Dumper`, in shape and in method names.
  *
  *   import { dd } from '@c9up/ream/services/dumper'
- *   dd(user)                     // prints and stops the process
+ *   dd(user)                     // dumps and stops this request or command
  *
  *   import dumper from '@c9up/ream/services/dumper'
  *   response.send(dumper.dumpToHtml(user, { cspNonce: response.nonce }))
@@ -16,6 +16,9 @@
 
 import { inspect } from 'node:util'
 import { escapeHTML } from '../helpers/string.js'
+import * as errors from './errors.js'
+
+export { errors }
 
 /** Where a dump was written, so the output can say so. */
 export interface DumpSource {
@@ -125,15 +128,18 @@ export class Dumper {
   }
 
   /**
-   * Dump and die — print to stderr and stop the process.
+   * Dump and die — AdonisJS's `dd`: throws `E_DUMP_DIE_EXCEPTION`, which
+   * stops the current request or command, never the process. During a request
+   * the exception answers with a 500 HTML dump (CSP nonce included); in a
+   * command it prints the ANSI dump and the command fails; the reporter skips
+   * it either way.
    *
    * `traceSourceIndex` selects which stack frame to report as the dump site:
    * 1 is the caller of `dd`, which is right when `dd` is called directly, and
    * a wrapper passes 2.
    */
-  dd(value: unknown, traceSourceIndex = 1): void {
-    process.stderr.write(`${this.dumpToAnsi(value, { source: callSite(traceSourceIndex) })}\n`)
-    process.exit(1)
+  dd(value: unknown, traceSourceIndex = 1): never {
+    throw new errors.E_DUMP_DIE_EXCEPTION(value, this).setTraceSourceIndex(traceSourceIndex)
   }
 }
 
@@ -143,22 +149,4 @@ function header(options?: { title?: string; source?: DumpSource }): string {
   if (options?.title) parts.push(options.title)
   if (options?.source) parts.push(`${options.source.location}:${options.source.line}`)
   return parts.join(' — ')
-}
-
-/**
- * Where `dd` was called, read from a thrown stack.
- *
- * Best-effort: a bundled or minified frame may not parse, and a dump that
- * cannot name its own line is still a useful dump — so a miss returns nothing
- * rather than throwing on the debugging path.
- */
-function callSite(index: number): DumpSource | undefined {
-  const frames = new Error().stack?.split('\n').slice(1)
-  const frame = frames?.[index]
-  if (!frame) return undefined
-  const match = /\(?(.+):(\d+):\d+\)?$/.exec(frame.trim())
-  const location = match?.[1]
-  const line = match?.[2]
-  if (!location || !line) return undefined
-  return { location, line: Number(line) }
 }

@@ -13,8 +13,8 @@
  * undiscoverable helpers is a prompt nobody uses.
  */
 
-import type { REPLServer } from 'node:repl'
-import { start as startNodeRepl } from 'node:repl'
+import type { REPLEval, REPLServer, ReplOptions } from 'node:repl'
+import { Recoverable, start as startNodeRepl } from 'node:repl'
 
 /** What a registered helper receives — the repl itself, then its arguments. */
 export type MethodCallback = (repl: Repl, ...args: unknown[]) => unknown
@@ -37,6 +37,30 @@ export interface Compiler {
   supportsTypescript: boolean
 }
 
+/**
+ * How the repl is built — AdonisJS's `ReplOptions`: `node:repl`'s own options
+ * (`input`, `output`, `terminal`, `writer`…) pass straight through.
+ */
+export interface ReplConstructorOptions extends Omit<ReplOptions, 'eval'> {
+  /** Where `notify()` writes. Defaults to stdout. */
+  write?: (message: string) => void
+  /** Compile code typed at the prompt; the same as calling {@link Repl.useCompiler}. */
+  compiler?: Compiler
+  /** Persist the prompt's history to this file across sessions. */
+  historyFilePath?: string
+}
+
+/**
+ * The parse errors that mean "the statement is not finished yet", so the
+ * prompt keeps reading lines instead of reporting it — upstream's test.
+ */
+function isRecoverableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^(Unexpected end of input|Unexpected token|' expected)/.test(error.message)
+  )
+}
+
 interface RegisteredMethod {
   handler: MethodCallback
   options: MethodOptions & { width: number }
@@ -47,13 +71,17 @@ export class Repl {
   readonly #readyCallbacks: Array<(repl: Repl) => void> = []
   #compiler: Compiler | undefined
   #server: REPLServer | undefined
-  readonly #prompt: string
+  readonly #historyFilePath: string | undefined
+  readonly #replOptions: Omit<ReplOptions, 'eval'>
   readonly #write: (message: string) => void
 
-  constructor(options: { prompt?: string; write?: (message: string) => void } = {}) {
-    this.#prompt = options.prompt ?? '> '
+  constructor(options: ReplConstructorOptions = {}) {
+    const { write, compiler, historyFilePath, ...replOptions } = options
+    this.#compiler = compiler
+    this.#historyFilePath = historyFilePath
+    this.#replOptions = replOptions
     this.#write =
-      options.write ??
+      write ??
       ((message) => {
         process.stdout.write(message)
       })
@@ -134,8 +162,17 @@ export class Repl {
    * finds missing.
    */
   start(context: Record<string, unknown> = {}): this {
-    const server = startNodeRepl({ prompt: this.#prompt, useGlobal: false })
+    const server = startNodeRepl({ prompt: '> ', useGlobal: false, ...this.#replOptions })
     this.#server = server
+    this.#setupHistory(server)
+    // Typed code goes through the compiler, then through node's own evaluator.
+    // `node:repl` reads `this.eval` per line; the typings mark it read-only, so
+    // it is redefined rather than assigned (upstream assigns it).
+    Object.defineProperty(server, 'eval', {
+      value: this.#compilingEval(server, server.eval),
+      configurable: true,
+      writable: true,
+    })
 
     for (const [key, value] of Object.entries(context)) {
       Object.defineProperty(server.context, key, { value, configurable: true, enumerable: true })
@@ -158,5 +195,44 @@ export class Repl {
 
     for (const callback of this.#readyCallbacks) callback(this)
     return this
+  }
+
+  /**
+   * Wrap `node:repl`'s evaluator so the compiler sees the code first. The
+   * compiler is read at each line, so `useCompiler()` after `start()` applies.
+   * A compile error that only means "statement not finished" is handed back
+   * as `Recoverable`, which keeps multi-line input working.
+   */
+  #compilingEval(server: REPLServer, evaluate: REPLEval): REPLEval {
+    return (code, context, fileName, callback) => {
+      let compiled: string
+      try {
+        compiled = this.#compiler ? this.#compiler.compile(code, fileName) : code
+      } catch (error) {
+        if (isRecoverableError(error)) {
+          callback(new Recoverable(error instanceof Error ? error : new Error(String(error))), null)
+          return
+        }
+        callback(error instanceof Error ? error : new Error(String(error)), null)
+        return
+      }
+      // The original evaluator expects the server as `this`.
+      evaluate.call(server, compiled, context, fileName, callback)
+    }
+  }
+
+  /**
+   * Persist the history to `historyFilePath`, when one was given.
+   *
+   * DEVIATION (named): upstream exits the process when the history file cannot
+   * be written. Here the session goes on without history and says why — a
+   * read-only home directory is no reason to refuse a prompt.
+   */
+  #setupHistory(server: REPLServer): void {
+    if (!this.#historyFilePath) return
+    const path = this.#historyFilePath
+    server.setupHistory(path, (error) => {
+      if (error) this.notify(`Unable to use the history file ${path}: ${error.message}`)
+    })
   }
 }

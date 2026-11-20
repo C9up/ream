@@ -31,10 +31,24 @@ export interface EnvValidationNode {
   overwrite?: boolean
 }
 
+/** Options of {@link Codemods.addEnvVars}. */
+export interface EnvVarsOptions {
+  /**
+   * Keys written EMPTY (`KEY=`) to `.env.example`, so a secret's development
+   * value never lands in the committed file (AdonisJS `omitFromExample`).
+   */
+  omitFromExample?: string[]
+  /**
+   * Replace the line of a key the file already has, in place. Defaults to the
+   * codemods' `force` flag, so a value the user set survives a re-run.
+   */
+  overwrite?: boolean
+}
+
 export interface Codemods {
   addProvider(importPath: string): Promise<void>
   addMetaFile(pattern: string, reloadServer?: boolean): Promise<void>
-  addEnvVars(vars: Record<string, string>): Promise<void>
+  addEnvVars(vars: Record<string, string>, options?: EnvVarsOptions): Promise<void>
   writeFile(filePath: string, content: string, options?: { force?: boolean }): Promise<void>
   makeUsingStub(
     stubsRoot: string,
@@ -420,22 +434,60 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       fs.writeFileSync(rcPath, content)
     },
 
-    async addEnvVars(vars: Record<string, string>): Promise<void> {
-      const envPath = path.join(root, '.env')
-      // A symlinked .env must not redirect the write outside the root.
-      assertCanonicallyInside(root, envPath, '.env')
-      let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
-      let added = 0
-
+    /**
+     * Add variables to `.env` and, when the project has one, `.env.example`
+     * (AdonisJS `defineEnvVariables`). `.env` is created when missing; the
+     * example file is only ever edited, never created.
+     *
+     * DEVIATION (named): upstream replaces a key's existing line every time.
+     * Here that takes `overwrite` (or the `--force` the codemods were built
+     * with): a configure hook re-run after an upgrade must not reset the
+     * values the user put in their own `.env`.
+     */
+    async addEnvVars(vars: Record<string, string>, options: EnvVarsOptions = {}): Promise<void> {
+      // Validated before anything is written: a line break in a value (or a
+      // key) would inject a variable line of the caller's choosing.
       for (const [key, value] of Object.entries(vars)) {
-        const pattern = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`, 'm')
-        if (!pattern.test(content)) {
-          content += `${key}=${value}\n`
-          added++
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+          throw new Error(`[configure] "${key}" is not a valid environment variable name`)
+        }
+        if (/[\r\n]/.test(value)) {
+          throw new Error(`[configure] The value of ${key} contains a line break`)
         }
       }
+      const overwrite = options.overwrite ?? force
+      const omitted = new Set(options.omitFromExample ?? [])
 
-      if (added > 0) fs.writeFileSync(envPath, content)
+      const files = [
+        { name: '.env', create: true, example: false },
+        { name: '.env.example', create: false, example: true },
+      ]
+      for (const file of files) {
+        const filePath = path.join(root, file.name)
+        // A symlinked env file must not redirect the write outside the root.
+        assertCanonicallyInside(root, filePath, file.name)
+        const exists = fs.existsSync(filePath)
+        if (!exists && !file.create) continue
+        const original = exists ? fs.readFileSync(filePath, 'utf8') : ''
+        const lines = original === '' ? [] : original.replace(/\r?\n$/, '').split(/\r?\n/)
+        let changed = false
+
+        for (const [key, value] of Object.entries(vars)) {
+          const line = file.example && omitted.has(key) ? `${key}=` : `${key}=${value}`
+          const index = lines.findIndex((existing) => existing.startsWith(`${key}=`))
+          if (index === -1) {
+            lines.push(line)
+            changed = true
+          } else if (overwrite && lines[index] !== line) {
+            lines[index] = line
+            changed = true
+          }
+        }
+
+        // The file's own line ending is kept: a CRLF `.env` stays CRLF.
+        const eol = original.includes('\r\n') ? '\r\n' : '\n'
+        if (changed) fs.writeFileSync(filePath, `${lines.join(eol)}${eol}`)
+      }
     },
 
     async writeFile(filePath: string, content: string, opts?: { force?: boolean }): Promise<void> {

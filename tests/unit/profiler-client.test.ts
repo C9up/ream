@@ -5,6 +5,8 @@ import { Emitter } from '../../src/events/Emitter.js'
 import { EventBus } from '../../src/events/native.js'
 import { TOOLBAR_CSS, TOOLBAR_JS } from '../../src/profiler/client.generated.js'
 import {
+  type CacheBag,
+  cacheCollector,
   databaseCollector,
   type EventBag,
   eventsCollector,
@@ -61,6 +63,10 @@ describe('profiler > the browser client', () => {
 
   it('keeps the page clear of the bar, and remembers its state', () => {
     expect(TOOLBAR_JS).toContain('paddingBottom')
+    // A page whose shell is the viewport is not padded (it would scroll the
+    // document), and the bar's height is exposed for such a shell to use.
+    expect(TOOLBAR_JS).toContain('scroller.scrollHeight > window.innerHeight')
+    expect(TOOLBAR_JS).toContain("'--ream-toolbar-height'")
     expect(TOOLBAR_JS).toContain('localStorage')
   })
 
@@ -78,6 +84,7 @@ describe('profiler > what the panels record', () => {
       databaseCollector(events, () => profiler.current<QueryBag>('database')),
       logCollector(events, () => profiler.current<LogBag>('logs')),
       eventsCollector(events, () => profiler.current<EventBag>('events')),
+      cacheCollector(events, () => profiler.current<CacheBag>('cache')),
     ]
     profiler = new Profiler(collectors, new MemoryProfileStore(collectors))
     return profiler
@@ -133,25 +140,179 @@ describe('profiler > what the panels record', () => {
     const { token } = await profiler.profile(
       { method: 'GET', url: '/' },
       async () => {
-        events.emit('cache:hit', { key: 'user:1', password: 'hunter2' })
+        events.emit('order.created', { id: 7, password: 'hunter2' })
+        events.emit('cache:hit', { key: 'user:1', value: 1, store: 'memory' })
         events.emit('db:query', { sql: 'select 1', bindings: [], duration: 1 })
         events.emit('log:line', { level: 'info', message: 'x' })
       },
       () => ({ status: 200 }),
     )
-    events.emit('cache:miss', { key: 'outside any request' })
+    events.emit('order.created', { id: 'outside any request' })
     const panel = profiler.store.find(token)?.data.events
     expect(panel?.total).toBe(1)
     expect(panel?.events).toMatchObject([
-      { name: 'cache:hit', data: { key: 'user:1', password: REDACTED } },
+      { name: 'order.created', data: { id: 7, password: REDACTED } },
     ])
+  })
+
+  it('counts every cache operation by kind and by store, timed from when it started', async () => {
+    const events = new FakeEvents()
+    const profiler = profilerWith(events)
+    const { token } = await profiler.profile(
+      { method: 'GET', url: '/' },
+      async () => {
+        events.emit('cache:miss', { key: 'user:1', store: 'redis', duration: 4 })
+        events.emit('cache:written', {
+          key: 'user:1',
+          value: { name: 'Ada' },
+          store: 'redis',
+          ttl: 300,
+          duration: 1.5,
+        })
+        events.emit('cache:hit', {
+          key: 'user:1',
+          value: { name: 'Ada' },
+          store: 'redis',
+          graced: false,
+          duration: 0.5,
+        })
+        events.emit('cache:hit', {
+          key: 'stats',
+          value: 42,
+          store: 'memory',
+          graced: true,
+          duration: 0.25,
+        })
+        events.emit('cache:written', {
+          key: 'flags',
+          value: [],
+          store: 'memory',
+          ttl: null,
+          duration: 0.25,
+        })
+        events.emit('cache:deleted', { key: 'user:1', store: 'redis', duration: 1 })
+        events.emit('cache:expire', { key: 'stats', store: 'memory', duration: 0.5 })
+        events.emit('cache:cleared', { store: 'memory', duration: 2 })
+      },
+      () => ({ status: 200 }),
+    )
+    events.emit('cache:miss', { key: 'outside any request', store: 'redis', duration: 1 })
+    const cache = profiler.store.find(token)?.data.cache
+    expect(cache).toMatchObject({
+      total: 8,
+      duration: 10,
+      timed: true,
+      hits: 2,
+      graced: 1,
+      misses: 1,
+      writes: 2,
+      deletes: 1,
+      clears: 1,
+      expirations: 1,
+      capped: false,
+      stores: [
+        { name: 'redis', total: 4, hits: 1, misses: 1, writes: 1, deletes: 1, duration: 7 },
+        { name: 'memory', total: 4, hits: 1, misses: 0, writes: 1, deletes: 0, duration: 3 },
+      ],
+    })
+    expect(cache?.operations).toMatchObject([
+      { operation: 'miss', key: 'user:1', store: 'redis', duration: 4 },
+      { operation: 'written', key: 'user:1', ttl: 300, value: { name: 'Ada' } },
+      { operation: 'hit', key: 'user:1', value: { name: 'Ada' } },
+      { operation: 'hit', key: 'stats', graced: true, value: 42 },
+      { operation: 'written', key: 'flags', ttl: null },
+      { operation: 'deleted', key: 'user:1' },
+      { operation: 'expire', key: 'stats' },
+      { operation: 'cleared', store: 'memory', duration: 2 },
+    ])
+    expect(profiler.collectors.find((c) => c.name === 'cache')?.badge?.(cache ?? {})).toBe(
+      '8 cache operations · 10 ms',
+    )
+  })
+
+  it('places an operation on the timeline where it started, not where it was reported', async () => {
+    const events = new FakeEvents()
+    const profiler = profilerWith(events)
+    const { token } = await profiler.profile(
+      { method: 'GET', url: '/' },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        // Both reported now; the first took 15 ms, so it began 15 ms earlier.
+        events.emit('cache:miss', { key: 'slow', store: 'memory', duration: 15 })
+        events.emit('cache:hit', { key: 'quick', store: 'memory', duration: 0 })
+      },
+      () => ({ status: 200 }),
+    )
+    const operations = profiler.store.find(token)?.data.cache?.operations
+    const [slow, quick] = Array.isArray(operations) ? operations : []
+    const gap = Number(quick?.at) - Number(slow?.at)
+    expect(gap).toBeGreaterThanOrEqual(14.5)
+    expect(gap).toBeLessThan(16)
+  })
+
+  it('hides a value cached under a key that names a secret, and secret fields of any value', async () => {
+    const events = new FakeEvents()
+    const profiler = profilerWith(events)
+    const { token } = await profiler.profile(
+      { method: 'GET', url: '/' },
+      async () => {
+        events.emit('cache:written', {
+          key: 'oauth:token:42',
+          value: 'ya29.secret',
+          store: 'redis',
+        })
+        events.emit('cache:hit', {
+          key: 'user:42',
+          value: { id: 42, password: 'hunter2' },
+          store: 'redis',
+        })
+      },
+      () => ({ status: 200 }),
+    )
+    expect(profiler.store.find(token)?.data.cache?.operations).toMatchObject([
+      { key: 'oauth:token:42', value: REDACTED },
+      { key: 'user:42', value: { id: 42, password: REDACTED } },
+    ])
+  })
+
+  it('keeps counting past the listing cap, and still lists a cache that reports no time', async () => {
+    const events = new FakeEvents()
+    const profiler = profilerWith(events)
+    const { token } = await profiler.profile(
+      { method: 'GET', url: '/' },
+      async () => {
+        for (let n = 0; n < 350; n += 1) events.emit('cache:hit', { key: `k${n}`, store: 'memory' })
+      },
+      () => ({ status: 200 }),
+    )
+    const cache = profiler.store.find(token)?.data.cache
+    expect(cache).toMatchObject({ total: 350, hits: 350, timed: false, capped: true })
+    expect(Array.isArray(cache?.operations) ? cache.operations.length : 0).toBe(300)
+    expect(profiler.collectors.find((c) => c.name === 'cache')?.badge?.(cache ?? {})).toBe(
+      '350 cache operations',
+    )
+  })
+
+  it('gives a request that never touched the cache no cache panel', async () => {
+    const events = new FakeEvents()
+    const profiler = profilerWith(events)
+    const { token } = await profiler.profile(
+      { method: 'GET', url: '/' },
+      async () => {
+        events.emit('order.created', { id: 1 })
+      },
+      () => ({ status: 200 }),
+    )
+    expect(profiler.store.find(token)?.data.cache).toEqual({})
   })
 
   it('wires the events panel when the emitter can be tapped, and only then', () => {
     const tapped = createProfiler(new FakeEvents())
     expect(tapped.collectors.map((c) => c.name)).toContain('events')
+    expect(tapped.collectors.map((c) => c.name)).toContain('cache')
     const plain = createProfiler({ on: () => undefined })
     expect(plain.collectors.map((c) => c.name)).not.toContain('events')
+    expect(plain.collectors.map((c) => c.name)).not.toContain('cache')
     expect(plain.collectors.map((c) => c.name)).toContain('app')
   })
 })

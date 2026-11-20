@@ -14,8 +14,12 @@
  * exist before anything boots it.
  */
 
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { Repl } from '../repl/Repl.js'
 
-const repl = new Repl()
+// The history survives between sessions, in the home directory as AdonisJS
+// keeps its own.
+const repl = new Repl({ historyFilePath: join(homedir(), '.ream_repl_history') })
 
 export default repl

@@ -8,6 +8,8 @@
 
 import {
   appCollector,
+  type CacheBag,
+  cacheCollector,
   databaseCollector,
   type EventBag,
   type EventTapSource,
@@ -38,7 +40,8 @@ export * from './types.js'
  *
  * `events` is the application's emitter. The database panel comes from
  * `db:query` on it, which is how a data layer reports a statement without the
- * profiler importing one; the events panel from its `tap`, when it has one.
+ * profiler importing one; the events and cache panels from its `tap`, when it
+ * has one.
  */
 export function createProfiler(
   events: QueryEventSource & Partial<EventTapSource>,
@@ -58,6 +61,9 @@ export function createProfiler(
       ? [
           eventsCollector({ tap: events.tap.bind(events) }, () =>
             profiler.current<EventBag>('events'),
+          ),
+          cacheCollector({ tap: events.tap.bind(events) }, () =>
+            profiler.current<CacheBag>('cache'),
           ),
         ]
       : []),

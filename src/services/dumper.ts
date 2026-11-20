@@ -23,8 +23,8 @@ const dumper = new Dumper()
  * so the caller of `dd` is one further out. Without it, every dump would
  * report this file as its source.
  */
-export const dd = (value: unknown): void => {
-  dumper.dd(value, 2)
+export const dd = (value: unknown): never => {
+  return dumper.dd(value, 2)
 }
 
 export default dumper

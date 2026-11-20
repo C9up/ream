@@ -42,6 +42,7 @@
       levels: {},
       logText: '',
       eventText: '',
+      cacheText: '',
     },
   }
   window.__reamProfiler = { state }
@@ -275,9 +276,58 @@
   }
 
   function cacheOf(profile) {
-    const ops = eventsOf(profile).filter((event) => event.name.startsWith('cache:'))
-    const count = (suffix) => ops.filter((event) => event.name === `cache:${suffix}`).length
-    return { ops, hits: count('hit'), misses: count('miss'), writes: count('written') }
+    const panel = panelOf(profile, 'cache')
+    const number = (name) => Number(panel[name]) || 0
+    const hits = number('hits')
+    const misses = number('misses')
+    return {
+      total: number('total'),
+      duration: number('duration'),
+      timed: panel.timed === true,
+      hits,
+      graced: number('graced'),
+      misses,
+      reads: hits + misses,
+      writes: number('writes'),
+      deletes: number('deletes'),
+      clears: number('clears'),
+      expirations: number('expirations'),
+      stores: Array.isArray(panel.stores) ? panel.stores : [],
+      operations: Array.isArray(panel.operations) ? panel.operations : [],
+      capped: panel.capped === true,
+    }
+  }
+
+  function counted(n, one, many) {
+    return `${n} ${n === 1 ? one : many}`
+  }
+
+  function hitRate(cache) {
+    return cache.reads > 0
+      ? `${cache.hits} / ${cache.reads} (${Math.round((cache.hits / cache.reads) * 100)}%)`
+      : 'no reads'
+  }
+
+  /** An operation's name as the panel says it: a graced hit is not a plain one. */
+  function cacheVerb(operation) {
+    if (operation.operation === 'hit') return operation.graced ? 'graced hit' : 'hit'
+    return operation.operation
+  }
+
+  function cacheTone(operation) {
+    if (operation.operation === 'hit') return operation.graced ? 'warn' : 'ok'
+    if (operation.operation === 'miss') return 'bad'
+    return ''
+  }
+
+  function ttlText(ttl) {
+    if (ttl === null) return 'forever'
+    if (typeof ttl !== 'number') return ''
+    if (ttl < 0) return 'expired'
+    if (ttl < 120) return `${ttl} s`
+    if (ttl < 7200) return `${Math.round(ttl / 60)} min`
+    if (ttl < 172800) return `${Math.round(ttl / 3600)} h`
+    return `${Math.round(ttl / 86400)} d`
   }
 
   function mailsOf(profile) {
@@ -328,8 +378,12 @@
 
   // ── Keeping the page visible ────────────────────────────
 
-  // The page keeps its own bottom padding; the bar adds its height to it, so
-  // nothing at the bottom of the page ends up underneath.
+  // A page that scrolls in the document keeps its own bottom padding plus the
+  // bar's height, so nothing at its bottom ends up underneath. A page whose
+  // shell is exactly the viewport (h-screen, an inner element scrolling) has
+  // nothing below to uncover: padding it only made the document scroll, a
+  // second scrollbar beside the shell's. Such a shell reads the bar's height
+  // from `--ream-toolbar-height` on <html> if it wants to leave room for it.
   let originalPadding = null
   function offsetPage() {
     if (!document.body) return
@@ -337,8 +391,15 @@
       originalPadding = Number.parseFloat(getComputedStyle(document.body).paddingBottom) || 0
     }
     const covered = state.closed ? 0 : shell.getBoundingClientRect().height
-    document.body.style.paddingBottom = covered > 0 ? `${originalPadding + covered}px` : ''
+    document.documentElement.style.setProperty('--ream-toolbar-height', `${covered}px`)
+    // Measured as the page is authored, without the bar's padding.
+    document.body.style.paddingBottom = ''
+    const scroller = document.scrollingElement || document.documentElement
+    const pageScrolls = scroller.scrollHeight > window.innerHeight
+    document.body.style.paddingBottom =
+      covered > 0 && pageScrolls ? `${originalPadding + covered}px` : ''
   }
+  window.addEventListener('resize', () => offsetPage())
 
   // ── Resizing ────────────────────────────────────────────
 
@@ -518,23 +579,30 @@
     }
 
     const cache = cacheOf(profile)
-    if (cache.ops.length > 0) {
-      const reads = cache.hits + cache.misses
+    if (cache.total > 0) {
       items.push(
         item({
           tab: 'cache',
           label: 'cache',
-          value: String(cache.ops.length),
+          value: cache.timed ? `${cache.total} · ${ms(cache.duration)}` : String(cache.total),
           info: [
-            row('Operations', cache.ops.length),
-            row(
-              'Hits',
-              reads > 0
-                ? `${cache.hits} / ${reads} (${Math.round((cache.hits / reads) * 100)}%)`
-                : 0,
-            ),
+            row('Operations', cache.total),
+            row('Hits', hitRate(cache)),
+            row('Graced hits', cache.graced || ''),
             row('Misses', cache.misses),
             row('Writes', cache.writes),
+            row('Deletes', cache.deletes || ''),
+            row('Clears', cache.clears || ''),
+            row('Expirations', cache.expirations || ''),
+            row('Total time', cache.timed ? ms(cache.duration) : ''),
+            cache.stores.length > 1
+              ? cache.stores.map((store) =>
+                  row(
+                    `Store ${store.name}`,
+                    `${store.total} · ${store.hits}/${store.hits + store.misses} hits${cache.timed ? ` · ${ms(store.duration)}` : ''}`,
+                  ),
+                )
+              : null,
           ],
         }),
       )
@@ -639,7 +707,7 @@
     { name: 'logs', label: 'Logs', count: (p) => logsOf(p).total, tone: (p) => logTone(p) },
     { name: 'events', label: 'Events', count: (p) => eventsOf(p).length },
     { name: 'timeline', label: 'Timeline' },
-    { name: 'cache', label: 'Cache', count: (p) => cacheOf(p).ops.length, hideEmpty: true },
+    { name: 'cache', label: 'Cache', count: (p) => cacheOf(p).total, hideEmpty: true },
     { name: 'mail', label: 'Mail', count: (p) => mailsOf(p).length, hideEmpty: true },
     {
       name: 'exception',
@@ -1066,12 +1134,20 @@
       for (const event of eventsOf(profile)) {
         lanes.push({ kind: 'event', name: event.name, at: event.at, duration: 0 })
       }
+      for (const operation of cacheOf(profile).operations) {
+        lanes.push({
+          kind: 'cache',
+          name: `cache ${cacheVerb(operation)}${operation.key ? ` ${operation.key}` : ''}`,
+          at: operation.at,
+          duration: Number(operation.duration) || 0,
+        })
+      }
       lanes.sort((a, b) => a.at - b.at || (a.kind === 'request' ? -1 : 1))
       return [
         h(
           'div',
           { class: 'toolbar' },
-          ['request', 'query', 'log', 'event'].map((kind) =>
+          ['request', 'query', 'log', 'event', 'cache'].map((kind) =>
             h('span', { class: 'chip legend', dataset: { kind }, text: kind }),
           ),
           h('span', { text: `total ${ms(total)}` }),
@@ -1105,33 +1181,158 @@
 
     cache(profile) {
       const cache = cacheOf(profile)
+      const f = state.filters
+      if (cache.total === 0)
+        return h('div', { class: 'empty', text: 'The cache was not used during this request.' })
+      const needle = f.cacheText.toLowerCase()
+      const shown = needle
+        ? cache.operations.filter((operation) =>
+            `${operation.key || ''} ${operation.store}`.toLowerCase().includes(needle),
+          )
+        : cache.operations
+      const longest = shown.reduce(
+        (max, operation) => Math.max(max, Number(operation.duration) || 0),
+        0,
+      )
       return [
         h(
           'div',
           { class: 'toolbar' },
           h('span', {
-            text: `${cache.hits} hits · ${cache.misses} misses · ${cache.writes} writes`,
+            class: 'chip',
+            dataset: { tone: 'ok' },
+            text: counted(cache.hits, 'hit', 'hits'),
           }),
-        ),
-        h(
-          'table',
-          null,
-          h(
-            'tr',
-            null,
-            h('th', { text: 'At' }),
-            h('th', { text: 'Operation' }),
-            h('th', { text: 'Key' }),
-            h('th', { text: 'Store' }),
+          cache.graced
+            ? h('span', {
+                class: 'chip',
+                dataset: { tone: 'warn' },
+                text: `${cache.graced} graced`,
+              })
+            : null,
+          h('span', {
+            class: 'chip',
+            dataset: { tone: 'bad' },
+            text: counted(cache.misses, 'miss', 'misses'),
+          }),
+          h('span', { class: 'chip', text: counted(cache.writes, 'write', 'writes') }),
+          h('span', { class: 'chip', text: counted(cache.deletes, 'delete', 'deletes') }),
+          cache.clears
+            ? h('span', { class: 'chip', text: counted(cache.clears, 'clear', 'clears') })
+            : null,
+          cache.expirations
+            ? h('span', {
+                class: 'chip',
+                text: counted(cache.expirations, 'expiration', 'expirations'),
+              })
+            : null,
+          h('span', {
+            text: `hit rate ${hitRate(cache)}${cache.timed ? ` · ${ms(cache.duration)}` : ''}`,
+          }),
+          searchBox(
+            f.cacheText,
+            (value) => {
+              f.cacheText = value
+            },
+            'Filter by key or store',
           ),
-          cache.ops.map((op) =>
+        ),
+        cache.stores.length > 1
+          ? h(
+              'div',
+              { class: 'stores' },
+              h(
+                'table',
+                null,
+                h(
+                  'tr',
+                  null,
+                  ['Store', 'Operations', 'Hits', 'Misses', 'Writes', 'Deletes', 'Time'].map(
+                    (label) => h('th', { text: label }),
+                  ),
+                ),
+                cache.stores.map((store) =>
+                  h(
+                    'tr',
+                    null,
+                    h('td', { class: 'mono', text: store.name }),
+                    [store.total, store.hits, store.misses, store.writes, store.deletes].map(
+                      (value) => h('td', { text: String(value) }),
+                    ),
+                    h('td', { class: 'meta', text: cache.timed ? ms(store.duration) : '' }),
+                  ),
+                ),
+              ),
+            )
+          : null,
+        cache.capped
+          ? h('div', {
+              class: 'meta',
+              text: `Listing the first ${cache.operations.length} of ${cache.total} operations; the counts include every one.`,
+            })
+          : null,
+        h(
+          'div',
+          { class: 'list' },
+          shown.map((operation) =>
             h(
-              'tr',
-              null,
-              h('td', { class: 'meta', text: `+${ms(op.at)}` }),
-              h('td', { text: op.name.slice('cache:'.length) }),
-              h('td', { class: 'mono', text: op.data?.key ?? '' }),
-              h('td', { class: 'meta', text: op.data?.store ?? '' }),
+              'div',
+              {
+                class: 'entry',
+                dataset: { tone: operation.graced ? 'warn' : '' },
+                onclick: (event) => {
+                  if (getSelection()?.type === 'Range') return
+                  event.currentTarget.toggleAttribute('data-expanded')
+                },
+              },
+              h(
+                'div',
+                { class: 'num' },
+                operation.duration === undefined ? `+${ms(operation.at)}` : ms(operation.duration),
+                operation.duration === undefined
+                  ? null
+                  : h('div', {
+                      class: 'meter',
+                      style: `width:${Math.max(4, longest > 0 ? (operation.duration / longest) * 100 : 0)}%`,
+                    }),
+              ),
+              h(
+                'div',
+                null,
+                h('span', {
+                  class: 'chip',
+                  dataset: { tone: cacheTone(operation) },
+                  text: cacheVerb(operation),
+                }),
+                ' ',
+                h('span', { class: 'mono', text: operation.key ?? '(whole store)' }),
+              ),
+              h(
+                'div',
+                null,
+                operation.ttl !== undefined
+                  ? [h('span', { class: 'chip', text: `ttl ${ttlText(operation.ttl)}` }), ' ']
+                  : null,
+                h('span', { class: 'chip', text: operation.store }),
+              ),
+              h(
+                'div',
+                { class: 'extra' },
+                table([
+                  ['Started at', `+${ms(operation.at)}`],
+                  [
+                    'Duration',
+                    operation.duration === undefined ? undefined : ms(operation.duration),
+                  ],
+                  ['Store', operation.store],
+                  ['TTL', operation.ttl === undefined ? undefined : ttlText(operation.ttl)],
+                  [
+                    'Graced',
+                    operation.graced ? 'served past its TTL, inside its grace window' : undefined,
+                  ],
+                  ['Value', 'value' in operation ? operation.value : undefined],
+                ]),
+              ),
             ),
           ),
         ),
