@@ -12,7 +12,6 @@ export async function configure(codemods: Codemods): Promise<void> {
 
 export default defineConfig({
   store: 'memory',
-  retries: 3,
 })
 `,
   )

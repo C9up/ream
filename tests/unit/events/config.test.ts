@@ -3,13 +3,14 @@
  * points for wiring the event bus via the ream provider system.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { defineConfig } from '../../../src/events/config.js'
+import { checkEventsConfig, defineConfig, type EventsConfig } from '../../../src/events/config.js'
 import { configure } from '../../../src/events/configure.js'
+import EventsProvider from '../../../src/events/EventsProvider.js'
 import { defined } from '../../__helpers__/defined.js'
 
 describe('events > defineConfig', () => {
   it('returns the config object unchanged (identity helper)', () => {
-    const cfg = { store: 'memory', retries: 3 }
+    const cfg: EventsConfig = { store: 'memory' }
     expect(defineConfig(cfg)).toBe(cfg)
   })
 })
@@ -31,6 +32,37 @@ describe('events > configure', () => {
     expect(path).toBe('config/events.ts')
     expect(content).toContain('defineConfig({')
     expect(content).toContain("store: 'memory'")
-    expect(content).toContain('retries: 3')
+    // Not scaffolded: nothing reads it (see checkEventsConfig).
+    expect(content).not.toContain('retries')
+  })
+})
+
+describe('events > checkEventsConfig', () => {
+  it('accepts no config, an empty one and the in-memory store', () => {
+    expect(checkEventsConfig(undefined)).toEqual({ store: 'memory' })
+    expect(checkEventsConfig(undefined)).toEqual(checkEventsConfig({}))
+    expect(checkEventsConfig({ store: 'memory' })).toEqual({ store: 'memory' })
+  })
+
+  it('refuses a store this build does not have, by name', () => {
+    expect(() => checkEventsConfig({ store: 'redis' })).toThrow(
+      expect.objectContaining({ code: 'E_EVENTS_UNSUPPORTED_STORE' }),
+    )
+  })
+
+  it('refuses an option nothing honours instead of ignoring it', () => {
+    expect(() => checkEventsConfig({ store: 'memory', retries: 10 })).toThrow(
+      expect.objectContaining({ code: 'E_EVENTS_UNSUPPORTED_OPTION' }),
+    )
+  })
+
+  it('fails the provider boot with the same error', () => {
+    const provider = new EventsProvider({
+      container: { singleton() {}, resolve: async () => undefined },
+      config: { get: (key: string) => (key === 'events' ? { store: 'redis' } : undefined) },
+    })
+    expect(() => provider.register()).toThrow(
+      expect.objectContaining({ code: 'E_EVENTS_UNSUPPORTED_STORE' }),
+    )
   })
 })

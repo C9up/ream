@@ -69,15 +69,20 @@ export class FakeBus {
   #requestHandlers = new Map<string, FakeBusRequestHandler>()
   #nextSubId = 1
 
-  emit(name: string, data: string): Promise<string> {
-    const { parsedData, correlationId, causationId } = parseEmitData(data)
+  /**
+   * `correlationId` is the one the emitter passes out of band, as to the real
+   * bus. Without it, a top-level `correlationId` string in the payload is
+   * read instead — what a payload published by hand carries.
+   */
+  emit(name: string, data: string, correlationId?: string | null): Promise<string> {
+    const parsed = parseEmitData(data)
     const entry: CapturedEmit = {
       kind: 'emit',
       name,
       data,
-      parsedData,
-      correlationId,
-      causationId,
+      parsedData: parsed.parsedData,
+      correlationId: correlationId ?? parsed.correlationId,
+      causationId: parsed.causationId,
     }
     this.#emitted.push(entry)
     // Snapshot subscribers so a callback adding/removing during dispatch
@@ -121,6 +126,13 @@ export class FakeBus {
 
   unsubscribe(subscriptionId: number): Promise<void> {
     this.#subscribers.delete(subscriptionId)
+    return Promise.resolve()
+  }
+
+  /** Drop every subscription and request handler, as the real bus's `clear()`. */
+  clear(): Promise<void> {
+    this.#subscribers.clear()
+    this.#requestHandlers.clear()
     return Promise.resolve()
   }
 

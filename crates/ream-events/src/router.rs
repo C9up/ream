@@ -71,6 +71,16 @@ impl EventRouter {
         }
     }
 
+    /// Drop every subscription, exact and wildcard.
+    ///
+    /// What a shutdown needs: a subscription owns its handler, and a handler
+    /// that crosses into another runtime (a JavaScript callback) holds that
+    /// runtime's resources for as long as it is registered.
+    pub async fn clear(&self) {
+        self.exact.write().await.clear();
+        self.wildcards.write().await.clear();
+    }
+
     /// Dispatch an event to all matching subscribers.
     /// Returns the number of handlers that received the event.
     pub async fn dispatch(&self, event: &Event) -> usize {

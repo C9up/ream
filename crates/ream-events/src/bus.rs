@@ -107,22 +107,39 @@ impl Bus {
         handlers.insert(name.to_string(), handler);
     }
 
+    /// Drop every subscription and every request handler.
+    ///
+    /// Shutdown: each one owns its handler, so nothing registered survives the
+    /// bus being torn down.
+    pub async fn clear(&self) {
+        self.router.clear().await;
+        self.request_handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+
     /// Send a request and await a response (with timeout).
     ///
     /// Returns the response data string, or an error on timeout/no handler.
     pub async fn request(&self, name: &str, data: &str, timeout_ms: u64) -> Result<String, String> {
+        self.request_event(Event::new(name, data), timeout_ms).await
+    }
+
+    /// Send an existing event as a request — the caller sets its envelope
+    /// (a correlation id carried out of band, for one).
+    pub async fn request_event(&self, event: Event, timeout_ms: u64) -> Result<String, String> {
+        let name = event.name.clone();
         let handler = {
             let handlers = self
                 .request_handlers
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             handlers
-                .get(name)
+                .get(&name)
                 .cloned()
                 .ok_or_else(|| format!("No request handler for '{}'", name))?
         }; // Guard dropped here — never held across an await.
-
-        let event = Event::new(name, data);
 
         // Use tokio timeout
         let result = tokio::time::timeout(
@@ -349,6 +366,36 @@ mod tests {
         let error = bus.request("gave.up", "{}", 5000).await.unwrap_err();
         assert_eq!(error, "request handler timed out after 10ms");
         assert!(!error.contains("panicked"));
+    }
+
+    #[tokio::test]
+    async fn clear_drops_every_subscription_and_request_handler() {
+        let bus = Bus::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let exact = count.clone();
+        let wildcard = count.clone();
+        bus.subscribe(
+            "order.created",
+            Arc::new(move |_| {
+                exact.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .await;
+        bus.subscribe(
+            "order.*",
+            Arc::new(move |_| {
+                wildcard.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .await;
+        bus.on_request("query:user", Arc::new(|_| Ok("{}".to_string())));
+
+        bus.clear().await;
+
+        bus.emit("order.created", "{}").await;
+        assert_eq!(count.load(Ordering::Relaxed), 0);
+        assert_eq!(bus.subscription_count().await, 0);
+        assert!(bus.request("query:user", "{}", 100).await.is_err());
     }
 
     #[tokio::test]

@@ -2,17 +2,23 @@
  * Emitter — AdonisJS-compatible typed event system backed by EventBus.
  *
  * Class-based events:
- *   emitter.on(TaskDeclared, SendNotification)
+ *   emitter.on(TaskDeclared, [SendNotification])
  *   await new TaskDeclared(task).emit()
  *
  * String-based events:
  *   emitter.on('user:registered', (user) => { ... })
  *   emitter.emit('user:registered', user)
  *
- * Listeners support @inject() for DI when a container resolver is provided.
+ * Listeners take the AdonisJS forms on both kinds of event: a function, a
+ * `[ListenerClass, 'method']` tuple, a `[() => import('#listeners/x'), 'method']`
+ * lazy tuple (the module is imported on the first emit, not at boot), and — a
+ * ream shorthand — a bare listener class standing for `[ListenerClass, 'handle']`.
+ * Listener classes are built through the container resolver when one is given,
+ * so they get `@inject()` dependencies.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { safeJsonParse } from '../utils/safeJsonParse.js'
 import { type BufferedEventName, EventsBuffer } from './EventsBuffer.js'
 import type { EventBus } from './native.js'
 
@@ -43,7 +49,40 @@ type ListenerFn<T = unknown> = (event: T) => unknown
 // either.
 type ListenerConstructor<T = unknown> = abstract new (...args: never[]) => ListenerClass<T>
 
-type Listener<T = unknown> = ListenerFn<T> | ListenerConstructor<T>
+/** Any class a `[Class, 'method']` tuple may name: the method is checked when it runs. */
+type AnyListenerConstructor = abstract new (...args: never[]) => object
+
+/**
+ * A module imported on first use, whose default export is the listener class:
+ * `() => import('#listeners/send_welcome')`.
+ */
+export type LazyListenerImport = () => Promise<{ default: AnyListenerConstructor }>
+
+/**
+ * `[ListenerClass, method?]` or `[LazyImport, method?]` (AdonisJS). The method
+ * defaults to `handle`.
+ */
+export type ListenerTuple =
+  | readonly [AnyListenerConstructor | LazyListenerImport]
+  | readonly [AnyListenerConstructor | LazyListenerImport, string]
+
+/**
+ * Every listener form an event accepts.
+ *
+ * Deviation from AdonisJS (named): its `'#listeners/x.method'` string form is
+ * not accepted. It needs the application's module importer, which the emitter
+ * does not hold; a lazy tuple says the same thing and type-checks.
+ */
+export type Listener<T = unknown> = ListenerFn<T> | ListenerConstructor<T> | ListenerTuple
+
+/** What every listener form is turned into: called with the event's data. */
+type NormalizedListener = (data: unknown) => Promise<unknown>
+
+/** A class event or a string event — the two kinds every API accepts. */
+type EventKey = EventConstructor | string
+
+/** A wildcard listener: the event's name, and the emitted value. */
+type AnyListener = (eventName: string, data: unknown) => unknown
 
 /**
  * Resolver for instantiating listener classes with DI — the narrow shape the
@@ -88,14 +127,18 @@ export type AsyncUnsubscribeFunction = () => Promise<void>
 export class Emitter {
   #bus: EventBus
   #resolver?: EmitterResolver
-  #classListeners: Map<EventConstructor, Listener[]> = new Map()
-  #stringListeners: Map<string, ListenerFn[]> = new Map()
+  /**
+   * Listeners per event, class or string: the listener as registered → the
+   * function it was normalized to. Keyed by the original so `off()` finds it,
+   * and a listener registered twice runs once, as AdonisJS (emittery) does.
+   */
+  readonly #listeners = new Map<EventKey, Map<Listener | NormalizedListener, NormalizedListener>>()
   /** Set while faking; every emission lands here instead of running. */
   #buffer?: EventsBuffer
   /** Which events are faked. `undefined` means all of them. */
   #fakedEvents?: Set<BufferedEventName>
   /** Wildcard subscriptions, so `offAny(listener)` can find its Rust handle. */
-  readonly #anySubscriptions = new Map<(eventName: string, data: unknown) => void, Set<number>>()
+  readonly #anySubscriptions = new Map<AnyListener, Set<number>>()
   /** Observers told of every emission as it happens — see {@link tap}. */
   readonly #taps = new Set<(event: string, data: unknown) => void>()
 
@@ -104,11 +147,12 @@ export class Emitter {
     this.#resolver = resolver
   }
 
-  // ─── Class-based events ───────────────────────────────────
+  // ─── Registering listeners ────────────────────────────────
 
   /**
    * Listen for a class-based event.
-   *   emitter.on(TaskDeclared, SendNotification)        // listener class
+   *   emitter.on(TaskDeclared, [SendNotification])      // listener class
+   *   emitter.on(TaskDeclared, [() => import('#listeners/notify'), 'handle'])
    *   emitter.on(TaskDeclared, (event) => { ... })       // inline function
    */
   on<T>(event: EventConstructor<T>, listener: Listener<T>): UnsubscribeFunction
@@ -116,29 +160,22 @@ export class Emitter {
    * Listen for a string-based event.
    *   emitter.on('user:registered', (user) => { ... })
    *   emitter.on<User>('user:registered', (user) => { ... })  // typed payload
+   *   emitter.on('user:registered', [SendWelcome, 'handle'])
    *
    * Returns an unsubscribe function, as AdonisJS does — keeping the listener
    * reference around just to pass it back to `off` is the boilerplate that
    * function removes.
    */
-  on<T>(event: string, listener: ListenerFn<T>): UnsubscribeFunction
-  on(event: EventConstructor | string, listener: Listener): UnsubscribeFunction {
-    if (typeof event === 'string') {
-      const list = this.#stringListeners.get(event) ?? []
-      list.push(listener as ListenerFn)
-      this.#stringListeners.set(event, list)
-      return () => {
-        this.off(event, listener as ListenerFn)
-      }
-    }
-    const list = this.#classListeners.get(event) ?? []
-    list.push(listener)
-    this.#classListeners.set(event, list)
+  on<T>(event: string, listener: Listener<T>): UnsubscribeFunction
+  on(event: EventKey, listener: Listener): UnsubscribeFunction {
+    return this.#register(event, listener)
+  }
+
+  #register(event: EventKey, listener: Listener): UnsubscribeFunction {
+    const listeners = this.#listenersOf(event)
+    if (!listeners.has(listener)) listeners.set(listener, this.#normalize(listener))
     return () => {
-      const current = this.#classListeners.get(event)
-      if (!current) return
-      const index = current.indexOf(listener)
-      if (index !== -1) current.splice(index, 1)
+      this.off(event, listener)
     }
   }
 
@@ -146,62 +183,118 @@ export class Emitter {
    * Listen for the NEXT occurrence only (AdonisJS `once`).
    *
    * The listener removes itself before running, so a handler that emits the
-   * same event does not re-enter it.
+   * same event does not re-enter it. As in AdonisJS, `off(event, listener)`
+   * does not reach it: it is registered under a wrapper of its own.
    */
-  once<T>(event: string, listener: ListenerFn<T>): void {
-    const wrapper: ListenerFn = (data) => {
-      this.off(event, wrapper)
-      return (listener as ListenerFn)(data)
+  once<T>(event: EventConstructor<T>, listener: Listener<T>): void
+  once<T>(event: string, listener: Listener<T>): void
+  once(event: EventKey, listener: Listener): void {
+    const normalized = this.#normalize(listener)
+    const listeners = this.#listenersOf(event)
+    const wrapper: NormalizedListener = async (data) => {
+      listeners.delete(wrapper)
+      if (listeners.size === 0 && this.#listeners.get(event) === listeners) {
+        this.#listeners.delete(event)
+      }
+      return normalized(data)
     }
-    this.on(event, wrapper as ListenerFn<T>)
+    listeners.set(wrapper, wrapper)
   }
 
   /**
    * Register the listener only when `condition` holds (AdonisJS `listenIf`) —
    * the shape a feature flag takes at boot, without an `if` around every call.
+   * Returns the unsubscribe function, a no-op when nothing was registered.
    */
-  listenIf<T>(condition: boolean | (() => boolean), event: string, listener: ListenerFn<T>): void {
+  listenIf<T>(
+    condition: boolean | (() => boolean),
+    event: EventConstructor<T>,
+    listener: Listener<T>,
+  ): UnsubscribeFunction
+  listenIf<T>(
+    condition: boolean | (() => boolean),
+    event: string,
+    listener: Listener<T>,
+  ): UnsubscribeFunction
+  listenIf(
+    condition: boolean | (() => boolean),
+    event: EventKey,
+    listener: Listener,
+  ): UnsubscribeFunction {
     // AdonisJS takes either — a thunk lets the flag be read at registration
     // time rather than at the call site.
-    if (typeof condition === 'function' ? condition() : condition) this.on(event, listener)
+    if (!(typeof condition === 'function' ? condition() : condition)) return () => {}
+    return this.#register(event, listener)
   }
 
-  /** Alias of {@link on} (AdonisJS names it `listen`). */
-  listen<T>(event: string, listener: ListenerFn<T>): void {
-    this.on(event, listener)
+  /**
+   * Bind several listener classes to one event (AdonisJS `listen`): each is
+   * registered as `[listener, 'handle']`, eager class or lazy import alike.
+   *
+   *   emitter.listen(UserRegistered, [SendVerificationEmail, () => import('#listeners/audit')])
+   */
+  listen(
+    event: EventKey,
+    listeners: ReadonlyArray<AnyListenerConstructor | LazyListenerImport>,
+  ): void {
+    for (const listener of listeners) this.#register(event, [listener, 'handle'])
   }
 
-  /** Report listener failures (AdonisJS `onError`). */
+  /**
+   * Report listener failures (AdonisJS `onError`).
+   *
+   * Deviation (named): AdonisJS keeps ONE handler and replaces it on each
+   * call; here each call adds one, on the `emitter:error` event.
+   */
   onError(listener: (event: string, error: unknown) => void): void {
     this.on('emitter:error', (payload) => {
-      const detail = payload as { event?: string; error?: unknown }
-      listener(detail?.event ?? 'unknown', detail?.error)
+      const detail = isPlainObject(payload) ? payload : {}
+      listener(typeof detail.event === 'string' ? detail.event : 'unknown', detail.error)
     })
   }
 
-  /** Remove one listener from an event (AdonisJS `off`). */
-  off(event: string, listener: ListenerFn): void {
-    const list = this.#stringListeners.get(event)
-    if (!list) return
-    const index = list.indexOf(listener)
-    if (index !== -1) list.splice(index, 1)
-    if (list.length === 0) this.#stringListeners.delete(event)
+  /**
+   * Remove one listener from an event (AdonisJS `off`). A tuple matches a
+   * registered tuple naming the same target and method.
+   */
+  off(event: EventKey, listener: Listener): void {
+    const listeners = this.#listeners.get(event)
+    if (!listeners) return
+    const key = Array.isArray(listener)
+      ? [...listeners.keys()].find(
+          (registered) =>
+            Array.isArray(registered) &&
+            registered[0] === listener[0] &&
+            registered[1] === listener[1],
+        )
+      : listener
+    if (key !== undefined) listeners.delete(key)
+    if (listeners.size === 0) this.#listeners.delete(event)
   }
 
   /** Alias of {@link off} (AdonisJS `clearListener`). */
-  clearListener(event: string, listener: ListenerFn): void {
+  clearListener(event: EventKey, listener: Listener): void {
     this.off(event, listener)
   }
 
   /** Drop every listener of one event (AdonisJS `clearListeners`). */
-  clearListeners(event: string): void {
-    this.#stringListeners.delete(event)
+  clearListeners(event: EventKey): void {
+    this.#listeners.delete(event)
   }
 
-  /** Drop every listener of every event (AdonisJS `clearAllListeners`). */
+  /**
+   * Drop every listener of every event (AdonisJS `clearAllListeners`) —
+   * wildcard ones included, as emittery's `clearListeners()` drops its
+   * `onAny` listeners. Their native unsubscriptions are not awaited; await
+   * {@link offAny} when an assertion depends on one being gone.
+   */
   clearAllListeners(): void {
-    this.#stringListeners.clear()
-    this.#classListeners.clear()
+    this.#listeners.clear()
+    const ids = [...this.#anySubscriptions.values()].flatMap((set) => [...set])
+    this.#anySubscriptions.clear()
+    for (const id of ids) {
+      void this.#bus.unsubscribe(id).catch((err: unknown) => this.#emitError('emitter:offAny', err))
+    }
   }
 
   /**
@@ -211,20 +304,82 @@ export class Emitter {
    * Read-only copies: a caller inspecting the map — a debug screen, a test
    * asserting nothing leaked — must not be able to unsubscribe by mutating it.
    */
-  get eventsListeners(): Map<EventConstructor | string, Listener[]> {
-    const all = new Map<EventConstructor | string, Listener[]>()
-    for (const [event, listeners] of this.#classListeners) all.set(event, [...listeners])
-    for (const [event, listeners] of this.#stringListeners) all.set(event, [...listeners])
+  get eventsListeners(): Map<EventKey, Array<Listener | NormalizedListener>> {
+    const all = new Map<EventKey, Array<Listener | NormalizedListener>>()
+    for (const [event, listeners] of this.#listeners) all.set(event, [...listeners.keys()])
     return all
   }
 
   /** How many listeners an event has, or all of them (AdonisJS `listenerCount`). */
-  listenerCount(event?: string): number {
-    if (event !== undefined) return this.#stringListeners.get(event)?.length ?? 0
+  listenerCount(event?: EventKey): number {
+    if (event !== undefined) return this.#listeners.get(event)?.size ?? 0
     let total = 0
-    for (const list of this.#stringListeners.values()) total += list.length
-    for (const list of this.#classListeners.values()) total += list.length
+    for (const listeners of this.#listeners.values()) total += listeners.size
     return total
+  }
+
+  /**
+   * Check if any listeners are registered for an event, or for any event when
+   * none is named (AdonisJS `hasListeners`).
+   */
+  hasListeners(event?: EventKey): boolean {
+    return this.listenerCount(event) > 0
+  }
+
+  #listenersOf(event: EventKey): Map<Listener | NormalizedListener, NormalizedListener> {
+    let listeners = this.#listeners.get(event)
+    if (!listeners) {
+      listeners = new Map()
+      this.#listeners.set(event, listeners)
+    }
+    return listeners
+  }
+
+  /**
+   * Turn any accepted listener form into one callable (AdonisJS
+   * `#normalizeEventListener`, with fold's `moduleCaller` / `moduleImporter`).
+   */
+  #normalize(listener: Listener): NormalizedListener {
+    if (isListenerTuple(listener)) {
+      const [target, method = 'handle'] = listener
+      if (isConstructor(target)) {
+        return async (data) => this.#callListener(target, method, data)
+      }
+      // Lazy: imported on first use and kept, so the module and what it
+      // pulls in (mailers, queues) stay out of the boot path.
+      let imported: AnyListenerConstructor | undefined
+      return async (data) => {
+        imported ??= await importDefault(target)
+        return this.#callListener(imported, method, data)
+      }
+    }
+    if (isListenerClass(listener)) {
+      return async (data) => this.#callListener(listener, 'handle', data)
+    }
+    if (isConstructor(listener)) {
+      // A class with no `handle`: the call below names the problem instead of
+      // invoking a constructor as a function.
+      return async (data) => this.#callListener(listener, 'handle', data)
+    }
+    return async (data) => listener(data)
+  }
+
+  /** Build the listener (through the resolver when there is one) and call `method`. */
+  async #callListener(
+    target: AnyListenerConstructor,
+    method: string,
+    data: unknown,
+  ): Promise<unknown> {
+    const instance = this.#resolver
+      ? await this.#resolver.make(target)
+      : Reflect.construct(target, [])
+    const handler: unknown = Reflect.get(instance, method)
+    if (typeof handler !== 'function') {
+      throw new Error(
+        `Missing method "${method}" on listener ${String(Reflect.get(target, 'name'))}`,
+      )
+    }
+    return Reflect.apply(handler, instance, [data])
   }
 
   // ─── Emit ─────────────────────────────────────────────────
@@ -264,16 +419,21 @@ export class Emitter {
    * failing subscriber must not silently cancel the rest of the reaction to an
    * event it does not own.
    */
-  async #dispatchListeners(event: string, data: unknown, serial: boolean): Promise<void> {
+  async #dispatchListeners(
+    event: EventKey,
+    name: string,
+    data: unknown,
+    serial: boolean,
+  ): Promise<void> {
     // `onAny` listeners are not here: they subscribe through the native bus,
     // which delivers every matching event to them on its own.
-    const listeners = this.#stringListeners.get(event) ?? []
+    const listeners = [...(this.#listeners.get(event)?.values() ?? [])]
     if (listeners.length === 0) return
-    const run = async (fn: ListenerFn): Promise<void> => {
+    const run = async (fn: NormalizedListener): Promise<void> => {
       try {
         await fn(data)
       } catch (err) {
-        this.#emitError(event, err)
+        this.#emitError(name, err)
       }
     }
     if (serial) {
@@ -291,7 +451,7 @@ export class Emitter {
   async emitSerial(event: string, data: unknown): Promise<void> {
     this.#notifyTaps(event, data)
     if (this.#capture(event, data)) return
-    await this.#dispatchListeners(event, data, true)
+    await this.#dispatchListeners(event, event, data, true)
     this.#publishToBus(event, data)
   }
 
@@ -309,15 +469,16 @@ export class Emitter {
   async emit(event: string, data: unknown): Promise<void> {
     this.#notifyTaps(event, data)
     if (this.#capture(event, data)) return
-    await this.#dispatchListeners(event, data, false)
+    await this.#dispatchListeners(event, event, data, false)
     this.#publishToBus(event, data)
   }
 
   /**
-   * Push the event onto the bus for cross-service / Rust subscribers.
+   * Push the event onto the bus for wildcard / cross-service subscribers.
    *
-   * `#wrapForBus` prepends the correlation envelope when set so the ID reaches
-   * the other side; without it `setCorrelationId()` was a no-op.
+   * The payload goes as the caller gave it; the active correlation id rides
+   * on the envelope, out of band. It used to be merged into the payload, so a
+   * wildcard listener saw a `correlationId` key nobody emitted.
    */
   #publishToBus(event: string, data: unknown): void {
     // Serialize INSIDE the guard. `JSON.stringify` throws synchronously on a
@@ -325,26 +486,24 @@ export class Emitter {
     // escaped past the `.catch` and crashed the caller.
     let payload: string
     try {
-      payload = JSON.stringify(this.#wrapForBus(data))
+      payload = encodePayload(data)
     } catch (err) {
       this.#emitError(event, err)
       return
     }
-    void this.#bus.emit(event, payload).catch((err: unknown) => {
+    void this.#bus.emit(event, payload, correlationStorage.getStore()).catch((err: unknown) => {
       this.#emitError(event, err)
     })
   }
 
   /** Emit an error event for listener failures. */
   #emitError(event: string, error: unknown): void {
-    const errorListeners = this.#stringListeners.get('emitter:error')
-    if (errorListeners && errorListeners.length > 0) {
+    const errorListeners = [...(this.#listeners.get('emitter:error')?.values() ?? [])]
+    if (errorListeners.length > 0) {
       for (const fn of errorListeners) {
-        try {
-          fn({ event, error })
-        } catch {
-          /* prevent infinite loop */
-        }
+        // Not awaited, and a rejection is dropped: reporting a failure must
+        // not loop back into this method.
+        fn({ event, error }).catch(() => {})
       }
     } else {
       // No error listener — log to stderr as last resort
@@ -356,45 +515,27 @@ export class Emitter {
    * Dispatch a class-based event. Called by BaseEvent#emit().
    */
   async dispatchEvent<T extends object>(event: T): Promise<void> {
-    const EventClass = event.constructor as EventConstructor<T>
-    const name = (EventClass as { eventName?: string }).eventName ?? classToEventName(EventClass)
+    const EventClass: unknown = event.constructor
+    // Only an object without a prototype chain has none; nothing listens to it.
+    if (!isEventConstructor(EventClass)) return
+    const eventName: unknown = Reflect.get(EventClass, 'eventName')
+    const name = typeof eventName === 'string' ? eventName : classToEventName(EventClass)
     this.#notifyTaps(name, event)
     // Faked by the class, as AdonisJS does — `fake([TaskDeclared])` catches
     // `new TaskDeclared(...).emit()`.
     if (this.#capture(EventClass, event)) return
-    const listeners = this.#classListeners.get(EventClass) ?? []
 
     // Per-listener error isolation — mirrors the string `emit()` contract.
     // A side-effect listener that throws (SMTP down, etc.) MUST NOT abort
     // the sibling listeners NOR suppress the cross-service `bus.emit` below:
     // the domain event already happened, so distributed subscribers must
     // still receive it. Failures surface on the `emitter:error` channel.
-    for (const listener of listeners) {
-      try {
-        if (isListenerClass(listener)) {
-          // Listener class — resolve via container for @inject() support
-          const instance = this.#resolver
-            ? await this.#resolver.make(listener)
-            : Reflect.construct(listener, [])
-          const handle = Reflect.get(instance, 'handle')
-          if (typeof handle !== 'function') {
-            throw new Error(
-              `Listener ${String(Reflect.get(listener, 'name'))} resolved to something with no handle()`,
-            )
-          }
-          await handle.call(instance, event)
-        } else {
-          await (listener as ListenerFn<T>)(event)
-        }
-      } catch (err) {
-        this.#emitError(name, err)
-      }
-    }
+    await this.#dispatchListeners(EventClass, name, event, true)
 
-    // Also push through EventBus — same correlation-envelope wrapping as
-    // the string-event path so distributed tracing covers class events too.
-    // Reached unconditionally: a listener failure above no longer skips it.
-    await this.#bus.emit(name, JSON.stringify(this.#wrapForBus(event)))
+    // Also push through EventBus, with the correlation id on the envelope as
+    // for string events. Reached unconditionally: a listener failure above no
+    // longer skips it.
+    this.#publishToBus(name, event)
   }
 
   // ─── Faking (AdonisJS `fake` / `restore`) ─────────────────
@@ -450,16 +591,26 @@ export class Emitter {
    *
    *   emitter.onAny('order.*', (name, data) => { ... })   // single segment
    *   emitter.onAny('order.**', (name, data) => { ... })  // deep match
+   *
+   * The listener gets the event's name and the emitted value, once per
+   * matching event, and runs with the correlation id that was active where
+   * the event was emitted (`getCorrelationId()`).
+   *
+   * Deviation (named): the value crosses the native bus as JSON, so the
+   * listener receives a copy — a class event arrives as a plain object, a
+   * `Date` as its ISO string — and the name of a class event is its
+   * `eventName`, not the class. AdonisJS (emittery) hands over the same
+   * reference, because its bus is in-process JavaScript.
+   *
+   * A listener that throws or rejects is reported like any other listener
+   * (`onError` / `emitter:error`) and never reaches the native callback.
    */
-  async onAny(listener: (eventName: string, data: unknown) => void): Promise<UnsubscribeFunction>
+  async onAny(listener: AnyListener): Promise<AsyncUnsubscribeFunction>
+  async onAny(pattern: string, listener: AnyListener): Promise<AsyncUnsubscribeFunction>
   async onAny(
-    pattern: string,
-    listener: (eventName: string, data: unknown) => void,
-  ): Promise<UnsubscribeFunction>
-  async onAny(
-    patternOrListener: string | ((eventName: string, data: unknown) => void),
-    maybeListener?: (eventName: string, data: unknown) => void,
-  ): Promise<UnsubscribeFunction> {
+    patternOrListener: string | AnyListener,
+    maybeListener?: AnyListener,
+  ): Promise<AsyncUnsubscribeFunction> {
     // `onAny(listener)` — every event, the AdonisJS signature. `**` is the
     // deep-match pattern the Rust matcher already understands, so the two
     // forms share one implementation.
@@ -485,30 +636,27 @@ export class Emitter {
     }
   }
 
-  async #subscribeAny(
-    pattern: string,
-    listener: (eventName: string, data: unknown) => void,
-  ): Promise<number> {
+  async #subscribeAny(pattern: string, listener: AnyListener): Promise<number> {
     return this.#bus.subscribe(pattern, (eventJson: string) => {
-      try {
-        const event = JSON.parse(eventJson)
-        // The bus delivers a Rust `Event` envelope whose `correlationId`
-        // sits at the top of the parsed JSON. Propagate it onto the
-        // emitter so nested emits inside the listener body inherit the
-        // trace context — that's the whole point of the API. `data` is
-        // the raw user payload string (still JSON-encoded if the
-        // emitter serialized an object), kept as-is for back-compat.
-        if (
-          event !== null &&
-          typeof event === 'object' &&
-          typeof event.correlationId === 'string'
-        ) {
-          this.setCorrelationId(event.correlationId)
+      // Two separate steps. They shared one try, so a listener that threw
+      // was taken for an unreadable envelope and called AGAIN with the pattern
+      // and the raw JSON — and its second throw left through the native
+      // callback as an uncaught exception.
+      const delivery = readDelivery(eventJson, pattern)
+      // `run`, not `enterWith`: the id is the listener's, and must not stick
+      // to whatever the native callback's context schedules next.
+      correlationStorage.run(delivery.correlationId, () => {
+        let outcome: unknown
+        try {
+          outcome = listener(delivery.name, delivery.data)
+        } catch (err) {
+          this.#emitError(delivery.name, err)
+          return
         }
-        listener(event.name ?? pattern, event.data ?? event)
-      } catch {
-        listener(pattern, eventJson)
-      }
+        if (isThenable(outcome)) {
+          outcome.then(undefined, (err: unknown) => this.#emitError(delivery.name, err))
+        }
+      })
     })
   }
 
@@ -522,7 +670,7 @@ export class Emitter {
    * Async where AdonisJS is sync: dropping the subscription is a NAPI call, and
    * returning before it lands would let an event through after `offAny`.
    */
-  async offAny(listenerOrId: number | ((eventName: string, data: unknown) => void)): Promise<this> {
+  async offAny(listenerOrId: number | AnyListener): Promise<this> {
     if (typeof listenerOrId === 'number') {
       await this.#bus.unsubscribe(listenerOrId)
       for (const ids of this.#anySubscriptions.values()) ids.delete(listenerOrId)
@@ -547,12 +695,17 @@ export class Emitter {
    * Send a request event and await a response.
    *
    *   const user = await emitter.request('query:user.find', { id: 1 })
+   *
+   * The active correlation id travels on the envelope, as for `emit`, so the
+   * responder registered with {@link onRequest} runs under it.
    */
   async request<T = unknown>(name: string, data: unknown, timeoutMs = 5000): Promise<T> {
-    // Same correlation injection as `emit()` so a `setCorrelationId`
-    // preceding a request actually reaches the responder via the
-    // top-level `correlationId` field on the parsed payload.
-    const result = await this.#bus.request(name, JSON.stringify(this.#wrapForBus(data)), timeoutMs)
+    const result = await this.#bus.request(
+      name,
+      JSON.stringify(data),
+      timeoutMs,
+      correlationStorage.getStore(),
+    )
     try {
       return JSON.parse(result) as T
     } catch {
@@ -563,16 +716,22 @@ export class Emitter {
   /**
    * Register a request handler.
    *
-   *   emitter.onRequest('query:user.find', (params, reply) => {
-   *     const user = db.find(params.id)
-   *     reply(JSON.stringify(user))
+   *   emitter.onRequest('query:user.find', (eventJson, reply) => {
+   *     const { data } = JSON.parse(eventJson)
+   *     reply(JSON.stringify(db.find(JSON.parse(data).id)))
    *   })
+   *
+   * The handler runs with the requester's correlation id
+   * (`getCorrelationId()`).
    */
   onRequest(
     name: string,
     handler: (eventJson: string, reply: (response: string) => void) => void,
   ): void {
-    this.#bus.onRequest(name, handler)
+    this.#bus.onRequest(name, (eventJson: string, reply: (response: string) => void) => {
+      const { correlationId } = readDelivery(eventJson, name)
+      correlationStorage.run(correlationId, () => handler(eventJson, reply))
+    })
   }
 
   // ─── Correlation context ──────────────────────────────────
@@ -600,27 +759,7 @@ export class Emitter {
     return correlationStorage.getStore()
   }
 
-  /** Inject the active correlation ID at the top level of the payload. */
-  #wrapForBus(data: unknown): unknown {
-    const correlationId = correlationStorage.getStore()
-    if (correlationId === undefined) return data
-    if (!isPlainObject(data)) return data
-    if (typeof data.correlationId === 'string') return data
-    return { ...data, correlationId }
-  }
-
   // ─── Introspection ────────────────────────────────────────
-
-  /**
-   * Check if any listeners are registered for an event.
-   */
-  hasListeners(event?: EventConstructor | string): boolean {
-    // AdonisJS makes the argument optional: no argument asks whether ANY event
-    // has a listener at all.
-    if (event === undefined) return this.listenerCount() > 0
-    if (typeof event === 'string') return (this.#stringListeners.get(event)?.length ?? 0) > 0
-    return (this.#classListeners.get(event)?.length ?? 0) > 0
-  }
 
   /** Get the number of Rust-side subscriptions. */
   async subscriptionCount(): Promise<number> {
@@ -703,11 +842,109 @@ function classToEventName(cls: EventConstructor): string {
   return cls.name.replace(/([a-z])([A-Z])/g, '$1.$2').toLowerCase()
 }
 
-/** Check if a listener entry is a class (has prototype.handle) vs a function. */
+/** A class event: any function can be one, as any object has a constructor. */
+function isEventConstructor(value: unknown): value is EventConstructor {
+  return typeof value === 'function'
+}
+
+/** A listener class: it has a `handle` method (the bare-class shorthand). */
 function isListenerClass(listener: Listener): listener is ListenerConstructor {
-  return typeof listener === 'function' && typeof listener.prototype?.handle === 'function'
+  return (
+    typeof listener === 'function' &&
+    typeof Reflect.get(Reflect.get(listener, 'prototype') ?? {}, 'handle') === 'function'
+  )
+}
+
+function isListenerTuple(listener: Listener): listener is ListenerTuple {
+  return Array.isArray(listener)
+}
+
+/**
+ * Whether a function is a class rather than a lazy import or a plain listener
+ * (`@sindresorhus/is` `class`, which AdonisJS uses, reads the source the same
+ * way). A function with methods on its prototype counts too, for classes
+ * compiled down to functions.
+ */
+function isConstructor(value: unknown): value is AnyListenerConstructor {
+  if (typeof value !== 'function') return false
+  if (/^class[\s{]/.test(Function.prototype.toString.call(value))) return true
+  const prototype: unknown = Reflect.get(value, 'prototype')
+  return (
+    prototype !== null &&
+    typeof prototype === 'object' &&
+    Object.getOwnPropertyNames(prototype).some((name) => name !== 'constructor')
+  )
+}
+
+/** The default export of a lazily imported listener module, checked. */
+async function importDefault(importer: LazyListenerImport): Promise<AnyListenerConstructor> {
+  const module: unknown = await importer()
+  const exported: unknown =
+    module !== null && typeof module === 'object' ? Reflect.get(module, 'default') : undefined
+  if (!isConstructor(exported)) {
+    throw new Error(
+      `Missing "export default" of a listener class in the module imported by ${importer.name || 'a lazy listener'}`,
+    )
+  }
+  return exported
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof Reflect.get(value, 'then') === 'function'
+  )
+}
+
+/**
+ * The payload as it crosses the bus. `undefined` — an event emitted with no
+ * data — has no JSON form, so it travels as the empty string, which no JSON
+ * value serializes to.
+ */
+function encodePayload(data: unknown): string {
+  return data === undefined ? '' : JSON.stringify(data)
+}
+
+/** The value {@link encodePayload} produced; a non-JSON string stays a string. */
+function decodePayload(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw
+  if (raw === '') return undefined
+  try {
+    return safeJsonParse(raw)
+  } catch {
+    return raw
+  }
+}
+
+interface Delivery {
+  name: string
+  data: unknown
+  correlationId: string | undefined
+}
+
+/**
+ * Read the envelope the native bus delivers (`crates/ream-events` `Event`):
+ * the event's name, its payload decoded, and the correlation id it carries.
+ * An unreadable envelope is delivered as the raw string under `fallbackName`.
+ */
+function readDelivery(eventJson: string, fallbackName: string): Delivery {
+  let envelope: unknown
+  try {
+    envelope = JSON.parse(eventJson)
+  } catch {
+    return { name: fallbackName, data: eventJson, correlationId: undefined }
+  }
+  if (!isPlainObject(envelope)) {
+    return { name: fallbackName, data: envelope, correlationId: undefined }
+  }
+  return {
+    name: typeof envelope.name === 'string' ? envelope.name : fallbackName,
+    data: decodePayload(envelope.data),
+    correlationId: typeof envelope.correlationId === 'string' ? envelope.correlationId : undefined,
+  }
 }

@@ -1,3 +1,4 @@
+import { checkEventsConfig } from './config.js'
 import { BaseEvent, Emitter } from './Emitter.js'
 import { EventBus } from './native.js'
 import { setEmitter } from './services/main.js'
@@ -20,6 +21,11 @@ interface EventsContainer {
 }
 export interface EventsAppContext {
   container: EventsContainer
+  /**
+   * Where `config/events.ts` is read from. Optional so a bare host without a
+   * config store still boots the bus with its defaults.
+   */
+  config?: { get(key: string): unknown }
 }
 
 export default class EventsProvider {
@@ -28,6 +34,8 @@ export default class EventsProvider {
   constructor(protected app: EventsAppContext) {}
 
   register() {
+    // Refused here, at boot: an option nothing honours must not be ignored.
+    checkEventsConfig(this.app.config?.get('events'))
     this.app.container.singleton(EventBus, () => new EventBus())
     this.app.container.singleton('bus', () => this.app.container.resolve<EventBus>(EventBus))
 
@@ -54,7 +62,16 @@ export default class EventsProvider {
     setEmitter(this.#emitter)
   }
 
+  /**
+   * Release what the bus holds: every listener, wildcard subscription and
+   * request handler. A subscription keeps a JavaScript callback alive in the
+   * Rust router, so a provider that only forgot the emitter left them there.
+   */
   async shutdown() {
-    if (this.#emitter) BaseEvent.resetEmitter(this.#emitter)
+    if (!this.#emitter) return
+    BaseEvent.resetEmitter(this.#emitter)
+    this.#emitter.clearAllListeners()
+    const bus = await this.app.container.resolve<EventBus>(EventBus)
+    await bus.clear()
   }
 }

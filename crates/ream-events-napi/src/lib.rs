@@ -17,13 +17,22 @@ use napi::Status;
 /// the payload first.
 /// `Args` is what the callback hands to JavaScript: one value for a plain
 /// event, a pair for a request that also passes a `reply` function.
+///
+/// WEAK (the sixth parameter): a `ThreadsafeFunction` keeps Node's event loop
+/// referenced for as long as it lives, and a subscription or a request handler
+/// lives in the Rust router until it is removed. A strong one meant that an app
+/// registering `onAny` or `onRequest` at preload never exited: every console
+/// command ran to completion and then hung, with
+/// `process.getActiveResourcesInfo()` showing nothing. A listener is not a
+/// reason for a process to exist — a server is held open by its socket, as the
+/// scheduler's task callbacks already are (ream-scheduler-napi).
 type FatalTsfn<T, Args = Unknown<'static>> = napi::threadsafe_function::ThreadsafeFunction<
     T,
     Unknown<'static>,
     Args,
     Status,
     false,
-    false,
+    true,
     0,
 >;
 use napi_derive::napi;
@@ -63,12 +72,28 @@ impl EventBus {
     }
 
     /// Emit an event (async — does NOT block Node.js thread).
+    ///
+    /// `correlation_id` is carried on the envelope, out of band: the payload is
+    /// the caller's and is delivered as it was given. Without one the event
+    /// starts its own chain (its id), as `Event::new` does.
     #[napi]
-    pub async fn emit(&self, name: String, data: String) -> napi::Result<String> {
+    pub async fn emit(
+        &self,
+        name: String,
+        data: String,
+        correlation_id: Option<String>,
+    ) -> napi::Result<String> {
         let bus = self.bus.clone();
         let rt = ream_napi_core::shared_runtime();
         let event = rt
-            .spawn(async move { bus.emit(&name, &data).await })
+            .spawn(async move {
+                let mut event = Event::new(name, data);
+                if let Some(id) = correlation_id {
+                    event.correlation_id = id;
+                }
+                bus.emit_event(&event).await;
+                event
+            })
             .await
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))?;
 
@@ -94,6 +119,7 @@ impl EventBus {
         let tsfn: FatalTsfn<String, String> = callback
             .build_threadsafe_function::<String>()
             .callee_handled::<false>()
+            .weak::<true>()
             .build_callback(|ctx: ThreadsafeCallContext<String>| Ok(ctx.value))?;
 
         let tsfn = Arc::new(tsfn);
@@ -131,6 +157,19 @@ impl EventBus {
         Ok(())
     }
 
+    /// Drop every subscription and request handler.
+    ///
+    /// The shutdown path: once it resolves, no JavaScript callback is held by
+    /// the bus any more.
+    #[napi]
+    pub async fn clear(&self) -> napi::Result<()> {
+        let bus = self.bus.clone();
+        let rt = ream_napi_core::shared_runtime();
+        rt.spawn(async move { bus.clear().await })
+            .await
+            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+    }
+
     /// Register a request handler.
     #[napi]
     pub fn on_request(
@@ -141,6 +180,7 @@ impl EventBus {
         let tsfn: FatalTsfn<RequestContext, FnArgs<(String, sys::napi_value)>> = callback
             .build_threadsafe_function::<RequestContext>()
             .callee_handled::<false>()
+            .weak::<true>()
             .build_callback(|ctx: ThreadsafeCallContext<RequestContext>| {
                 let event_json = ctx.value.event_json;
                 let reply_tx = ctx.value.reply_tx;
@@ -207,19 +247,28 @@ impl EventBus {
     }
 
     /// Send a request and get a response (async with timeout).
+    ///
+    /// `correlation_id` rides on the envelope, as for [`EventBus::emit`].
     #[napi]
     pub async fn request(
         &self,
         name: String,
         data: String,
         timeout_ms: Option<f64>,
+        correlation_id: Option<String>,
     ) -> napi::Result<String> {
         let bus = self.bus.clone();
         let timeout = timeout_ms.unwrap_or(5000.0) as u64;
         let rt = ream_napi_core::shared_runtime();
 
         let result = rt
-            .spawn(async move { bus.request(&name, &data, timeout).await })
+            .spawn(async move {
+                let mut event = Event::new(name, data);
+                if let Some(id) = correlation_id {
+                    event.correlation_id = id;
+                }
+                bus.request_event(event, timeout).await
+            })
             .await
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))?;
 

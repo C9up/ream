@@ -161,13 +161,12 @@ describe('events > Emitter > wildcard subscriptions', () => {
     await emitter.onAny('order.*', (name, data) => received.push({ name, data }))
     // FakeBus wraps the raw payload in a Rust-mirror envelope ({id, name,
     // data}). Emitter's onAny parses the envelope, then forwards
-    // (event.name, event.data) where data is the raw string the caller
-    // passed to bus.emit.
+    // (event.name, data) with the payload decoded back to the value.
     await bus.emit('order.created', '{"x":1}')
     await new Promise((r) => setTimeout(r, 0))
     expect(received).toHaveLength(1)
     expect(defined(received[0]).name).toBe('order.created')
-    expect(defined(received[0]).data).toBe('{"x":1}')
+    expect(defined(received[0]).data).toEqual({ x: 1 })
   })
 
   it("falls back to the raw eventJson when it isn't valid JSON", async () => {
@@ -260,15 +259,16 @@ describe('events > Emitter > introspection', () => {
     expect(emitter.getCorrelationId()).toBe('trace-42')
   })
 
-  it('injects the correlation ID into the bus payload (setCorrelationId is NOT a no-op)', async () => {
+  it('carries the correlation ID on the envelope, out of band (setCorrelationId is NOT a no-op)', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     emitter.setCorrelationId('trace-42')
     await emitter.emit('user:registered', { id: 1 })
-    // FakeBus parses `correlationId` off the top of the data JSON — same
-    // path the Rust bus uses to populate the Event envelope.
+    // Passed to bus.emit beside the payload, as the Rust bus takes it for the
+    // Event envelope — and kept out of the payload itself.
     const [captured] = bus.getEmitted()
     expect(captured?.correlationId).toBe('trace-42')
+    expect(JSON.parse(captured?.data ?? '{}')).toEqual({ id: 1 })
   })
 
   it('does NOT inject correlationId when none is set (legacy wire shape preserved)', async () => {
@@ -282,45 +282,49 @@ describe('events > Emitter > introspection', () => {
     expect(parsed.correlationId).toBeUndefined()
   })
 
-  it('does NOT clobber a user-supplied correlationId on the payload', async () => {
+  it('leaves a correlationId the payload carries as the caller wrote it', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     emitter.setCorrelationId('emitter-trace')
     await emitter.emit('user:registered', { id: 1, correlationId: 'user-trace' })
     const [captured] = bus.getEmitted()
-    expect(captured?.correlationId).toBe('user-trace')
+    // The payload is data: untouched. The envelope carries the emitter's id.
+    expect(JSON.parse(captured?.data ?? '{}')).toEqual({ id: 1, correlationId: 'user-trace' })
+    expect(captured?.correlationId).toBe('emitter-trace')
   })
 
-  it('propagates incoming correlationId onto the emitter when a subscriber fires', async () => {
+  it('runs a wildcard listener under the correlation id of the emit, and only there', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
+    const seen: Array<string | undefined> = []
     await emitter.onAny('user.*', () => {
-      // listener body runs synchronously inside subscribe dispatch
+      seen.push(emitter.getCorrelationId())
     })
-    // Simulate another service emitting with a correlation ID — FakeBus
-    // builds the same Event envelope the Rust bus does, with
-    // correlationId at top-level.
     const other = new Emitter(bus)
-    other.setCorrelationId('inbound-trace')
-    other.emit('user.registered', { id: 1 })
-    // The receiving emitter (`emitter`) should have picked up the ID
-    // inside its onAny handler so nested emits inherit it.
-    expect(emitter.getCorrelationId()).toBe('inbound-trace')
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        other.setCorrelationId('inbound-trace')
+        void other.emit('user.registered', { id: 1 })
+        resolve()
+      })
+    })
+    expect(seen).toEqual(['inbound-trace'])
+    // Scoped with `run`: the listener's id does not stick to the context the
+    // bus called it from.
+    expect(emitter.getCorrelationId()).toBeUndefined()
   })
 
-  it('skips correlation injection for primitive / array payloads', async () => {
+  it('carries the correlation id for primitive / array payloads too', async () => {
     const bus = new FakeBus()
     const emitter = new Emitter(bus)
     emitter.setCorrelationId('trace-42')
     await emitter.emit('metric:tick', 42)
     await emitter.emit('batch', [1, 2, 3])
     const emitted = bus.getEmitted()
-    // Both payloads must round-trip untouched; primitives/arrays can't
-    // carry a sibling field, so the ID is dropped on the wire (an HTTP
-    // header or a separate trace channel would be needed — out of scope
-    // for this minimal fix).
+    // Out of band, so a payload with no room for a sibling field keeps it.
     expect(JSON.parse(defined(emitted[0]).data)).toBe(42)
     expect(JSON.parse(defined(emitted[1]).data)).toEqual([1, 2, 3])
+    expect(emitted.map((e) => e.correlationId)).toEqual(['trace-42', 'trace-42'])
   })
 
   it('hasListeners reports string listeners', async () => {

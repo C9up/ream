@@ -144,6 +144,17 @@ export interface NapiConnectionConfig {
   maxConnections?: number
 }
 
+/** What `graphqlParse` runs and how far it may expand. */
+
+export interface GraphqlParseOptions {
+  /** The operation to run, as the request's `operationName`. */
+  operationName?: string
+  /** Deepest field nesting allowed (default 12). */
+  maxDepth?: number
+  /** Most fields — and most fragment expansions — allowed (default 1000). */
+  maxComplexity?: number
+}
+
 /**
  * NAPI-exposed event bus.
  * Uses shared Tokio runtime (no per-instance runtime).
@@ -151,8 +162,14 @@ export interface NapiConnectionConfig {
 
 export declare class EventBus {
   constructor(requestHandlerTimeoutMs?: number | undefined | null)
-  /** Emit an event (async — does NOT block Node.js thread). */
-  emit(name: string, data: string): Promise<string>
+  /**
+   * Emit an event (async — does NOT block Node.js thread).
+   *
+   * `correlation_id` is carried on the envelope, out of band: the payload is
+   * the caller's and is delivered as it was given. Without one the event
+   * starts its own chain (its id), as `Event::new` does.
+   */
+  emit(name: string, data: string, correlationId?: string | undefined | null): Promise<string>
   /**
    * Subscribe to events matching a pattern. Callback receives event JSON string.
    * Returns subscription ID.
@@ -164,13 +181,29 @@ export declare class EventBus {
   subscribe(pattern: string, callback: (eventJson: string) => void): number
   /** Unsubscribe by subscription ID. */
   unsubscribe(subId: number): Promise<void>
+  /**
+   * Drop every subscription and request handler.
+   *
+   * The shutdown path: once it resolves, no JavaScript callback is held by
+   * the bus any more.
+   */
+  clear(): Promise<void>
   /** Register a request handler. */
   onRequest(
     name: string,
     callback: (eventJson: string, reply: (response: string) => void) => void,
   ): void
-  /** Send a request and get a response (async with timeout). */
-  request(name: string, data: string, timeoutMs?: number | undefined | null): Promise<string>
+  /**
+   * Send a request and get a response (async with timeout).
+   *
+   * `correlation_id` rides on the envelope, as for [`EventBus::emit`].
+   */
+  request(
+    name: string,
+    data: string,
+    timeoutMs?: number | undefined | null,
+    correlationId?: string | undefined | null,
+  ): Promise<string>
   /** Check if a pattern matches an event name (wildcard matching via Rust). */
   matchesWildcard(pattern: string, eventName: string): boolean
   /** Get subscription count. */
@@ -372,20 +405,28 @@ export declare function randomHex(len: number): string
 
 /**
  * Parse a GraphQL query using the Rust graphql-parser crate.
- * Returns JSON: { operationType, operationName, fields: [...], errors: [...] }
+ * Returns JSON: { operation_type, operation_name, fields, variables, errors }.
  * Invalid queries are rejected here — they never reach the TypeScript resolver layer.
+ *
+ * The limits are applied while fragments are expanded, so a small document
+ * of nested spreads cannot build a tree of millions of fields first.
  */
 
-export declare function graphqlParse(query: string): string
+export declare function graphqlParse(
+  query: string,
+  options?: GraphqlParseOptions | undefined | null,
+): string
 
 /** Validate a GraphQL query string. Returns JSON array of error strings (empty = valid). */
 
 export declare function graphqlValidate(query: string): string
 
 /**
- * Extract argument scalar types from a GraphQL SDL schema.
- * Returns JSON: `{ "Type.field": { "argName": "ScalarType" } }` for argument
- * coercion in the TypeScript engine.
+ * Extract the declared arguments of every object field from a GraphQL SDL schema.
+ * Returns JSON: `{ "Type.field": { "argName": { type, named_type, required,
+ * default_value } } }` — what the TypeScript engine coerces argument values
+ * with and refuses undeclared or missing arguments by. Throws when the SDL
+ * does not parse.
  */
 
 export declare function graphqlSchemaArgTypes(sdl: string): string
