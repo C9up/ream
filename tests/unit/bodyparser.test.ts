@@ -120,14 +120,16 @@ describe('BodyParserMiddleware — JSON is read only under a JSON media type', (
     expect(ctx.request.raw()).toBe(payload)
   })
 
-  it('keeps a JSON value that is not an object under _body, and malformed JSON as {}', async () => {
+  it('keeps a JSON array under _body, and refuses malformed JSON with a 400', async () => {
     const array = makeCtx('[1,2]', 'application/json')
     await new BodyParserMiddleware().handle(array, noop)
     expect(array.request.body()).toEqual({ _body: [1, 2] })
 
     const broken = makeCtx('{"a":', 'application/json')
-    await new BodyParserMiddleware().handle(broken, noop)
-    expect(broken.request.body()).toEqual({})
+    await expect(new BodyParserMiddleware().handle(broken, noop)).rejects.toMatchObject({
+      status: 400,
+      code: 'E_BODYPARSER_INVALID_JSON',
+    })
   })
 })
 
@@ -321,7 +323,7 @@ describe('BodyParserMiddleware — multipart limits', () => {
       nextCalled = true
     })
     expect(nextCalled).toBe(true)
-    expect([...ctx.request.allFiles().keys()]).toEqual(['f0', 'f1'])
+    expect(Object.keys(ctx.request.allFiles())).toEqual(['f0', 'f1'])
   })
 
   it('nests and collects multipart fields the way a urlencoded body is', async () => {

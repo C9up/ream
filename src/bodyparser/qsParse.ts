@@ -14,7 +14,11 @@
  * Four guards, all of which `qs` also applies:
  *
  *  - **Prototype keys are dropped.** `__proto__[x]=1` in a form body is the
- *    classic prototype-pollution vector; the key never reaches an object.
+ *    classic prototype-pollution vector; the key never reaches an object. So
+ *    is any key with a segment named after an `Object.prototype` member
+ *    (`toString`, `hasOwnProperty`…), as `qs` drops it without
+ *    `allowPrototypes`: kept, it shadowed the method every consumer of the
+ *    input calls.
  *  - **Depth is capped** (`qs` defaults to 5). Beyond it the remainder is kept
  *    as a literal key rather than allocating unbounded nesting.
  *  - **Parameter count is capped** (`qs` defaults to 1000), so a body of a
@@ -49,8 +53,14 @@ export interface QsParseOptions {
   trimWhitespaces?: boolean
 }
 
-/** Keys that must never be written onto an object. */
-const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+/**
+ * Whether a key segment must never be written onto an object: every
+ * `Object.prototype` member (`__proto__`, `constructor`, `toString`,
+ * `hasOwnProperty`…), as `qs` refuses them, plus `prototype`.
+ */
+function isForbiddenSegment(segment: string): boolean {
+  return segment === 'prototype' || Object.hasOwn(Object.prototype, segment)
+}
 
 /**
  * Split `user[address][city]` into `['user', 'address', 'city']`, and
@@ -118,14 +128,15 @@ function assign(
   value: unknown,
   arrayLimit: number,
 ): void {
+  // The whole key is dropped, as `qs` drops it, rather than nesting what
+  // comes before the forbidden segment.
+  if (segments.some(isForbiddenSegment)) return
   let cursor: Container = target
   // Swaps `cursor` inside its parent when an array has to become an object.
   let replace: (next: Container) => void = () => {}
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i] ?? ''
     const last = i === segments.length - 1
-
-    if (FORBIDDEN_KEYS.has(segment)) return
 
     if (Array.isArray(cursor) && isIndex(segment) && Number(segment) >= arrayLimit) {
       const converted = arrayToObject(cursor)
@@ -143,7 +154,8 @@ function assign(
         if (isIndex(segment)) cursor[Number(segment)] = value
         return
       }
-      const existing = cursor[segment]
+      // Own keys only: an inherited member is never an earlier value.
+      const existing = Object.hasOwn(cursor, segment) ? cursor[segment] : undefined
       if (existing === undefined) {
         cursor[segment] = value
         return
@@ -174,7 +186,7 @@ function assign(
     }
 
     const object: Record<string, unknown> = cursor
-    const existing: unknown = object[segment]
+    const existing: unknown = Object.hasOwn(object, segment) ? object[segment] : undefined
     const child: Container = isContainer(existing) ? existing : wantsArray ? [] : {}
     object[segment] = child
     replace = (next) => {
@@ -227,9 +239,13 @@ export function parseQueryString(
  * body's text parts — with the key grammar and the guards of a urlencoded
  * body. A `<select multiple name="tags[]">` keeps every value, and
  * `user[name]` nests, whether or not the form also carries a file input.
+ *
+ * Uploaded files go through it too, as AdonisJS collects them with the same
+ * `FormFields` grammar: `documents[]` becomes a list, `user[avatar]` nests.
+ * The normalisers only ever touch a string value.
  */
 export function parseFormFields(
-  fields: Iterable<{ name: string; value: string }>,
+  fields: Iterable<{ name: string; value: unknown }>,
   options: QsParseOptions = {},
 ): Record<string, unknown> {
   const depth = options.depth ?? DEFAULT_DEPTH

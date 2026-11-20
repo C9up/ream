@@ -9,6 +9,7 @@
 import { readModuleConfig } from '../config/moduleConfig.js'
 import { Exception } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
+import { safeJsonParse } from '../utils/safeJsonParse.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
 import { parseSize } from './parseSize.js'
 import { parseQueryString, type QsParseOptions } from './qsParse.js'
@@ -23,6 +24,15 @@ export interface BodyParserConfig {
   json?: {
     limit?: string | number // e.g. '1mb', '1.5 mb' or a number of bytes
     types?: string[]
+    /**
+     * Accept only an object or an array at the top level; any other JSON
+     * value is refused with a 422. AdonisJS defaults this to `true`.
+     */
+    strict?: boolean
+    /** Turn `''` string leaves into `null`. AdonisJS defaults this to `true`. */
+    convertEmptyStringsToNull?: boolean
+    /** Trim surrounding whitespace off string leaves. AdonisJS defaults this to `true`. */
+    trimWhitespaces?: boolean
   }
   form?: {
     limit?: string | number
@@ -55,6 +65,10 @@ export interface BodyParserConfig {
     /** Maximum number of form fields. AdonisJS default: 1000. */
     maxFields?: number
     types?: string[]
+    /** Turn `''` fields into `null`. AdonisJS defaults this to `true`. */
+    convertEmptyStringsToNull?: boolean
+    /** Trim surrounding whitespace off fields. AdonisJS defaults this to `true`. */
+    trimWhitespaces?: boolean
   }
 }
 
@@ -70,9 +84,20 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
   // AdonisJS define_config: allowedMethods. A body is parsed only for methods
   // that are supposed to carry one.
   allowedMethods: ['POST', 'PUT', 'PATCH', 'DELETE'],
+  // AdonisJS define_config: json. The four types are the ones the native
+  // server's body limits (crates/ream-http limits.rs) already read under the
+  // JSON limit, so none of them is read and then dropped.
   json: {
     limit: '1mb',
-    types: ['application/json', 'application/vnd.api+json'],
+    types: [
+      'application/json',
+      'application/json-patch+json',
+      'application/vnd.api+json',
+      'application/csp-report',
+    ],
+    strict: true,
+    convertEmptyStringsToNull: true,
+    trimWhitespaces: true,
   },
   form: {
     limit: '1mb',
@@ -93,6 +118,8 @@ const DEFAULT_CONFIG: ResolvedBodyParserConfig = {
     maxFiles: 1000,
     maxFields: 1000,
     types: ['multipart/form-data'],
+    convertEmptyStringsToNull: true,
+    trimWhitespaces: true,
   },
 }
 
@@ -159,7 +186,7 @@ export default class BodyParserMiddleware {
     // JSON — parsed here and only here, under one of `json.types`. A body
     // with any other media type (or none) is never read as JSON.
     if (matchesType(contentType, this.#config.json.types)) {
-      ctx.request.setParsedBody(parseJsonBody(rawBody))
+      ctx.request.setParsedBody(parseJsonBody(rawBody, this.#config.json))
     }
 
     // Form URL-encoded
@@ -187,7 +214,10 @@ export default class BodyParserMiddleware {
       const payload = ctx.request.multipart()
       if (payload) {
         this.#assertMultipartWithinLimits(payload.files, payload.fields)
-        const { fields, files } = hydrateMultipartPayload(payload)
+        const { fields, files } = hydrateMultipartPayload(payload, {
+          convertEmptyStringsToNull: this.#config.multipart.convertEmptyStringsToNull,
+          trimWhitespaces: this.#config.multipart.trimWhitespaces,
+        })
         // Fingerprint each file's real type from its magic bytes BEFORE handlers
         // run, so `request.file(field, { extnames })` validates against the
         // detected type (not the attacker-controlled filename/header).
@@ -233,21 +263,93 @@ export default class BodyParserMiddleware {
 }
 
 /**
- * A JSON body as the request body: an object as is, any other JSON value under
- * `_body` (the shape the raw-text parser uses), and `{}` for malformed JSON.
+ * RFC 7159 whitespace, then an object or an array — the `strict` test of
+ * AdonisJS' JSON parser (`strictJSONReg`).
  */
-function parseJsonBody(raw: string): Record<string, unknown> {
+const STRICT_JSON = /^[ \t\n\r]*(\[|\{)/
+
+/**
+ * A JSON body as the request body (AdonisJS `parseJSON`).
+ *
+ * - Malformed JSON is a 400. It used to read as `{}`, so a PATCH or search
+ *   endpoint whose fields are all optional acted on nothing and answered 2xx.
+ * - Under `strict` (the default) only an object or an array is accepted; any
+ *   other value is a 422, as upstream.
+ * - `__proto__` and a `constructor` carrying `prototype` are removed
+ *   ({@link safeJsonParse}, upstream's `safeParse`).
+ * - String leaves go through the normalisers; keys are left alone.
+ *
+ * NAMED DEVIATION — an array (or, with `strict: false`, a scalar) is kept under
+ * `_body`, the shape the raw-text parser uses, where upstream seats the array
+ * itself as the body: ream's request body is a record throughout
+ * (`body()`, `all()`, `input()` merge it with the query string).
+ */
+function parseJsonBody(
+  raw: string,
+  options: Required<NonNullable<BodyParserConfig['json']>>,
+): Record<string, unknown> {
   if (raw.length === 0) return {}
+  if (options.strict && !STRICT_JSON.test(raw)) {
+    throw new Exception('Invalid JSON, only supports object and array', {
+      status: 422,
+      code: 'E_BODYPARSER_INVALID_JSON',
+    })
+  }
   let parsed: unknown
   try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return {}
+    parsed = safeJsonParse(raw)
+  } catch (error) {
+    throw new Exception(error instanceof Error ? error.message : 'Invalid JSON', {
+      status: 400,
+      code: 'E_BODYPARSER_INVALID_JSON',
+    })
   }
+  const normalize = stringNormalizer(options)
+  if (normalize) normalizeStringLeaves(parsed, normalize)
   if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
     return { ...parsed }
   }
   return { _body: parsed }
+}
+
+/** AdonisJS `formBodyNormalizers`, picked by the two switches. */
+function stringNormalizer(options: {
+  convertEmptyStringsToNull: boolean
+  trimWhitespaces: boolean
+}): ((value: string) => string | null) | undefined {
+  const { convertEmptyStringsToNull, trimWhitespaces } = options
+  if (!convertEmptyStringsToNull && !trimWhitespaces) return undefined
+  return (value) => {
+    const trimmed = trimWhitespaces ? value.trim() : value
+    return convertEmptyStringsToNull && trimmed === '' ? null : trimmed
+  }
+}
+
+/**
+ * Run `normalize` over every string leaf in place, in one iterative walk —
+ * AdonisJS `processJSONValues`, including its rule that a value under the
+ * empty key is left alone. A top-level string is not a leaf of anything and
+ * is left as sent, as upstream does.
+ */
+function normalizeStringLeaves(value: unknown, normalize: (value: string) => string | null): void {
+  if (value === null || typeof value !== 'object') return
+  const pending: object[] = [value]
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (Array.isArray(node)) {
+      node.forEach((child: unknown, index) => {
+        if (typeof child === 'string') node[index] = normalize(child)
+        else if (child !== null && typeof child === 'object') pending.push(child)
+      })
+      continue
+    }
+    for (const [key, child] of Object.entries(node)) {
+      if (typeof child === 'string') {
+        if (key !== '') Reflect.set(node, key, normalize(child))
+      } else if (child !== null && typeof child === 'object') {
+        pending.push(child)
+      }
+    }
+  }
 }
 
 /** The one exception every body-size limit raises (AdonisJS parity). */

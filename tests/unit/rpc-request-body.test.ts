@@ -177,3 +177,22 @@ describe('RpcRouter > batch size', () => {
     expect(calls).toHaveLength(50)
   })
 })
+
+describe('RpcRouter > prototype keys in the request', () => {
+  it('drops a __proto__ key from the params, so assigning them cannot swap a prototype', async () => {
+    const rpc = new RpcRouter()
+    let polluted: unknown = 'not called'
+    rpc.method('save', (_ctx, params) => {
+      const target: Record<string, unknown> = {}
+      Object.assign(target, params)
+      polluted = Reflect.get(target, 'isAdmin')
+      return Object.hasOwn(Object(params), '__proto__')
+    })
+    const body = '{"jsonrpc":"2.0","method":"save","params":{"__proto__":{"isAdmin":true}},"id":1}'
+
+    const { payload } = await sendRpc(rpc, body)
+
+    expect(payload).toEqual({ jsonrpc: '2.0', result: false, id: 1 })
+    expect(polluted).toBeUndefined()
+  })
+})

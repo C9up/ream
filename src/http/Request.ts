@@ -7,13 +7,15 @@
  * @implements FR21
  */
 
-import { parseQueryString } from '../bodyparser/qsParse.js'
+import { type FileValidationOptions, MultipartFile } from '../bodyparser/MultipartFile.js'
+import { parseFormFields, parseQueryString } from '../bodyparser/qsParse.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
 import { Macroable } from '../utils/Macroable.js'
 import { getPath, omitPaths, pickPaths } from '../utils/objectPath.js'
 import { Exception } from './Exception.js'
+import { originRelativePath } from './RedirectBuilder.js'
 import type {
   RequestAwareValidator,
   RequestValidationOptions,
@@ -101,7 +103,10 @@ export class Request extends Macroable {
   #original: Dict<unknown> | undefined
   /** Set by {@link updateRawBody}; `raw()` reports it instead of the wire body. */
   #rawBodyOverride: string | undefined
-  #files: Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> = new Map()
+  /** The request cookies, percent-decoded once — see {@link cookies}. */
+  #cookies: Dict | undefined
+  /** Uploads nested by field name, as {@link parseFormFields} nests fields. */
+  #files: Record<string, unknown> = {}
   #validated: unknown
 
   /**
@@ -133,8 +138,10 @@ export class Request extends Macroable {
    * The HTTP method, honouring `_method` form spoofing when enabled (AdonisJS
    * `method`). With spoofing enabled and a real POST, the `_method` field
    * (`PUT`/`PATCH`/`DELETE`) overrides — the classic HTML-form workaround.
-   * Spoofing is OFF by default (opt in via {@link setMethodSpoofing}); routing
-   * always uses {@link intended}.
+   * Spoofing is OFF by default (opt in via {@link setMethodSpoofing}). When it
+   * is on, the kernel matches the route with the spoofed method too, read
+   * from the query string (`?_method=DELETE`) since the body is not parsed
+   * yet at that point — as upstream.
    */
   method(): string {
     if (this.#allowMethodSpoofing && this.intended().toUpperCase() === 'POST') {
@@ -375,9 +382,19 @@ export class Request extends Macroable {
    * (RFC 6265) and ships the result on `RawRequest.cookies`. Test fixtures
    * that don't pre-fill the field fall back to inline parsing of the raw
    * header — same tolerant `;`-split with quoted-value passthrough.
+   *
+   * Names and values are percent-decoded, as AdonisJS' cookie-es `parse`
+   * decodes them: `response` writes both through `encodeURIComponent`, and
+   * the `cookie` crate's `Cookie::parse` decodes nothing. A malformed escape
+   * keeps the raw text instead of throwing.
    */
   cookies(): Dict {
-    if (this.#raw.cookies) return { ...this.#raw.cookies }
+    this.#cookies ??= decodeCookieMap(this.#raw.cookies ?? this.#parseCookieHeader())
+    return { ...this.#cookies }
+  }
+
+  /** The fallback parse of the raw `Cookie:` header, undecoded. */
+  #parseCookieHeader(): Dict {
     const header = this.#raw.headers.cookie
     if (!header) return {}
     const result: Dict = {}
@@ -460,8 +477,8 @@ export class Request extends Macroable {
     defaultValue?: T,
     options?: { encoded?: boolean },
   ): T | null {
-    const cookies = this.#raw.cookies ?? this.cookies()
-    const raw = cookies[name]
+    this.#cookies ??= decodeCookieMap(this.#raw.cookies ?? this.#parseCookieHeader())
+    const raw = Object.hasOwn(this.#cookies, name) ? this.#cookies[name] : undefined
     if (raw === undefined) return defaultValue ?? null
     // Caller's claim about an untyped store, same contract as `input<T>`.
     if (options?.encoded === false) return raw as T
@@ -635,6 +652,13 @@ export class Request extends Macroable {
    * A referrer is attacker-controlled, so redirecting back to it unchecked is
    * an open redirect. The host must be this request's own or one of
    * `allowedHosts`; anything else falls back.
+   *
+   * NAMED DEVIATION — upstream returns the whole validated referrer; this
+   * returns its path and query, so a value fed to a redirect never leaves the
+   * site, even through an allowed host. Leading slashes are collapsed to one:
+   * a same-host referrer such as `http://app.test//evil.com/x` has the path
+   * `//evil.com/x`, which a browser reads as the protocol-relative URL of
+   * another host.
    */
   getPreviousUrl(allowedHosts: string[] = [], fallback = '/'): string {
     const referer = this.header('referer') ?? this.header('referrer')
@@ -647,7 +671,7 @@ export class Request extends Macroable {
     }
     const trusted = new Set([this.host(), ...allowedHosts])
     if (!trusted.has(parsed.host)) return fallback
-    return `${parsed.pathname}${parsed.search}`
+    return `${originRelativePath(parsed.pathname)}${parsed.search}`
   }
 
   // ─── Content negotiation ──────────────────────────────────
@@ -990,31 +1014,39 @@ export class Request extends Macroable {
 
   // ─── Files ─────────────────────────────────────────────────
 
-  /** Get an uploaded file by field name. */
-  file(
-    fieldName: string,
-    options?: import('../bodyparser/MultipartFile.js').FileValidationOptions,
-  ): import('../bodyparser/MultipartFile.js').MultipartFile | null {
-    const [file] = this.#files.get(fieldName) ?? []
-    if (file === undefined) return null
+  /**
+   * An uploaded file by path (AdonisJS `file`): `avatar`, `user.avatar` or
+   * `documents[1]`. A path holding several uploads (`documents[]`) answers
+   * the first one; a path holding no upload answers `null`.
+   */
+  file(key: string, options?: FileValidationOptions): MultipartFile | null {
+    const found = getPath(this.#files, key)
+    const file = Array.isArray(found) ? found[0] : found
+    if (!(file instanceof MultipartFile)) return null
     if (options) file.validate(options)
     return file
   }
 
-  /** Get all uploaded files for a field name. */
-  files(
-    fieldName: string,
-    options?: import('../bodyparser/MultipartFile.js').FileValidationOptions,
-  ): import('../bodyparser/MultipartFile.js').MultipartFile[] {
-    const files = this.#files.get(fieldName) ?? []
+  /**
+   * Every upload under a path (AdonisJS `files`) — always a list, so the
+   * `<input type="file" name="documents[]" multiple>` markup is read with
+   * `files('documents')`.
+   */
+  files(key: string, options?: FileValidationOptions): MultipartFile[] {
+    const found = getPath(this.#files, key)
+    const candidates: unknown[] = Array.isArray(found) ? found : [found]
+    const files = candidates.filter((file) => file instanceof MultipartFile)
     if (options) {
       for (const f of files) f.validate(options)
     }
     return files
   }
 
-  /** Get all uploaded files. */
-  allFiles(): Map<string, import('../bodyparser/MultipartFile.js').MultipartFile[]> {
+  /**
+   * Every upload, nested the way the field names say (AdonisJS `allFiles`):
+   * `{ documents: [file, file], user: { avatar: file } }`.
+   */
+  allFiles(): Record<string, unknown> {
     return this.#files
   }
 
@@ -1029,14 +1061,16 @@ export class Request extends Macroable {
     return this.#raw.multipart
   }
 
-  /** @internal Set files (called by BodyParser middleware). */
-  setFiles(files: import('../bodyparser/MultipartFile.js').MultipartFile[]): void {
-    this.#files.clear()
-    for (const file of files) {
-      const existing = this.#files.get(file.fieldName) ?? []
-      existing.push(file)
-      this.#files.set(file.fieldName, existing)
-    }
+  /**
+   * @internal Set files (called by BodyParser middleware). Nested with the
+   * grammar and the guards fields get; the part count is already bounded
+   * natively (`maxFiles`), so no parameter cap applies on top of it.
+   */
+  setFiles(files: MultipartFile[]): void {
+    this.#files = parseFormFields(
+      files.map((file) => ({ name: file.fieldName, value: file })),
+      { parameterLimit: Number.POSITIVE_INFINITY },
+    )
   }
 
   // ─── Internals ────────────────────────────────────────────
@@ -1136,6 +1170,29 @@ export class Request extends Macroable {
     this.#assertBodyKept()
     this.#parsedBody = {}
   }
+}
+
+/**
+ * cookie-es `decode`: percent-decode a cookie name or value that holds a `%`,
+ * keeping it raw when the escape is malformed.
+ */
+function decodeCookieComponent(value: string): string {
+  if (!value.includes('%')) return value
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+/** Every cookie name and value percent-decoded; the first of two equal names wins. */
+function decodeCookieMap(cookies: Dict): Dict {
+  const decoded: Dict = {}
+  for (const [name, value] of Object.entries(cookies)) {
+    const key = decodeCookieComponent(name)
+    if (!Object.hasOwn(decoded, key)) decoded[key] = decodeCookieComponent(value)
+  }
+  return decoded
 }
 
 /**

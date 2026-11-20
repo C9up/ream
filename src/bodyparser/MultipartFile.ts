@@ -63,7 +63,7 @@ import { Readable } from 'node:stream'
 import { errorCode } from '../helpers/errors.js'
 import { Macroable } from '../utils/Macroable.js'
 import { parseSize } from './parseSize.js'
-import { parseFormFields } from './qsParse.js'
+import { parseFormFields, type QsParseOptions } from './qsParse.js'
 
 export interface FileValidationOptions {
   /** Largest accepted size: bytes, or a value such as `'2mb'` or `'1.5 mb'`. */
@@ -432,22 +432,33 @@ function isSafeFilename(name: string): boolean {
  * see `crates/ream-http/src/multipart.rs`) handles the actual RFC 7578
  * parsing — JS just decodes the base64 envelope and wraps the result.
  */
-export function hydrateMultipartPayload(payload: {
-  fields: Array<{ name: string; value: string }>
-  files: Array<{
-    fieldName: string
-    clientName: string
-    contentType: string
-    size: number
-    contentB64: string
-  }>
-}): { fields: Record<string, unknown>; files: MultipartFile[] } {
+export function hydrateMultipartPayload(
+  payload: {
+    fields: Array<{ name: string; value: string }>
+    files: Array<{
+      fieldName: string
+      clientName: string
+      contentType: string
+      size: number
+      contentB64: string
+    }>
+  },
+  options: Pick<QsParseOptions, 'convertEmptyStringsToNull' | 'trimWhitespaces'> = {},
+): {
+  fields: Record<string, unknown>
+  files: MultipartFile[]
+} {
   // Nested and collected exactly like a urlencoded body: `tags[]` repeated is
   // an array, `user[name]` an object. Flat, a repeated name kept only its
   // last value once a file input was added to the form.
   // The multipart part count is already bounded natively (`maxFields`), so
-  // no parameter cap applies on top of it here.
-  const fields = parseFormFields(payload.fields, { parameterLimit: Number.POSITIVE_INFINITY })
+  // no parameter cap applies on top of it here. The normalisers are the body
+  // parser's `multipart` switches (AdonisJS applies them to multipart fields
+  // as it does to form fields).
+  const fields = parseFormFields(payload.fields, {
+    ...options,
+    parameterLimit: Number.POSITIVE_INFINITY,
+  })
   const files = payload.files.map(
     (f) =>
       new MultipartFile({

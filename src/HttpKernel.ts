@@ -10,6 +10,7 @@
  * @implements FR21, FR22, FR23, FR24
  */
 
+import { parseQueryString } from './bodyparser/qsParse.js'
 import type { Container } from './container/Container.js'
 import { debugHttp } from './debug.js'
 import { hotReloadCount } from './dev/hmr.js'
@@ -181,11 +182,18 @@ export function createHttpKernel(
     // is documented "lowercased"). Looking up `host` is therefore the
     // only correct key; the previous PascalCase fallback was dead code.
     const host = reqData.headers.host
-    const match = config.router.match(reqData.method, reqData.path, host)
+    // The method routing uses — the spoofed one when spoofing is on, as
+    // AdonisJS matches with `ctx.request.method()`. Matched with the wire
+    // method, `POST /posts/1?_method=DELETE` never reached the DELETE route.
+    const method =
+      config.allowMethodSpoofing === true
+        ? spoofedMethod(reqData.method, reqData.query)
+        : reqData.method
+    const match = config.router.match(method, reqData.path, host)
     if (debugHttp.enabled) {
       debugHttp(
         '%s %s -> %s',
-        reqData.method,
+        method,
         reqData.path,
         match ? (match.route.name ?? match.route.path) : 'no match',
       )
@@ -257,7 +265,7 @@ export function createHttpKernel(
       //    Server MW → [route match check] → Router MW → Route named MW → Route inline MW → Guards → Handler
       const coreHandler: MiddlewareFunction = async (innerCtx) => {
         if (!match) {
-          throw new E_ROUTE_NOT_FOUND(reqData.method, reqData.path)
+          throw new E_ROUTE_NOT_FOUND(method, reqData.path)
         }
 
         const hotAt = hotReloadCount()
@@ -465,6 +473,19 @@ function createControllerHandler(
     }
     await Reflect.apply(method, instance, [ctx])
   }
+}
+
+/**
+ * The method a spoofing-enabled request is routed with — what
+ * `request.method()` answers once spoofing is on: a POST carrying a non-empty
+ * `_method` takes it, upper-cased. Read from the query string only, as
+ * upstream does in effect: its route finder runs before the router middleware
+ * that parses the body, so `_method` belongs in the form's `action` URL.
+ */
+function spoofedMethod(method: string, query: string): string {
+  if (method.toUpperCase() !== 'POST') return method
+  const spoofed = parseQueryString(query)._method
+  return typeof spoofed === 'string' && spoofed !== '' ? spoofed.toUpperCase() : method
 }
 
 /** A controller class's prototype, where its decorators keep their metadata. */
