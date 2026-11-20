@@ -88,7 +88,7 @@ export class Env<Values extends Record<string, unknown>> {
     appRoot: URL,
     schema: S,
   ): Promise<Env<EnvRecord<S>>> {
-    loadEnvFiles(appRoot, { skipEnvLocal: normalizeNodeEnv(process.env.NODE_ENV) === 'test' })
+    await loadEnvFiles(appRoot, { skipEnvLocal: normalizeNodeEnv(process.env.NODE_ENV) === 'test' })
 
     return new Env(Env.rules(schema).validate(process.env))
   }

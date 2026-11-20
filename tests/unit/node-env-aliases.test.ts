@@ -140,26 +140,26 @@ describe('loadEnvFiles > picks the file the deployment actually wrote', () => {
     for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
-  it('loads .env.production when NODE_ENV=prod', () => {
+  it('loads .env.production when NODE_ENV=prod', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ream-alias-'))
     created.push(dir)
     writeFileSync(join(dir, '.env.production'), 'REAM_ALIAS_PROBE=from_production\n')
     process.env.NODE_ENV = 'prod'
 
-    loadEnvFiles(pathToFileURL(`${dir}/`))
+    await loadEnvFiles(pathToFileURL(`${dir}/`))
 
     // Looking for `.env.prod` would have found nothing, and the deployment's
     // real configuration would never load.
     expect(process.env.REAM_ALIAS_PROBE).toBe('from_production')
   })
 
-  it('still loads .env.staging for an unrecognised environment', () => {
+  it('still loads .env.staging for an unrecognised environment', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ream-alias-'))
     created.push(dir)
     writeFileSync(join(dir, '.env.staging'), 'REAM_ALIAS_PROBE=from_staging\n')
     process.env.NODE_ENV = 'staging'
 
-    loadEnvFiles(pathToFileURL(`${dir}/`))
+    await loadEnvFiles(pathToFileURL(`${dir}/`))
 
     expect(process.env.REAM_ALIAS_PROBE).toBe('from_staging')
   })

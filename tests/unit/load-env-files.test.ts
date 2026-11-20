@@ -38,70 +38,70 @@ describe('loadEnvFiles', () => {
     return pathToFileURL(`${dir}/`)
   }
 
-  it('loads .env.test over .env when NODE_ENV is test', () => {
+  it('loads .env.test over .env when NODE_ENV is test', async () => {
     process.env.NODE_ENV = 'test'
     const root = project({
       '.env': 'REAM_LEF_DB=dev\nREAM_LEF_ONLY_BASE=base\n',
       '.env.test': 'REAM_LEF_DB=test\n',
     })
 
-    loadEnvFiles(root, { skipEnvLocal: true })
+    await loadEnvFiles(root, { skipEnvLocal: true })
 
     expect(process.env.REAM_LEF_DB).toBe('test')
     // `.env` still supplies what `.env.test` does not override.
     expect(process.env.REAM_LEF_ONLY_BASE).toBe('base')
   })
 
-  it('leaves .env alone when NODE_ENV is not test', () => {
+  it('leaves .env alone when NODE_ENV is not test', async () => {
     process.env.NODE_ENV = 'development'
     const root = project({
       '.env': 'REAM_LEF_DB=dev\n',
       '.env.test': 'REAM_LEF_DB=test\n',
     })
 
-    loadEnvFiles(root)
+    await loadEnvFiles(root)
 
     expect(process.env.REAM_LEF_DB).toBe('dev')
   })
 
-  it('skips .env.local for a test run, so local overrides do not leak in', () => {
+  it('skips .env.local for a test run, so local overrides do not leak in', async () => {
     process.env.NODE_ENV = 'test'
     const root = project({
       '.env': 'REAM_LEF_LOCAL=base\n',
       '.env.local': 'REAM_LEF_LOCAL=from_local\n',
     })
 
-    loadEnvFiles(root, { skipEnvLocal: true })
+    await loadEnvFiles(root, { skipEnvLocal: true })
 
     expect(process.env.REAM_LEF_LOCAL).toBe('base')
   })
 
-  it('reads .env.local otherwise', () => {
+  it('reads .env.local otherwise', async () => {
     process.env.NODE_ENV = 'development'
     const root = project({
       '.env': 'REAM_LEF_LOCAL=base\n',
       '.env.local': 'REAM_LEF_LOCAL=from_local\n',
     })
 
-    loadEnvFiles(root)
+    await loadEnvFiles(root)
 
     expect(process.env.REAM_LEF_LOCAL).toBe('from_local')
   })
 
-  it('never overrides what the shell or CI already set', () => {
+  it('never overrides what the shell or CI already set', async () => {
     process.env.NODE_ENV = 'test'
     process.env.REAM_LEF_SHELL = 'from_shell'
     const root = project({ '.env.test': 'REAM_LEF_SHELL=from_file\n' })
 
-    loadEnvFiles(root, { skipEnvLocal: true })
+    await loadEnvFiles(root, { skipEnvLocal: true })
 
     expect(process.env.REAM_LEF_SHELL).toBe('from_shell')
   })
 
-  it('is a no-op when the project has no env files at all', () => {
+  it('is a no-op when the project has no env files at all', async () => {
     process.env.NODE_ENV = 'test'
     const root = project({})
 
-    expect(() => loadEnvFiles(root, { skipEnvLocal: true })).not.toThrow()
+    await expect(loadEnvFiles(root, { skipEnvLocal: true })).resolves.toBeUndefined()
   })
 })

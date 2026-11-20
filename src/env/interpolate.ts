@@ -3,21 +3,78 @@
  * applied by {@link loadEnvFiles} as each `.env` value is loaded.
  *
  * - `$VAR` / `${VAR}` are replaced with the value of `VAR` (looked up against
- *   the values already loaded + `process.env`). A missing reference expands to
- *   an empty string. `\$` is a literal dollar sign (escape).
- * - `identifier:rest` — when `identifier` was registered via
- *   {@link defineIdentifier}, the registered callback transforms `rest`
- *   (e.g. a `base64:` decoder). Unregistered prefixes (like `postgres://…`)
- *   are left untouched.
+ *   `process.env` + the file's own values, themselves interpolated). A missing
+ *   reference expands to an empty string. `\$` is a literal dollar sign.
+ * - `identifier:rest` — when `identifier` is registered, its resolver turns
+ *   `rest` into the final value. `file` is built in: `KEY=file:secrets/db`
+ *   reads `secrets/db` relative to the application root (an absolute path is
+ *   allowed), the way Docker/Kubernetes secrets are fed to an app.
+ *   `identifier\:rest` is the escape: it yields the literal `identifier:rest`.
+ *   Unregistered prefixes (like `postgres://…`) are left untouched.
  */
 
-/** Transform the remainder of an `identifier:rest` value into its final form. */
-export type IdentifierResolver = (value: string) => string
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { ReamError } from '../errors/ReamError.js'
 
-const identifiers = new Map<string, IdentifierResolver>()
+/**
+ * Turn the remainder of an `identifier:rest` value into its final form.
+ * Receives the variable's name and the application root, as AdonisJS's
+ * resolvers do; may be async (the loader awaits it).
+ */
+export type IdentifierResolver = (
+  value: string,
+  key: string,
+  appRoot: URL,
+) => string | Promise<string>
 
-/** Register an identifier resolver (AdonisJS `Env.defineIdentifier`). */
+/**
+ * The built-in `file:` identifier (AdonisJS `EnvParser`): the contents of the
+ * named file, verbatim — not trimmed, as upstream. Synchronous on purpose: a
+ * plain `.env` then loads without a single await, so a caller that does not
+ * await {@link loadEnvFiles} still sees every value.
+ */
+function readFileIdentifier(value: string, key: string, appRoot: URL): string {
+  const fileUrl = new URL(value, appRoot)
+  try {
+    return readFileSync(fileUrl, 'utf8')
+  } catch (error) {
+    if (isMissingFile(error)) {
+      throw new ReamError(
+        'E_ENV_FILE_NOT_FOUND',
+        `Cannot process "${key}" env variable. Unable to locate file "${fileURLToPath(fileUrl)}"`,
+        {
+          context: { key, path: fileURLToPath(fileUrl) },
+          hint: 'A `file:` value is read relative to the application root; an absolute path is allowed.',
+        },
+      )
+    }
+    throw error
+  }
+}
+
+function isMissingFile(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+}
+
+const identifiers = new Map<string, IdentifierResolver>([['file', readFileIdentifier]])
+
+/**
+ * Register an identifier resolver (AdonisJS `Env.defineIdentifier`). A name
+ * already taken throws `E_IDENTIFIER_ALREADY_DEFINED`: two packages silently
+ * replacing each other's decoder is the failure this prevents.
+ */
 export function defineIdentifier(name: string, resolver: IdentifierResolver): void {
+  if (identifiers.has(name)) {
+    throw new ReamError(
+      'E_IDENTIFIER_ALREADY_DEFINED',
+      `The identifier "${name}" is already defined`,
+      {
+        context: { identifier: name },
+        hint: 'Use defineIdentifierIfMissing() to register only when the name is free, or removeIdentifier() first.',
+      },
+    )
+  }
   identifiers.set(name, resolver)
 }
 
@@ -34,23 +91,37 @@ export function removeIdentifier(name: string): void {
 const REFERENCE = /(\\)?\$(?:\{([^}]+)\}|([A-Za-z_][A-Za-z0-9_]*))/g
 
 /**
- * Expand `$VAR` / `${VAR}` references and apply an identifier prefix. `lookup`
- * resolves a referenced variable name to its current value (or undefined).
+ * Expand `$VAR` / `${VAR}` references. `lookup` resolves a referenced variable
+ * name to its value (or undefined, which expands to an empty string).
  */
 export function interpolate(value: string, lookup: (name: string) => string | undefined): string {
-  const substituted = value.replace(REFERENCE, (full, escaped, braced, bare) => {
+  return value.replace(REFERENCE, (full, escaped, braced, bare) => {
     // `\$FOO` → literal `$FOO` (drop only the escaping backslash).
     if (escaped) return full.slice(1)
     const name = braced ?? bare
-    return lookup(name) ?? ''
+    return lookup(name.trim()) ?? ''
   })
+}
 
-  const prefixed = /^([A-Za-z_][A-Za-z0-9_]*):([\s\S]*)$/.exec(substituted)
-  // Both groups are required by the pattern, so a match carries both.
-  const [, identifier, rest] = prefixed ?? []
-  if (identifier !== undefined && rest !== undefined) {
-    const resolver = identifiers.get(identifier)
-    if (resolver) return resolver(rest)
+/**
+ * Apply the registered identifier `value` starts with, if any: `id:rest` goes
+ * through the resolver, the escape `id\:rest` becomes the literal `id:rest`,
+ * anything else is returned as is. Registration order decides between two
+ * identifiers that both match, as upstream.
+ */
+export function applyIdentifier(
+  value: string,
+  key: string,
+  appRoot: URL,
+): string | Promise<string> {
+  if (!value.includes(':')) return value
+  for (const [identifier, resolver] of identifiers) {
+    if (value.startsWith(`${identifier}:`)) {
+      return resolver(value.slice(identifier.length + 1), key, appRoot)
+    }
+    if (value.startsWith(`${identifier}\\:`)) {
+      return identifier + value.slice(identifier.length + 1)
+    }
   }
-  return substituted
+  return value
 }

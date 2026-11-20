@@ -34,66 +34,66 @@ describe('env > which directory the files come from', () => {
 
   const dir = (path: string) => pathToFileURL(`${path}/`)
 
-  it('reads beside the application when nothing says otherwise', () => {
+  it('reads beside the application when nothing says otherwise', async () => {
     writeFileSync(join(built, '.env'), 'FROM_BUILD=yes\n')
-    loadEnvFiles(dir(built))
+    await loadEnvFiles(dir(built))
     expect(process.env.FROM_BUILD).toBe('yes')
   })
 
-  it('reads the directory ENV_PATH names', () => {
+  it('reads the directory ENV_PATH names', async () => {
     writeFileSync(join(root, '.env'), 'FROM_ROOT=yes\n')
     process.env.ENV_PATH = root
     // The app root is the build output, which has no env file at all — the
     // situation `ream start` is in.
-    loadEnvFiles(dir(built))
+    await loadEnvFiles(dir(built))
     expect(process.env.FROM_ROOT).toBe('yes')
   })
 
-  it('takes the override over the application directory', () => {
+  it('takes the override over the application directory', async () => {
     writeFileSync(join(built, '.env'), 'WHICH=build\n')
     writeFileSync(join(root, '.env'), 'WHICH=root\n')
     process.env.ENV_PATH = root
-    loadEnvFiles(dir(built))
+    await loadEnvFiles(dir(built))
     expect(process.env.WHICH).toBe('root')
     delete process.env.WHICH
   })
 
-  it('ignores an empty override rather than reading the working directory', () => {
+  it('ignores an empty override rather than reading the working directory', async () => {
     // An unset variable arrives as the empty string through a shell often
     // enough that treating it as "the current directory" would read whichever
     // project the terminal happened to be in.
     writeFileSync(join(built, '.env'), 'FROM_BUILD=yes\n')
     process.env.ENV_PATH = '   '
-    loadEnvFiles(dir(built))
+    await loadEnvFiles(dir(built))
     expect(process.env.FROM_BUILD).toBe('yes')
   })
 
-  it('takes a directory with or without its trailing slash', () => {
+  it('takes a directory with or without its trailing slash', async () => {
     writeFileSync(join(root, '.env'), 'FROM_ROOT=yes\n')
     process.env.ENV_PATH = `${root}/`
-    loadEnvFiles(dir(built))
+    await loadEnvFiles(dir(built))
     expect(process.env.FROM_ROOT).toBe('yes')
   })
 
-  it('refuses a directory that holds no env file at all', () => {
+  it('refuses a directory that holds no env file at all', async () => {
     // Upstream raises here, and for the reason silence would be wrong: the
     // variable is somebody saying where the file IS. A typo would otherwise
     // start the app on whatever defaults were around.
     process.env.ENV_PATH = root
-    expect(() => loadEnvFiles(dir(built))).toThrow(/ENV_PATH/)
+    await expect(loadEnvFiles(dir(built))).rejects.toThrow(/ENV_PATH/)
   })
 
-  it('stays silent about a missing file when nobody named a directory', () => {
+  it('stays silent about a missing file when nobody named a directory', async () => {
     // An application may have no env file at all, with every value coming
     // from the environment.
-    expect(() => loadEnvFiles(dir(built))).not.toThrow()
+    await expect(loadEnvFiles(dir(built))).resolves.toBeUndefined()
   })
 
-  it('still lets the shell win over every file', () => {
+  it('still lets the shell win over every file', async () => {
     writeFileSync(join(root, '.env'), 'WHICH=root\n')
     process.env.ENV_PATH = root
     process.env.WHICH = 'shell'
-    loadEnvFiles(dir(built))
+    await loadEnvFiles(dir(built))
     expect(process.env.WHICH).toBe('shell')
     delete process.env.WHICH
   })

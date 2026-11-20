@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Env } from '../../src/env/Env.js'
-import { defineIdentifier, interpolate, removeIdentifier } from '../../src/env/interpolate.js'
+import {
+  applyIdentifier,
+  defineIdentifier,
+  interpolate,
+  removeIdentifier,
+} from '../../src/env/interpolate.js'
 import { Secret } from '../../src/env/Secret.js'
 
 const NOWHERE = new URL('file:///ream-env-tests-nonexistent/')
@@ -96,9 +101,9 @@ describe('env interpolation', () => {
   it('applies a registered identifier resolver', () => {
     defineIdentifier('base64', (v) => Buffer.from(v, 'base64').toString('utf8'))
     try {
-      expect(interpolate('base64:aGVsbG8=', () => undefined)).toBe('hello')
+      expect(applyIdentifier('base64:aGVsbG8=', 'KEY', NOWHERE)).toBe('hello')
       // Unregistered prefixes (e.g. a postgres URL) are left untouched.
-      expect(interpolate('postgres://u:p@h/db', () => undefined)).toBe('postgres://u:p@h/db')
+      expect(applyIdentifier('postgres://u:p@h/db', 'KEY', NOWHERE)).toBe('postgres://u:p@h/db')
     } finally {
       removeIdentifier('base64')
     }

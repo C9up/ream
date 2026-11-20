@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseEnv } from 'node:util'
-import { interpolate } from './interpolate.js'
+import { ReamError } from '../errors/ReamError.js'
+import { applyIdentifier, interpolate } from './interpolate.js'
 import { normalizeNodeEnv } from './nodeEnv.js'
 
 /**
@@ -62,11 +63,23 @@ function envDirectory(appRoot: URL): URL {
  * always overrides the files. Missing files are skipped silently. Uses Node's
  * built-in parser — no dependency.
  *
- * @param appRoot Directory URL the `.env*` files are resolved against.
+ * Each value is interpolated (`$VAR` / `${VAR}`, resolved through the
+ * referenced value's OWN interpolation, so declaration order does not matter),
+ * then its identifier is applied (`file:`, or one an app registered).
+ *
+ * Async because an identifier resolver may be (AdonisJS accepts
+ * `Promise<string> | string`). Only an async resolver result is awaited, so a
+ * file without one is loaded before the returned promise is even looked at.
+ *
+ * @param appRoot Directory URL the application lives in: the `.env*` files are
+ *   resolved against it (or `ENV_PATH`), and a `file:` path against it.
  * @param options.skipEnvLocal Skip `.env.local` (the test flow does, so a
  *   developer's local overrides don't leak into tests).
  */
-export function loadEnvFiles(appRoot: URL, options: { skipEnvLocal?: boolean } = {}): void {
+export async function loadEnvFiles(
+  appRoot: URL,
+  options: { skipEnvLocal?: boolean } = {},
+): Promise<void> {
   const directory = envDirectory(appRoot)
   let found = false
   for (const name of envFileNames(options)) {
@@ -78,16 +91,12 @@ export function loadEnvFiles(appRoot: URL, options: { skipEnvLocal?: boolean } =
     }
     found = true
     const parsed = parseEnv(contents)
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value !== 'string' || process.env[key] !== undefined) continue
-      // Interpolate `$VAR`/`${VAR}` against process.env then this file's own
-      // (already-loaded) values, and apply any `identifier:` resolver.
-      process.env[key] = interpolate(value, (name) => {
-        const fromProcess = process.env[name]
-        if (fromProcess !== undefined) return fromProcess
-        const fromFile = parsed[name]
-        return typeof fromFile === 'string' ? fromFile : undefined
-      })
+    const references = referenceResolver(parsed)
+    for (const key of Object.keys(parsed)) {
+      if (process.env[key] !== undefined) continue
+      const interpolated = references(key)
+      const resolved = applyIdentifier(interpolated, key, appRoot)
+      process.env[key] = typeof resolved === 'string' ? resolved : await resolved
     }
   }
 
@@ -104,4 +113,46 @@ export function loadEnvFiles(appRoot: URL, options: { skipEnvLocal?: boolean } =
       `ENV_PATH points at ${process.env.ENV_PATH}, which holds none of ${envFileNames(options).join(', ')}`,
     )
   }
+}
+
+/**
+ * Interpolate a file's values the way AdonisJS's `EnvParser.#getValue` does: a
+ * reference reads `process.env` as it stood before this file (the shell wins),
+ * else the referenced value of the same file, ITSELF interpolated — so
+ * `URL=$USER_X@host` sees `USER_X=${BASE}_admin` as `app_admin` whichever
+ * order the lines come in.
+ *
+ * Memoised, and guarded against cycles: upstream recurses until the stack
+ * overflows on `A=$B` / `B=$A`; ream names the loop instead.
+ */
+function referenceResolver(parsed: Record<string, string | undefined>): (key: string) => string {
+  const before = { ...process.env }
+  const done = new Map<string, string>()
+  const inProgress = new Set<string>()
+
+  const interpolated = (key: string, chain: string[]): string => {
+    const known = done.get(key)
+    if (known !== undefined) return known
+    if (inProgress.has(key)) {
+      throw new ReamError(
+        'E_ENV_CIRCULAR_REFERENCE',
+        `Env variable "${key}" references itself: ${[...chain, key].join(' -> ')}`,
+        { context: { key }, hint: 'Break the loop: one of these variables needs a literal value.' },
+      )
+    }
+    const raw = parsed[key]
+    if (raw === undefined) return ''
+    inProgress.add(key)
+    const value = interpolate(raw, (name) => {
+      const fromShell = before[name]
+      if (fromShell) return fromShell
+      if (parsed[name]) return interpolated(name, [...chain, key])
+      return process.env[name]
+    })
+    inProgress.delete(key)
+    done.set(key, value)
+    return value
+  }
+
+  return (key) => interpolated(key, [])
 }
