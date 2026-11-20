@@ -19,7 +19,7 @@
 //! time.
 
 use crate::registry::{ObservabilityHook, RegistryMap, TaskPayload};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::runtime::Runtime;
@@ -123,7 +123,7 @@ fn dispatch_due_tasks(
     registry: &Arc<Mutex<RegistryMap>>,
     hook: &Arc<RwLock<Option<Arc<dyn ObservabilityHook>>>>,
 ) {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let mut due: Vec<(String, Arc<dyn crate::registry::TaskInvoker>, TaskPayload)> = Vec::new();
     let mut poisoned_recovered = false;
 
@@ -142,17 +142,17 @@ fn dispatch_due_tasks(
             if task.next_run <= now {
                 let payload = TaskPayload {
                     task_name: task.name.clone(),
-                    scheduled_for_ms: task.next_run.timestamp_millis(),
+                    scheduled_for_ms: task.next_run.as_millisecond(),
                 };
                 due.push((task.name.clone(), Arc::clone(&task.invoker), payload));
                 // Advance next_run past `now`. If the schedule has no
-                // future fire (theoretical — cron 5-field grammar always
-                // produces one for valid expressions), park the task at
-                // DateTime::MAX_UTC so it never re-fires instead of
+                // future fire (past the parser's search horizon, the end of
+                // 2100), park the task at
+                // `Timestamp::MAX` so it never re-fires instead of
                 // hot-looping on the past `next_run`.
                 match task.schedule.next_after(now) {
                     Some(next) => task.next_run = next,
-                    None => task.next_run = DateTime::<Utc>::MAX_UTC,
+                    None => task.next_run = Timestamp::MAX,
                 }
             }
         }

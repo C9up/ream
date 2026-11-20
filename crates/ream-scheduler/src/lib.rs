@@ -18,7 +18,7 @@ mod ticker;
 pub use parser::{parse_cron, Schedule};
 pub use registry::{ObservabilityHook, TaskInvoker, TaskPayload};
 
-use chrono::Utc;
+use jiff::Timestamp;
 use ream_napi_core::ReamError;
 use registry::{duplicate_task_error, RegisteredTask, RegistryMap};
 use std::sync::{Arc, Mutex, RwLock};
@@ -29,9 +29,9 @@ use ticker::Ticker;
 /// # Timezone
 ///
 /// All schedules are evaluated in **UTC**. The scheduler computes the
-/// next fire instant via `chrono::Utc::now()` and `Schedule::next_after`
-/// on UTC datetimes. A cron expression such as `"0 9 * * *"` fires at
-/// 09:00 UTC, not 09:00 local. Local-time conversion, if required, is
+/// next fire instant via `Timestamp::now()` and `Schedule::next_after`,
+/// which reads every field in UTC. A cron expression such as
+/// `"0 9 * * *"` fires at 09:00 UTC, not 09:00 local. Local-time conversion, if required, is
 /// the responsibility of the caller (typically the TypeScript surface
 /// in Story 28.2, which can translate a user-declared local cron to its
 /// UTC equivalent before calling `register`).
@@ -67,7 +67,7 @@ impl RustScheduler {
     /// `INVALID_CRON` if `cron_expr` is malformed.
     ///
     /// Missed fires after a runtime stall are dropped, not replayed —
-    /// the ticker advances `next_run` past `Utc::now()` at fire time.
+    /// the ticker advances `next_run` past `Timestamp::now()` at fire time.
     /// See `ticker.rs` module-level "Missed-fire semantics".
     pub fn register(
         &self,
@@ -77,7 +77,7 @@ impl RustScheduler {
     ) -> Result<(), ReamError> {
         let name = name.into();
         let schedule = parser::parse_cron(cron_expr)?;
-        let task = RegisteredTask::new(name.clone(), schedule, invoker, Utc::now())?;
+        let task = RegisteredTask::new(name.clone(), schedule, invoker, Timestamp::now())?;
 
         let mut guard = self
             .registry
@@ -106,7 +106,7 @@ impl RustScheduler {
             .registry
             .lock()
             .map_err(|_| ReamError::new("REGISTRY_POISONED", "Registry mutex poisoned"))?;
-        Ok(guard.get(name).map(|t| t.next_run.timestamp_millis()))
+        Ok(guard.get(name).map(|t| t.next_run.as_millisecond()))
     }
 
     /// Install (or replace) the panic observability hook.
@@ -204,7 +204,7 @@ mod tests {
         });
         scheduler.register("job", "*/1 * * * *", invoker).unwrap();
         let next = scheduler.next_run("job").unwrap().expect("has next");
-        assert!(next > Utc::now().timestamp_millis());
+        assert!(next > Timestamp::now().as_millisecond());
     }
 
     #[test]
@@ -339,7 +339,7 @@ mod tests {
         // manufacturing a registry entry whose next_run is already in
         // the past. This avoids any real-time waiting.
         use crate::registry::{RegisteredTask, RegistryMap};
-        use chrono::Duration as ChronoDuration;
+        use jiff::SignedDuration;
 
         let registry: Arc<Mutex<RegistryMap>> = Arc::new(Mutex::new(RegistryMap::new()));
         let hook: Arc<RwLock<Option<Arc<dyn ObservabilityHook>>>> = Arc::new(RwLock::new(None));
@@ -354,18 +354,19 @@ mod tests {
             count: Arc::clone(&counter),
         });
 
-        let past = Utc::now() - ChronoDuration::seconds(5);
+        let past = Timestamp::now() - SignedDuration::from_secs(5);
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
             let mut t1 =
-                RegisteredTask::new("boom".into(), schedule, panicker, Utc::now()).unwrap();
+                RegisteredTask::new("boom".into(), schedule, panicker, Timestamp::now()).unwrap();
             t1.next_run = past;
             guard.insert("boom".into(), t1);
 
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
             let mut t2 =
-                RegisteredTask::new("counter".into(), schedule, counting, Utc::now()).unwrap();
+                RegisteredTask::new("counter".into(), schedule, counting, Timestamp::now())
+                    .unwrap();
             t2.next_run = past;
             guard.insert("counter".into(), t2);
         }
@@ -425,8 +426,9 @@ mod tests {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
             let mut t =
-                RegisteredTask::new("flapper".into(), schedule, alternating, Utc::now()).unwrap();
-            t.next_run = Utc::now() - chrono::Duration::seconds(5);
+                RegisteredTask::new("flapper".into(), schedule, alternating, Timestamp::now())
+                    .unwrap();
+            t.next_run = Timestamp::now() - jiff::SignedDuration::from_secs(5);
             guard.insert("flapper".into(), t);
         }
 
@@ -436,7 +438,7 @@ mod tests {
             {
                 let mut guard = registry.lock().unwrap();
                 if let Some(t) = guard.get_mut("flapper") {
-                    t.next_run = Utc::now() - chrono::Duration::seconds(5);
+                    t.next_run = Timestamp::now() - jiff::SignedDuration::from_secs(5);
                 }
             }
             crate::ticker::__test_dispatch_due_tasks(&registry, &hook);
@@ -483,8 +485,9 @@ mod tests {
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
             let invoker: Arc<dyn TaskInvoker> = Arc::new(NonStringPanicInvoker);
             let mut t =
-                RegisteredTask::new("typed-panic".into(), schedule, invoker, Utc::now()).unwrap();
-            t.next_run = Utc::now() - chrono::Duration::seconds(5);
+                RegisteredTask::new("typed-panic".into(), schedule, invoker, Timestamp::now())
+                    .unwrap();
+            t.next_run = Timestamp::now() - jiff::SignedDuration::from_secs(5);
             guard.insert("typed-panic".into(), t);
         }
 
@@ -522,10 +525,11 @@ mod tests {
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/5 * * * *").unwrap();
-            let mut t = RegisteredTask::new("drift".into(), schedule, invoker, Utc::now()).unwrap();
+            let mut t =
+                RegisteredTask::new("drift".into(), schedule, invoker, Timestamp::now()).unwrap();
             // Simulate a 10-minute stall: next_run is 10 minutes in the
             // past. A catch-up implementation would fire twice.
-            t.next_run = Utc::now() - chrono::Duration::minutes(10);
+            t.next_run = Timestamp::now() - jiff::SignedDuration::from_mins(10);
             guard.insert("drift".into(), t);
         }
 
@@ -541,14 +545,14 @@ mod tests {
         let guard = registry.lock().unwrap();
         let t = guard.get("drift").unwrap();
         assert!(
-            t.next_run > Utc::now(),
+            t.next_run > Timestamp::now(),
             "next_run must be advanced past now"
         );
     }
 
     /// If `Schedule::next_after(now)` returns `None` (theoretical for
     /// valid 5-field crons, but reachable for future schedule types),
-    /// `next_run` must be parked at `DateTime::MAX_UTC` so the task
+    /// `next_run` must be parked at `Timestamp::MAX` so the task
     /// does not hot-loop by repeatedly firing a past `next_run`.
     #[test]
     fn next_run_parked_at_max_when_no_future_fire() {
@@ -565,9 +569,10 @@ mod tests {
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
-            let mut t = RegisteredTask::new("once".into(), schedule, invoker, Utc::now()).unwrap();
+            let mut t =
+                RegisteredTask::new("once".into(), schedule, invoker, Timestamp::now()).unwrap();
             // Park in the past so the task fires on the next dispatch.
-            t.next_run = Utc::now() - chrono::Duration::seconds(5);
+            t.next_run = Timestamp::now() - jiff::SignedDuration::from_secs(5);
             guard.insert("once".into(), t);
         }
 
@@ -578,7 +583,7 @@ mod tests {
         // Simulate the None-return path by manually setting next_run to
         // the past AND swapping in a schedule whose `next_after` would
         // return None is hard with the real cron crate, so instead we
-        // verify the MAX_UTC behavior indirectly: after many re-dispatches
+        // verify the `Timestamp::MAX` behavior indirectly: after many re-dispatches
         // the counter stays at 1 because the task's next_run was advanced
         // past `now` on each fire (no hot-loop). This doubles as a
         // regression guard against the original hot-loop bug.
@@ -592,7 +597,7 @@ mod tests {
         );
     }
 
-    /// Direct assertion of the `DateTime::MAX_UTC` guard: construct a
+    /// Direct assertion of the `Timestamp::MAX` guard: construct a
     /// task whose `next_run` is in the past, dispatch, then assert
     /// `next_run` has been advanced past `now`.
     #[test]
@@ -607,13 +612,13 @@ mod tests {
             count: Arc::clone(&counter),
         });
 
-        let before_now = Utc::now();
+        let before_now = Timestamp::now();
         {
             let mut guard = registry.lock().unwrap();
             let schedule = parser::parse_cron("*/1 * * * *").unwrap();
             let mut t =
-                RegisteredTask::new("advance".into(), schedule, invoker, Utc::now()).unwrap();
-            t.next_run = before_now - chrono::Duration::seconds(5);
+                RegisteredTask::new("advance".into(), schedule, invoker, Timestamp::now()).unwrap();
+            t.next_run = before_now - jiff::SignedDuration::from_secs(5);
             guard.insert("advance".into(), t);
         }
 
@@ -622,7 +627,7 @@ mod tests {
         let guard = registry.lock().unwrap();
         let t = guard.get("advance").unwrap();
         assert!(
-            t.next_run > Utc::now(),
+            t.next_run > Timestamp::now(),
             "next_run must be strictly in the future after a fire"
         );
     }

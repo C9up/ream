@@ -7,7 +7,7 @@
 //! core crate does not depend on NAPI types.
 
 use crate::parser::Schedule;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use ream_napi_core::ReamError;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ pub trait ObservabilityHook: Send + Sync {
 pub(crate) struct RegisteredTask {
     pub(crate) name: String,
     pub(crate) schedule: Schedule,
-    pub(crate) next_run: DateTime<Utc>,
+    pub(crate) next_run: Timestamp,
     pub(crate) invoker: Arc<dyn TaskInvoker>,
 }
 
@@ -56,7 +56,7 @@ impl RegisteredTask {
         name: String,
         schedule: Schedule,
         invoker: Arc<dyn TaskInvoker>,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<Self, ReamError> {
         let next_run = schedule.next_after(now).ok_or_else(|| {
             ReamError::new(
@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn registered_task_computes_next_run() {
         let schedule = parse_cron("*/5 * * * *").unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let invoker = Arc::new(CountingInvoker {
             count: Arc::new(AtomicUsize::new(0)),
         });
