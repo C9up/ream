@@ -979,13 +979,43 @@ pub fn random_hex(len: u32) -> napi::Result<String> {
 
 // ─── GraphQL bindings ──────────────────────────────────────
 
+/// What `graphqlParse` runs and how far it may expand.
+#[napi(object)]
+pub struct GraphqlParseOptions {
+    /// The operation to run, as the request's `operationName`.
+    pub operation_name: Option<String>,
+    /// Deepest field nesting allowed (default 12).
+    pub max_depth: Option<u32>,
+    /// Most fields — and most fragment expansions — allowed (default 1000).
+    pub max_complexity: Option<u32>,
+}
+
 /// Parse a GraphQL query using the Rust graphql-parser crate.
-/// Returns JSON: { operationType, operationName, fields: [...], errors: [...] }
+/// Returns JSON: { operation_type, operation_name, fields, variables, errors }.
 /// Invalid queries are rejected here — they never reach the TypeScript resolver layer.
+///
+/// The limits are applied while fragments are expanded, so a small document
+/// of nested spreads cannot build a tree of millions of fields first.
 #[napi]
-pub fn graphql_parse(query: String) -> napi::Result<String> {
+pub fn graphql_parse(query: String, options: Option<GraphqlParseOptions>) -> napi::Result<String> {
     catch_unwind_napi(|| {
-        let result = ream_graphql::parse_graphql_query(&query);
+        let defaults = ream_graphql::ParseLimits::default();
+        let (operation_name, limits) = match options {
+            Some(options) => (
+                options.operation_name,
+                ream_graphql::ParseLimits {
+                    max_depth: options
+                        .max_depth
+                        .map_or(defaults.max_depth, |depth| depth as usize),
+                    max_fields: options
+                        .max_complexity
+                        .map_or(defaults.max_fields, |fields| fields as usize),
+                },
+            ),
+            None => (None, defaults),
+        };
+        let result =
+            ream_graphql::parse_graphql_operation(&query, operation_name.as_deref(), limits);
         serde_json::to_string(&result)
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
     })
@@ -1001,13 +1031,16 @@ pub fn graphql_validate(query: String) -> napi::Result<String> {
     })
 }
 
-/// Extract argument scalar types from a GraphQL SDL schema.
-/// Returns JSON: `{ "Type.field": { "argName": "ScalarType" } }` for argument
-/// coercion in the TypeScript engine.
+/// Extract the declared arguments of every object field from a GraphQL SDL schema.
+/// Returns JSON: `{ "Type.field": { "argName": { type, named_type, required,
+/// default_value } } }` — what the TypeScript engine coerces argument values
+/// with and refuses undeclared or missing arguments by. Throws when the SDL
+/// does not parse.
 #[napi]
 pub fn graphql_schema_arg_types(sdl: String) -> napi::Result<String> {
     catch_unwind_napi(|| {
-        let types = ream_graphql::parse_schema_arg_types(&sdl);
+        let types = ream_graphql::parse_schema_arg_types(&sdl)
+            .map_err(|e| napi::Error::new(napi::Status::InvalidArg, e))?;
         serde_json::to_string(&types)
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
     })

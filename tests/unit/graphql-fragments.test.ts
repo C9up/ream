@@ -59,8 +59,24 @@ describe('GraphQLEngine > fragments (end-to-end via the Rust parser)', () => {
     expect(res.data).toEqual({ task: { id: 1, title: 'Ship the demo' } })
   })
 
-  it('does not hang on a cyclic fragment', async () => {
+  it('refuses a cyclic fragment (NoFragmentCycles) instead of running the query', async () => {
     const res = await exec(makeEngine(), 'query { task { ...A } } fragment A on Task { id ...A }')
-    expect(res.data).toEqual({ task: { id: 1 } })
+    expect(res.data).toBeUndefined()
+    expect(res.errors).toEqual([{ message: 'Cannot spread fragment "A" within itself.' }])
+  })
+
+  it('stops a doubling chain of fragment spreads at the limit, fast', async () => {
+    // `fragment F0 { ...F1 ...F1 } … fragment F40 { id }`: 2^40 fields if
+    // expanded, ~1.7 KB of query. The native parser used to build the whole
+    // tree on the event loop before any limit looked at it.
+    let query = 'query { task { ...F0 } }\n'
+    for (let i = 0; i < 40; i += 1) {
+      query += `fragment F${i} on Task { ...F${i + 1} ...F${i + 1} }\n`
+    }
+    query += 'fragment F40 on Task { id }\n'
+    const started = performance.now()
+    const res = await exec(makeEngine(), query)
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(res.errors).toEqual([{ message: 'Query is too complex (max 1000 fields)' }])
   })
 })

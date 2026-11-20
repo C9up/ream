@@ -26,7 +26,12 @@ import { currentNodeEnv } from '../env/nodeEnv.js'
 import { loadNapi } from '../helpers/napi-loader.js'
 import { Exception } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
-import { holdsPermissions } from '../http/permissions.js'
+import {
+  authenticatedByGuards,
+  holdsPermissions,
+  isUnauthorizedError,
+} from '../http/permissions.js'
+import { safeJsonParse } from '../utils/safeJsonParse.js'
 
 /** Rust parser output (the `ream-graphql` crate via the `index` NAPI binary). */
 interface RustParsedField {
@@ -35,17 +40,51 @@ interface RustParsedField {
   args: Record<string, unknown>
   sub_fields: RustParsedField[]
 }
+/** A variable the selected operation declares. */
+interface RustVariable {
+  name: string
+  /** As written: `ID!`, `[Int]`. */
+  type: string
+  named_type: string
+  non_null: boolean
+  default_value: unknown
+}
 interface RustParseResult {
   operation_type: string
   operation_name: string | null
   fields: RustParsedField[]
+  variables: RustVariable[]
   errors: string[]
 }
+/** One declared argument of a schema field. */
+interface SchemaArg {
+  /** As written: `Int!`, `[ID!]`. */
+  type: string
+  /** Under the list / non-null wrappers — what coercion keys on. */
+  named_type: string
+  /** Non-null with no default: a call must pass it. */
+  required: boolean
+  default_value: unknown
+}
+type SchemaArgMap = Record<string, Record<string, SchemaArg>>
 interface GraphqlNative {
-  graphqlParse(query: string): string
-  /** `{ "Type.field": { "argName": "ScalarType" } }` extracted from the SDL. */
+  graphqlParse(
+    query: string,
+    options?: { operationName?: string; maxDepth?: number; maxComplexity?: number },
+  ): string
+  /**
+   * `{ "Type.field": { "argName": SchemaArg } }` for every object field of the
+   * SDL. Throws when the SDL does not parse.
+   */
   graphqlSchemaArgTypes(sdl: string): string
 }
+
+/**
+ * Key a `$variable` reference travels under in a parsed argument value:
+ * `{ "$var": "id" }`. A GraphQL name cannot start with `$`, so no object
+ * literal produces it — and a string literal such as `"$role"` is a string.
+ */
+const VARIABLE_REFERENCE_KEY = '$var'
 
 /**
  * Coerce an argument value to its schema-declared scalar type. GraphQL input
@@ -110,6 +149,10 @@ const OPERATION_TYPE: Record<string, string> = {
  * stack) so a pathological deeply-nested query can't overflow the JS call stack
  * during the check itself, and short-circuits as soon as a limit is crossed.
  * Returns an error message, or `null` when the query is within limits.
+ *
+ * The second gate. The first runs inside the native parser, WHILE fragments
+ * are expanded: checked only here, a few hundred bytes of nested spreads had
+ * already expanded to millions of fields and blocked the event loop.
  */
 function checkSelectionLimits(
   fields: SelectionField[],
@@ -221,20 +264,29 @@ export class GraphQLEngine {
   #maxQueryBytes: number
   #maxDepth: number
   #maxComplexity: number
-  /** Lazily-parsed `Type.field → argName → scalarType` map for input coercion. */
-  #argTypes?: Record<string, Record<string, string>>
+  /** Lazily-parsed `Type.field → argName → SchemaArg` map, or why it could not be read. */
+  #argTypes?: { ok: true; args: SchemaArgMap } | { ok: false; error: string }
 
-  /** Parse (once) the schema's argument types from the SDL for coercion. */
-  #schemaArgTypes(): Record<string, Record<string, string>> {
+  /**
+   * Parse (once) the schema's fields and their declared arguments from the
+   * SDL. When it cannot be read, every query is refused: an engine that cannot
+   * tell which arguments a field declares must not pass on whatever a client
+   * sends. It used to fall back to an empty map, which only disabled coercion.
+   */
+  #schemaArgTypes(): { ok: true; args: SchemaArgMap } | { ok: false; error: string } {
     if (this.#argTypes === undefined) {
       try {
-        this.#argTypes = JSON.parse(graphqlNative().graphqlSchemaArgTypes(this.#schemaSource))
-      } catch {
-        // Native unavailable or schema unparseable → coercion becomes a no-op.
-        this.#argTypes = {}
+        const parsed: unknown = JSON.parse(
+          graphqlNative().graphqlSchemaArgTypes(this.#schemaSource),
+        )
+        this.#argTypes = isSchemaArgMap(parsed)
+          ? { ok: true, args: parsed }
+          : { ok: false, error: 'Unreadable schema argument map' }
+      } catch (err) {
+        this.#argTypes = { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
     }
-    return this.#argTypes ?? {}
+    return this.#argTypes
   }
 
   constructor(config: GraphQLConfig) {
@@ -304,6 +356,8 @@ export class GraphQLEngine {
     // Read from the raw body rather than `request.body()`, so the endpoint
     // works whether or not the body parser runs in front of it.
     const body = parseGraphQLBody(parseJson(ctx.request.raw()))
+    // (`parseJson` drops `__proto__` keys: variables are merged into resolver
+    // arguments, where one would swap an object's prototype.)
     if (!body) {
       ctx.response.status(400).json({ errors: [{ message: 'Missing or invalid query' }] })
       return
@@ -333,8 +387,10 @@ export class GraphQLEngine {
       }
     }
 
-    // Parse the query to extract operation type and fields
-    const parsed = this.#parseQuery(request.query)
+    // Parse the query to extract operation type and fields. The native parser
+    // picks the operation named by `operationName` and bounds the expansion of
+    // fragments by maxDepth / maxComplexity as it goes.
+    const parsed = this.#parseQuery(request.query, request.operationName)
     if (parsed.errors) {
       return { errors: parsed.errors }
     }
@@ -347,11 +403,32 @@ export class GraphQLEngine {
       return { errors: [{ message: limitError }] }
     }
 
+    // Validation, before ANY resolver runs (a mutation must not half-run):
+    // the operation's variables, then each top-level field's arguments
+    // against what the schema declares for it.
+    const schema = this.#schemaArgTypes()
+    if (!schema.ok) {
+      ctx.logger.error('GraphQL schema could not be read', { message: schema.error })
+      return { errors: [{ message: 'GraphQL schema could not be read' }] }
+    }
+    const variables = coerceVariableValues(parsed.variables, request.variables ?? {})
+    if (!variables.ok) return { errors: variables.errors.map((message) => ({ message })) }
+    const calls: Array<{ field: SelectionField; args: Record<string, unknown> }> = []
+    const validationErrors: string[] = []
+    for (const field of parsed.fields) {
+      const outcome = coerceArgumentValues(field, parsed.typeName, schema.args, variables.values)
+      if (outcome.ok) calls.push({ field, args: outcome.args })
+      else validationErrors.push(...outcome.errors)
+    }
+    if (validationErrors.length > 0) {
+      return { errors: validationErrors.map((message) => ({ message })) }
+    }
+
     const data: Record<string, unknown> = {}
     const errors: Array<{ message: string; path?: string[] }> = []
 
-    for (const field of parsed.fields) {
-      const outcome = await this.#resolveField(field, parsed.typeName, request, ctx)
+    for (const { field, args } of calls) {
+      const outcome = await this.#resolveField(field, parsed.typeName, args, ctx)
       if (outcome.ok) {
         data[field.alias ?? field.name] = outcome.value
       } else {
@@ -369,7 +446,7 @@ export class GraphQLEngine {
   async #resolveField(
     field: SelectionField,
     typeName: string,
-    request: GraphQLRequest,
+    args: Record<string, unknown>,
     ctx: HttpContext,
   ): Promise<
     { ok: true; value: unknown } | { ok: false; error: { message: string; path?: string[] } }
@@ -407,7 +484,6 @@ export class GraphQLEngine {
         }
       }
 
-      const args = this.#buildArgs(field, request.variables, typeName)
       const result = await handler.call(instance, null, args, ctx)
       // Prune to the client's selection set: a resolver returning a rich
       // object (ORM entity, etc.) must not leak fields the client did not
@@ -434,47 +510,24 @@ export class GraphQLEngine {
     return 'Internal server error'
   }
 
-  /**
-   * Build the resolver argument bag: `$variable` references resolve against
-   * `request.variables`, then any unreferenced variables are merged in.
-   */
-  #buildArgs(
-    field: SelectionField,
-    variables: Record<string, unknown> | undefined,
-    typeName: string,
-  ): Record<string, unknown> {
-    const args: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(field.args)) {
-      if (typeof v === 'string' && v.startsWith('$') && variables) {
-        args[k] = variables[v.slice(1)]
-      } else {
-        args[k] = v
-      }
-    }
-    if (variables) {
-      for (const [k, v] of Object.entries(variables)) {
-        if (!(k in args)) args[k] = v
-      }
-    }
-    // Coerce each argument to its schema-declared scalar type (Int/Float/Boolean/
-    // ID). A literal `task(id: "5")` or a string variable thus reaches the
-    // resolver as the right runtime type instead of being silently mistyped.
-    const argTypes = this.#schemaArgTypes()[`${typeName}.${field.name}`]
-    if (argTypes) {
-      for (const [k, declaredType] of Object.entries(argTypes)) {
-        if (k in args) args[k] = coerceScalar(args[k], declaredType)
-      }
-    }
-    return args
-  }
-
   /** Enforce guard/role/permission on a resolver. */
   async #enforceGuards(options: ResolverOptions, ctx: HttpContext): Promise<string | null> {
     const guards = [...(options.guards ?? []), ...(options.guard ? [options.guard] : [])]
     const roles = [...(options.roles ?? []), ...(options.role ? [options.role] : [])]
     const permissions = options.permissions ?? []
 
-    const needsAuth = guards.length > 0 || roles.length > 0 || permissions.length > 0
+    // A guard list names who may vouch for the request — shared with the
+    // route and RPC gates. A guard's 401 is a denial here; a crash behind it
+    // is not, and propagates.
+    if (guards.length > 0) {
+      try {
+        if (!(await authenticatedByGuards(ctx.auth, guards))) return 'Unauthorized'
+      } catch (err) {
+        if (isUnauthorizedError(err)) return 'Unauthorized'
+        throw err
+      }
+    }
+    const needsAuth = roles.length > 0 || permissions.length > 0
     if (needsAuth && !ctx.auth?.isAuthenticated) {
       return 'Unauthorized'
     }
@@ -503,23 +556,44 @@ export class GraphQLEngine {
    * Parse a GraphQL query via the Rust `ream-graphql` crate (operation type +
    * fields with arguments). Spec-compliant; invalid queries return errors.
    */
-  #parseQuery(query: string): {
+  #parseQuery(
+    query: string,
+    operationName: string | undefined,
+  ): {
     typeName: string
     fields: SelectionField[]
+    variables: RustVariable[]
     errors?: Array<{ message: string }>
   } {
     // Full-Rust: the spec-compliant `ream-graphql` parser (graphql-parser
     // crate) rejects invalid queries before any resolver runs. No TS fallback —
     // ream ships the native binary, so when Rust exists the engine is Rust.
-    const raw: unknown = JSON.parse(graphqlNative().graphqlParse(query))
+    // `safeJsonParse`: a client's object literal may name a key `__proto__`.
+    const raw: unknown = safeJsonParse(
+      graphqlNative().graphqlParse(query, {
+        ...(operationName === undefined ? {} : { operationName }),
+        maxDepth: this.#maxDepth,
+        maxComplexity: this.#maxComplexity,
+      }),
+    )
     if (!isRustParseResult(raw)) {
-      return { typeName: 'Query', fields: [], errors: [{ message: 'Unreadable parse result' }] }
+      return {
+        typeName: 'Query',
+        fields: [],
+        variables: [],
+        errors: [{ message: 'Unreadable parse result' }],
+      }
     }
     const typeName = OPERATION_TYPE[raw.operation_type] ?? 'Query'
     if (raw.errors.length > 0) {
-      return { typeName, fields: [], errors: raw.errors.map((message) => ({ message })) }
+      return {
+        typeName,
+        fields: [],
+        variables: [],
+        errors: raw.errors.map((message) => ({ message })),
+      }
     }
-    return { typeName, fields: raw.fields.map(mapRustField) }
+    return { typeName, fields: raw.fields.map(mapRustField), variables: raw.variables }
   }
 
   #renderPlayground(): string {
@@ -564,9 +638,10 @@ function isPublicError(err: unknown): boolean {
   return 'status' in err && typeof err.status === 'number' && err.status < 500
 }
 
+/** The request body, `__proto__` keys dropped (AdonisJS `safeParse`). */
 function parseJson(raw: string): unknown {
   try {
-    return JSON.parse(raw)
+    return safeJsonParse(raw)
   } catch {
     return undefined
   }
@@ -598,8 +673,168 @@ function isRustParseResult(value: unknown): value is RustParseResult {
     Array.isArray(value.errors) &&
     value.errors.every((error) => typeof error === 'string') &&
     Array.isArray(value.fields) &&
-    value.fields.every(isRustParsedField)
+    value.fields.every(isRustParsedField) &&
+    Array.isArray(value.variables) &&
+    value.variables.every(isRustVariable)
   )
+}
+
+function isRustVariable(value: unknown): value is RustVariable {
+  return (
+    isRecord(value) &&
+    typeof value.name === 'string' &&
+    typeof value.type === 'string' &&
+    typeof value.named_type === 'string' &&
+    typeof value.non_null === 'boolean'
+  )
+}
+
+function isSchemaArgMap(value: unknown): value is SchemaArgMap {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (args) =>
+        isRecord(args) &&
+        Object.values(args).every(
+          (arg) =>
+            isRecord(arg) &&
+            typeof arg.type === 'string' &&
+            typeof arg.named_type === 'string' &&
+            typeof arg.required === 'boolean',
+        ),
+    )
+  )
+}
+
+/**
+ * The operation's variable values (graphql-js `coerceVariableValues`): one per
+ * variable the operation DECLARES — a request variable it does not declare is
+ * dropped — its default when the request leaves it out, and an error for a
+ * non-null one missing or null.
+ */
+function coerceVariableValues(
+  definitions: RustVariable[],
+  inputs: Record<string, unknown>,
+): { ok: true; values: Record<string, unknown> } | { ok: false; errors: string[] } {
+  const values: Record<string, unknown> = {}
+  const errors: string[] = []
+  for (const definition of definitions) {
+    if (!Object.hasOwn(inputs, definition.name)) {
+      if (definition.default_value !== null && definition.default_value !== undefined) {
+        values[definition.name] = coerceScalar(definition.default_value, definition.named_type)
+      } else if (definition.non_null) {
+        errors.push(
+          `Variable "$${definition.name}" of required type "${definition.type}" was not provided.`,
+        )
+      }
+      continue
+    }
+    const value = inputs[definition.name]
+    if (value === null && definition.non_null) {
+      errors.push(
+        `Variable "$${definition.name}" of non-null type "${definition.type}" must not be null.`,
+      )
+      continue
+    }
+    values[definition.name] = coerceScalar(value, definition.named_type)
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, values }
+}
+
+/** `{ "$var": "name" }` — a variable reference the parser left in an argument value. */
+function variableReference(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  const keys = Object.keys(value)
+  const name = value[VARIABLE_REFERENCE_KEY]
+  return keys.length === 1 && typeof name === 'string' ? name : undefined
+}
+
+/**
+ * Replace the variable references inside an argument literal by their values.
+ * A variable with no value leaves a list item `null` and drops an object
+ * field, as graphql-js does.
+ */
+function substituteVariables(value: unknown, variables: Record<string, unknown>): unknown {
+  const reference = variableReference(value)
+  if (reference !== undefined) {
+    return Object.hasOwn(variables, reference) ? variables[reference] : undefined
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => substituteVariables(item, variables) ?? null)
+  }
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      const substituted = substituteVariables(item, variables)
+      if (substituted !== undefined) out[key] = substituted
+    }
+    return out
+  }
+  return value
+}
+
+/**
+ * The arguments a resolver receives (graphql-js `getArgumentValues`, with the
+ * KnownArgumentNames and ProvidedRequiredArguments checks): only those the
+ * schema declares for `Type.field`, variables substituted, defaults applied,
+ * scalars coerced to their declared types.
+ *
+ * Built from the declaration, never from what the client sent: an argument
+ * the field does not declare is refused instead of reaching a resolver that
+ * spreads `args` into a model (`role`, `isAdmin`, `ownerId`).
+ */
+function coerceArgumentValues(
+  field: SelectionField,
+  typeName: string,
+  schema: SchemaArgMap,
+  variables: Record<string, unknown>,
+): { ok: true; args: Record<string, unknown> } | { ok: false; errors: string[] } {
+  const coordinate = `${typeName}.${field.name}`
+  const declared = Object.hasOwn(schema, coordinate) ? schema[coordinate] : undefined
+  if (declared === undefined) {
+    return { ok: false, errors: [`Cannot query field "${field.name}" on type "${typeName}".`] }
+  }
+  const errors: string[] = []
+  for (const name of Object.keys(field.args)) {
+    if (!Object.hasOwn(declared, name)) {
+      errors.push(`Unknown argument "${name}" on field "${coordinate}".`)
+    }
+  }
+  const args: Record<string, unknown> = {}
+  for (const [name, definition] of Object.entries(declared)) {
+    const label = `Argument "${coordinate}(${name}:)"`
+    const hasDefault = definition.default_value !== null && definition.default_value !== undefined
+    if (!Object.hasOwn(field.args, name)) {
+      if (definition.required) {
+        errors.push(`${label} of type "${definition.type}" is required, but it was not provided.`)
+      } else if (hasDefault) {
+        args[name] = coerceScalar(definition.default_value, definition.named_type)
+      }
+      continue
+    }
+    const literal = field.args[name]
+    const reference = variableReference(literal)
+    if (reference !== undefined && !Object.hasOwn(variables, reference)) {
+      // The variable has no runtime value: the argument's default, if any.
+      if (definition.required) {
+        errors.push(
+          `${label} of required type "${definition.type}" was provided the variable "$${reference}" which was not provided a runtime value.`,
+        )
+      } else if (hasDefault) {
+        args[name] = coerceScalar(definition.default_value, definition.named_type)
+      }
+      continue
+    }
+    const value = substituteVariables(literal, variables)
+    if (value === null && definition.type.endsWith('!')) {
+      errors.push(
+        `${label} has invalid value: Expected value of non-null type "${definition.type}" not to be null.`,
+      )
+      continue
+    }
+    args[name] = coerceScalar(value, definition.named_type)
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, args }
 }
 
 function isRustParsedField(value: unknown): value is RustParsedField {
