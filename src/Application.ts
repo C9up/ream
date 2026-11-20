@@ -4,6 +4,8 @@
  * Like AdonisJS Application:
  * - app.booting(callback) — register hooks that run during boot
  * - app.booted(callback) — register hooks that run after boot completes
+ * - app.starting(callback) / app.ready(callback) — hooks around the start
+ * - app.import(id) / app.importDefault(id) — import through the app's importer
  * - app.listen(signal, callback) — listen for process signals
  * - app.listenIf(condition, signal, callback) — conditional signal listener
  * - app.terminate() — graceful shutdown
@@ -20,6 +22,7 @@ import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
 import { type DirectoriesNode, directories as defaultDirectories } from './directories.js'
 import { currentNodeEnv } from './env/nodeEnv.js'
+import { ReamError } from './errors/ReamError.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
@@ -70,6 +73,22 @@ export interface ReamrcContents {
   modules?: { path?: string; autoload?: string[] }
 }
 
+/**
+ * Imports a module by identifier FROM THE APPLICATION — the function an app
+ * defines next to its entry point (`(id) => import(id)`), so a `#` subpath
+ * resolves against the app's `package.json`, not the framework's.
+ */
+export type ApplicationImporter = (moduleIdentifier: string) => Promise<unknown>
+
+/** What `starting` / `ready` hooks receive: the application itself. */
+export type ApplicationHook = (app: Application) => Promise<void> | void
+
+/** Options of the {@link Application} constructor (AdonisJS `ApplicationOptions`). */
+export interface ApplicationOptions {
+  /** Backs `app.import()` / `app.importDefault()`. The Ignitor passes its own. */
+  importer?: ApplicationImporter
+}
+
 export class Application implements AppContext {
   readonly container: Container
   readonly config: ConfigStore
@@ -105,10 +124,14 @@ export class Application implements AppContext {
   #bootingHooks: Array<() => Promise<void> | void> = []
   #bootedHooks: Array<() => Promise<void> | void> = []
   #shutdownHooks: Array<() => Promise<void> | void> = []
+  #startingHooks: ApplicationHook[] = []
+  #readyHooks: ApplicationHook[] = []
+  readonly #importer: ApplicationImporter | undefined
 
-  constructor() {
+  constructor(options: ApplicationOptions = {}) {
     this.container = new Container()
     this.config = new ConfigStore()
+    this.#importer = options.importer
   }
 
   /**
@@ -426,6 +449,50 @@ export class Application implements AppContext {
     this.#bootedHooks.push(callback)
   }
 
+  /**
+   * Register a hook that runs while the application starts — after every
+   * provider's `start()`, before the preload files are imported (AdonisJS
+   * `app.starting`). A warm-up runs them too. Chainable.
+   */
+  starting(handler: ApplicationHook): this {
+    this.#startingHooks.push(handler)
+    return this
+  }
+
+  /**
+   * Register a hook that runs once the application is ready — after every
+   * provider's `ready()`, before the state turns `ready` (AdonisJS
+   * `app.ready`). Called on an application that is ALREADY ready, the handler
+   * runs at once and the returned promise settles with it.
+   */
+  async ready(handler: ApplicationHook): Promise<void> {
+    if (this.isReady) {
+      await handler(this)
+      return
+    }
+    this.#readyHooks.push(handler)
+  }
+
+  /**
+   * Run the `starting` hooks, then forget them. Called by the Ignitor at the
+   * start phase; not for application code.
+   */
+  async runStartingHooks(): Promise<void> {
+    const hooks = this.#startingHooks
+    this.#startingHooks = []
+    for (const hook of hooks) await hook(this)
+  }
+
+  /**
+   * Run the `ready` hooks, then forget them. Called by the Ignitor once the
+   * providers are ready, before {@link markReady}; not for application code.
+   */
+  async runReadyHooks(): Promise<void> {
+    const hooks = this.#readyHooks
+    this.#readyHooks = []
+    for (const hook of hooks) await hook(this)
+  }
+
   // ─── Signal handling ──────────────────────────────────────
 
   /** Signal handlers installed via listen()/listenIf(), removed on shutdown. */
@@ -571,23 +638,53 @@ export class Application implements AppContext {
   }
 
   /**
+   * Import a module through the application's importer (AdonisJS
+   * `app.import`), so `#listeners/send_email` resolves from the APP.
+   *
+   * Throws `E_APP_MISSING_IMPORTER` when the application was built without
+   * one — a framework-side `import()` would resolve the `#` subpath against
+   * the framework's own package and load the wrong file, or none.
+   */
+  import(moduleIdentifier: string): Promise<unknown> {
+    return this.#requireImporter(moduleIdentifier)(moduleIdentifier)
+  }
+
+  /**
    * Import a module and return its default export (AdonisJS `importDefault`).
    *
-   * Throws when there is none, naming the file: a preload or provider entry
-   * without a default export otherwise fails later, as `undefined is not a
+   * Takes a module identifier, imported through the application's importer
+   * (see {@link import}), or — a ream addition — a thunk such as
+   * `() => import('./x.js')` with a label for the error message.
+   *
+   * Throws when there is no default export, naming the module: a preload or
+   * provider entry without one otherwise fails later, as `undefined is not a
    * constructor`, far from the file at fault.
    */
-  async importDefault<T = unknown>(importFn: () => Promise<unknown>, label?: string): Promise<T> {
-    const module = await importFn()
-    if (module === null || typeof module !== 'object' || !('default' in module)) {
-      throw new Error(
-        `Missing default export${label ? ` in "${label}"` : ''}. ` +
-          'Export the value as `export default`, or import the named export directly.',
+  importDefault<T = unknown>(moduleIdentifier: string): Promise<T>
+  importDefault<T = unknown>(importFn: () => Promise<unknown>, label?: string): Promise<T>
+  importDefault<T = unknown>(
+    source: string | (() => Promise<unknown>),
+    label?: string,
+  ): Promise<T> {
+    if (typeof source === 'string') {
+      const importer = this.#requireImporter(source)
+      return defaultExport<T>(() => importer(source), source)
+    }
+    return defaultExport<T>(source, label)
+  }
+
+  #requireImporter(moduleIdentifier: string): ApplicationImporter {
+    if (this.#importer === undefined) {
+      throw new ReamError(
+        'E_APP_MISSING_IMPORTER',
+        `Cannot import "${moduleIdentifier}". Register a module importer with the application first.`,
+        {
+          context: { moduleIdentifier },
+          hint: 'Pass `importer: (filePath) => import(filePath)` to the Ignitor, from a file of the application.',
+        },
       )
     }
-    // The caller declares what it expects to find, the same contract as
-    // `container.make<T>()` over a dynamic import.
-    return module.default as T
+    return this.#importer
   }
 
   /** The app's `package.json`, read once and cached; `undefined` when absent. */
@@ -796,4 +893,18 @@ export class Application implements AppContext {
   get providers(): readonly ProviderContract[] {
     return [...this.#providers]
   }
+}
+
+/** The default export of what `importFn` loads, or a named error. */
+async function defaultExport<T>(importFn: () => Promise<unknown>, label?: string): Promise<T> {
+  const module = await importFn()
+  if (module === null || typeof module !== 'object' || !('default' in module)) {
+    throw new Error(
+      `Missing default export${label ? ` in "${label}"` : ''}. ` +
+        'Export the value as `export default`, or import the named export directly.',
+    )
+  }
+  // The caller declares what it expects to find, the same contract as
+  // `container.make<T>()` over a dynamic import.
+  return module.default as T
 }

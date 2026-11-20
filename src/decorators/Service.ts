@@ -9,6 +9,7 @@ import type { ServiceMetadata, ServiceScope, ServiceToken } from '../container/t
 
 const SERVICE_METADATA_KEY = Symbol('ream:service')
 const INJECT_METADATA_KEY = Symbol('ream:inject')
+const METHOD_INJECTIONS_KEY = Symbol('ream:method-injections')
 
 /** Constructor type — accepts unknown args, returns unknown instance. */
 // `never[]` accepts every constructor shape: parameters are contravariant, so a
@@ -105,17 +106,53 @@ export function getMethodInjectTokens(
 }
 
 /**
- * @inject() class decorator — marks a controller (or service) for transient IoC resolution.
+ * The parameter types `@inject()` recorded for one method, or `undefined`
+ * when the method was not decorated (or the transpiler emitted no metadata).
  *
- * Equivalent to @Service({ scope: 'transient' }). Use on controllers so the container
- * auto-resolves constructor dependencies per-request.
+ * Read with `getMetadata`, not `getOwnMetadata`: a subclass inherits a
+ * decorated method, and its injections with it.
+ */
+export function getMethodInjections(
+  target: object,
+  propertyKey: string | symbol,
+): unknown[] | undefined {
+  const recorded: unknown = Reflect.getMetadata(METHOD_INJECTIONS_KEY, target, propertyKey)
+  return Array.isArray(recorded) ? recorded : undefined
+}
+
+/**
+ * @inject() — AdonisJS fold's decorator, on a class or on a method.
  *
- * Usage:
+ * On a class: equivalent to `@Service({ scope: 'transient' })`, so the
+ * container auto-resolves the constructor's dependencies per resolution.
+ *
  *   @inject()
  *   export default class UsersController {
  *     constructor(private userService: UserService) {}
  *   }
+ *
+ * On a method: records the method's parameter types, which
+ * `container.call(instance, method, runtimeValues)` resolves — every slot the
+ * runtime values leave open, by type. The decorator's presence is also what
+ * makes TypeScript emit those types at all. The class is not registered.
+ *
+ *   export default class UsersController {
+ *     @inject()
+ *     async index(ctx: HttpContext, users: UserService) { … }
+ *   }
  */
-export function inject(): ClassDecorator {
-  return Service({ scope: 'transient' })
+export function inject(): ClassDecorator & MethodDecorator {
+  return (target: object, propertyKey?: string | symbol): void => {
+    if (propertyKey === undefined) {
+      if (typeof target !== 'function') {
+        throw new TypeError('@inject() decorates a class or one of its methods')
+      }
+      Service({ scope: 'transient' })(target)
+      return
+    }
+    const paramTypes: unknown = Reflect.getMetadata('design:paramtypes', target, propertyKey)
+    if (Array.isArray(paramTypes)) {
+      Reflect.defineMetadata(METHOD_INJECTIONS_KEY, [...paramTypes], target, propertyKey)
+    }
+  }
 }

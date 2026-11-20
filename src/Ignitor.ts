@@ -408,7 +408,7 @@ export class Ignitor {
       this.#config = appRootOrConfig ?? {}
     }
 
-    this.#app = new Application()
+    this.#app = new Application({ importer: this.#config.importer })
     this.#router = new Router()
     this.#server = new Server(this.#router)
     this.#middleware = new MiddlewareRegistry()
@@ -619,7 +619,7 @@ export class Ignitor {
         { hint: 'Create a new Ignitor instance instead of re-warming this one.' },
       )
     }
-    this.#loadEnvironmentFiles()
+    await this.#loadEnvironmentFiles()
     this.#registerEncryption()
     try {
       await this.#phaseRegister()
@@ -659,7 +659,7 @@ export class Ignitor {
         { hint: 'Create a new Ignitor instance instead of restarting this one.' },
       )
     }
-    this.#loadEnvironmentFiles()
+    await this.#loadEnvironmentFiles()
     this.#registerEncryption()
     try {
       await this.#phaseRegister()
@@ -696,9 +696,9 @@ export class Ignitor {
    * Uses Node's built-in parser (no dependency). Values already present in
    * `process.env` win, so the shell / CI always overrides the files.
    */
-  #loadEnvironmentFiles(): void {
+  async #loadEnvironmentFiles(): Promise<void> {
     if (!this.#appRoot) return
-    loadEnvFiles(this.#appRoot, { skipEnvLocal: this.#app.getEnvironment() === 'test' })
+    await loadEnvFiles(this.#appRoot, { skipEnvLocal: this.#app.getEnvironment() === 'test' })
   }
 
   /**
@@ -771,6 +771,10 @@ export class Ignitor {
     for (const provider of this.#providers) {
       await callProviderPhase(provider, 'start')
     }
+
+    // `app.starting()` hooks: after the providers started, before the
+    // preloads — upstream's warm-up order.
+    await this.#app.runStartingHooks()
 
     // Import preload files (routes.ts, kernel.ts, etc.).
     //
@@ -999,6 +1003,10 @@ export class Ignitor {
     for (const provider of this.#providers) {
       await callProviderPhase(provider, 'ready')
     }
+
+    // `app.ready()` hooks: after every provider's ready(), before the state
+    // turns ready — upstream's order.
+    await this.#app.runReadyHooks()
 
     // Core domain event: the app finished booting (all providers ready).
     // Emitted once through the bus when events are wired — zero hot-path cost.

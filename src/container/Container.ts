@@ -13,15 +13,38 @@ import 'reflect-metadata'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   getInjectTokens,
+  getMethodInjections,
   getMethodInjectTokens,
   getServiceMetadata,
   getServiceRegistry,
 } from '../decorators/Service.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
 import { ReamError } from '../errors/ReamError.js'
+import { ConditionalBindingsBuilder } from './ConditionalBindingsBuilder.js'
 import { ContainerResolver } from './ContainerResolver.js'
 import { ContextualBindingsBuilder } from './ContextualBindingsBuilder.js'
-import type { Binding, ServiceFactory, ServiceToken } from './types.js'
+import type {
+  Binding,
+  BindingCondition,
+  ContainerEmitter,
+  ContainerOptions,
+  ServiceFactory,
+  ServiceToken,
+} from './types.js'
+
+/**
+ * One conditional binding (AdonisJS `conditionalBinding`). A singleton entry
+ * caches its OWN value, so each branch keeps its instance.
+ */
+interface ConditionalEntry {
+  readonly condition: BindingCondition
+  readonly factory: ServiceFactory
+  readonly isSingleton: boolean
+  /** The published singleton value, boxed so `undefined` can be one. */
+  cached?: { value: unknown }
+  /** A singleton build under way, joined by concurrent resolutions. */
+  pending?: Promise<{ value: unknown; published: boolean }>
+}
 
 /**
  * Symbol descriptions that would collide with object-prototype keys if used
@@ -132,6 +155,42 @@ export class Container {
    * name they happen to share.
    */
   readonly #chain = new AsyncLocalStorage<ResolutionChain>()
+  /** binding key → conditional bindings, evaluated in registration order. */
+  #conditionalBindings: Map<ServiceToken, ConditionalEntry[]> = new Map()
+  /** Told about every resolution, when set (AdonisJS `useEmitter`). */
+  #emitter: ContainerEmitter | undefined
+
+  constructor(options: ContainerOptions = {}) {
+    this.#emitter = options.emitter
+  }
+
+  /**
+   * Emit `container_binding:resolved` with `{ binding, value }` after each
+   * resolution — what a profiler or telemetry panel lists a request's
+   * resolutions from (AdonisJS `container.useEmitter`). Chainable.
+   */
+  useEmitter(emitter: ContainerEmitter): this {
+    this.#emitter = emitter
+    return this
+  }
+
+  /**
+   * Tell the emitter about a resolution.
+   *
+   * DEVIATION (named): upstream calls the emitter bare. Here a throwing
+   * emitter, or one whose promise rejects, cannot fail the resolution it is
+   * only reporting on — observing the container must never change what it
+   * answers.
+   */
+  #emit(binding: ServiceToken, value: unknown): void {
+    if (this.#emitter === undefined) return
+    try {
+      const result = this.#emitter.emit('container_binding:resolved', { binding, value })
+      if (result instanceof Promise) result.catch(() => {})
+    } catch {
+      /* see above: telemetry must not break a resolution */
+    }
+  }
 
   // ─── Explicit bindings ────────────────────────────────────
 
@@ -172,7 +231,15 @@ export class Container {
   bindValue<T>(token: ServiceToken, value: T): void {
     const key = this.#tokenToKey(token)
     this.#singletons.set(key, value)
-    this.#bindings.set(key, { token, factory: () => value, scope: 'singleton', dependencies: [] })
+    // `instance` marks a VALUE binding: resolved before the conditional
+    // bindings, as AdonisJS orders its container values.
+    this.#bindings.set(key, {
+      token,
+      factory: () => value,
+      instance: value,
+      scope: 'singleton',
+      dependencies: [],
+    })
   }
 
   /**
@@ -200,6 +267,35 @@ export class Container {
    */
   when(parent: new (...args: never[]) => unknown): ContextualBindingsBuilder {
     return new ContextualBindingsBuilder(this, parent)
+  }
+
+  /**
+   * Bind `binding` for the resolutions where `condition` holds (AdonisJS
+   * `container.conditionalBinding`). Several may be registered for one
+   * binding: they are tried in registration order and the first whose
+   * condition holds answers; when none does, the regular binding (or the
+   * class itself) does. A singleton caches its value per entry. See {@link if}
+   * for the fluent spelling.
+   */
+  conditionalBinding(
+    condition: BindingCondition,
+    binding: ServiceToken,
+    factory: ServiceFactory,
+    isSingleton = false,
+  ): void {
+    const key = this.#tokenToKey(binding)
+    const entries = this.#conditionalBindings.get(key) ?? []
+    entries.push({ condition, factory, isSingleton })
+    this.#conditionalBindings.set(key, entries)
+  }
+
+  /**
+   * Fluent conditional binding (AdonisJS `container.if`):
+   *
+   *     container.if((resolver) => flags.beta).bind(PaymentGateway, () => new BetaGateway())
+   */
+  if(condition: BindingCondition): ConditionalBindingsBuilder {
+    return new ConditionalBindingsBuilder(condition, this)
   }
 
   /**
@@ -360,7 +456,9 @@ export class Container {
       stack: [...chain.stack, key],
       set: new Set(chain.set).add(key),
     }
-    return this.#chain.run(own, () => this.#resolveInner<T>(key, token, runtimeValues))
+    const value = await this.#chain.run(own, () => this.#resolveInner<T>(key, token, runtimeValues))
+    this.#emit(key, value)
+    return value
   }
 
   /**
@@ -410,8 +508,14 @@ export class Container {
     runtimeValues?: unknown[],
   ): Promise<unknown[]> {
     const args: unknown[] = []
+    // What `@inject()` on the method recorded, else fold's hand-written
+    // `static containerInjections[method].dependencies`, else whatever
+    // reflection the transpiler emitted.
     const paramTypes: unknown[] =
-      Reflect.getMetadata('design:paramtypes', target.prototype, method) ?? []
+      getMethodInjections(target.prototype, method) ??
+      readContainerInjectionDeps(target, method) ??
+      Reflect.getMetadata('design:paramtypes', target.prototype, method) ??
+      []
     // `@Inject('token')` on a method parameter — a named binding the reflected
     // type cannot express (an interface, or a class registered under a name).
     const injectTokens = getMethodInjectTokens(target.prototype, method)
@@ -534,6 +638,7 @@ export class Container {
       this.#overrides.has(key) ||
       this.#singletons.has(key) ||
       this.#aliases.has(key) ||
+      this.#conditionalBindings.has(key) ||
       (typeof token === 'function' && getServiceMetadata(token) !== undefined)
     )
   }
@@ -549,7 +654,12 @@ export class Container {
    */
   hasBinding(token: ServiceToken): boolean {
     const key = this.#tokenToKey(token)
-    return this.#bindings.has(key) || this.#overrides.has(key) || this.#singletons.has(key)
+    return (
+      this.#bindings.has(key) ||
+      this.#overrides.has(key) ||
+      this.#singletons.has(key) ||
+      this.#conditionalBindings.has(key)
+    )
   }
 
   /** True only when EVERY token is registered/resolvable (AdonisJS `hasAllBindings`). */
@@ -611,13 +721,30 @@ export class Container {
       return store.values.get(key) as T
     }
 
+    // 3b. A value bound with `bindValue` — before the conditional bindings,
+    //     as @adonisjs/fold orders its container values.
+    const binding = this.#bindings.get(key)
+    if (binding !== undefined && Object.hasOwn(binding, 'instance') && this.#singletons.has(key)) {
+      return this.#singletons.get(key) as T
+    }
+
+    // 3c. Conditional bindings, in registration order: the first whose
+    //     condition holds answers; none holding falls through to the regular
+    //     binding. After swaps, contextual bindings and values: fold's order.
+    const conditional = this.#conditionalBindings.get(key)
+    if (conditional !== undefined) {
+      for (const entry of conditional) {
+        if (!(await entry.condition(this, runtimeValues, store?.parent ?? null))) continue
+        return (await this.#resolveConditional(key, entry, store)) as T
+      }
+    }
+
     // 4. Check cached singletons
     if (this.#singletons.has(key)) {
       return this.#singletons.get(key) as T
     }
 
     // 5. Check explicit bindings — the factory may be async.
-    const binding = this.#bindings.get(key)
     if (binding) {
       if (binding.scope !== 'singleton') {
         const instance = binding.factory ? await binding.factory(this) : undefined
@@ -695,9 +822,49 @@ export class Container {
       'E_CONTAINER_NOT_FOUND',
       `No binding found for '${name}'.${suggestion ? ` ${suggestion}` : ''}`,
       {
-        hint: 'Register it with container.singleton() or decorate with @inject().',
+        hint:
+          conditional === undefined
+            ? 'Register it with container.singleton() or decorate with @inject().'
+            : `The binding has ${conditional.length} conditional binding(s), and none of their conditions held. Register a fallback with container.bind().`,
       },
     )
+  }
+
+  /**
+   * Resolve one conditional binding. A singleton entry is built once and
+   * shared — unless its build read a request-scoped value, which makes it that
+   * request's (the `#cacheIfAppWide` rule); concurrent resolutions join the
+   * build in flight. `resolving` hooks run once per built value.
+   */
+  async #resolveConditional(
+    key: ServiceToken,
+    entry: ConditionalEntry,
+    store: ResolutionChain | undefined,
+  ): Promise<unknown> {
+    if (!entry.isSingleton) {
+      const instance = await entry.factory(this)
+      await this.#runResolvingHooks(key, instance)
+      return instance
+    }
+    if (entry.cached !== undefined) return entry.cached.value
+    if (entry.pending !== undefined) {
+      const shared = await entry.pending
+      if (shared.published) return shared.value
+    }
+    const readsBefore = store?.scopedReads.count ?? 0
+    const building = (async (): Promise<{ value: unknown; published: boolean }> => {
+      const value = await entry.factory(this)
+      await this.#runResolvingHooks(key, value)
+      const published = (store?.scopedReads.count ?? 0) === readsBefore
+      if (published) entry.cached = { value }
+      return { value, published }
+    })()
+    entry.pending = building
+    try {
+      return (await building).value
+    } finally {
+      if (entry.pending === building) entry.pending = undefined
+    }
   }
 
   /**
@@ -1005,15 +1172,19 @@ function isCallable(value: unknown): value is (...args: unknown[]) => unknown {
  * on the constructor signature, so we walk the shape with `in`-narrowing
  * (TS 4.9+) plus a per-element `isServiceToken` guard — no casts.
  */
-function readContainerInjectionDeps(target: object): ServiceToken[] | undefined {
+function readContainerInjectionDeps(
+  target: object,
+  member = '_constructor',
+): ServiceToken[] | undefined {
   if (!('containerInjections' in target)) return undefined
   const injections = target.containerInjections
   if (typeof injections !== 'object' || injections === null) return undefined
-  if (!('_constructor' in injections)) return undefined
-  const ctor = injections._constructor
-  if (typeof ctor !== 'object' || ctor === null) return undefined
-  if (!('dependencies' in ctor)) return undefined
-  const deps = ctor.dependencies
+  // Own keys only: a method named `toString` must not read the prototype's.
+  if (!Object.hasOwn(injections, member)) return undefined
+  const entry: unknown = Reflect.get(injections, member)
+  if (typeof entry !== 'object' || entry === null) return undefined
+  if (!('dependencies' in entry)) return undefined
+  const deps = entry.dependencies
   if (!Array.isArray(deps)) return undefined
   return deps.every(isServiceToken) ? deps : undefined
 }

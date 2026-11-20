@@ -8,13 +8,29 @@ import 'reflect-metadata'
 
 // ─── Core ───────────────────────────────────────────────────
 
-export type { AppEnvironment, ApplicationMode, ApplicationState } from './Application.js'
+export type {
+  AppEnvironment,
+  ApplicationHook,
+  ApplicationImporter,
+  ApplicationMode,
+  ApplicationOptions,
+  ApplicationState,
+} from './Application.js'
 export { Application } from './Application.js'
 export { ConfigStore, configProvider, defineModuleConfig, env } from './ConfigLoader.js'
+export { ConditionalBindingsBuilder } from './container/ConditionalBindingsBuilder.js'
 export { Container } from './container/Container.js'
 export { ContainerResolver } from './container/ContainerResolver.js'
 export { ContextualBindingsBuilder } from './container/ContextualBindingsBuilder.js'
-export type { Binding, ServiceFactory, ServiceScope, ServiceToken } from './container/types.js'
+export type {
+  Binding,
+  BindingCondition,
+  ContainerEmitter,
+  ContainerOptions,
+  ServiceFactory,
+  ServiceScope,
+  ServiceToken,
+} from './container/types.js'
 export { type DirectoriesNode, directories } from './directories.js'
 export { Env, EnvValidationException } from './env/Env.js'
 export { loadEnvFiles } from './env/loadEnvFiles.js'
@@ -288,6 +304,7 @@ export {
   type Codemods,
   createCodemods,
   type EnvValidationNode,
+  type EnvVarsOptions,
   type GeneratedStub,
   type MiddlewarePosition,
   type PreloadEnvironment,
