@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { compile, escapeHtml, generate, render, StubSyntaxError } from '../../src/stubs/template.js'
+import { compile, escapeHtml, render, StubSyntaxError } from '../../src/stubs/template.js'
 
 describe('stub templates — interpolation', () => {
   it('reads a value, and reaches into an object', () => {
@@ -119,12 +119,79 @@ describe('stub templates — what it refuses', () => {
   })
 })
 
-describe('stub templates — the generated source', () => {
-  it('is readable, which is where a subtle mistake shows', () => {
-    // Exposed on purpose: the compiled body is the only place to see what a
-    // template actually became.
-    expect(generate('Hi {{ name }}', { props: ['name'] })).toBe(
-      `var{name}=$$s,x=\`Hi \${$$e(name)}\`;return x`,
+describe('stub templates — expressions', () => {
+  it('computes what a stub needs', () => {
+    const state = { name: 'user', items: ['a', 'b'], entity: { path: null } }
+    expect(render("{{ name + 's' }}", state)).toBe('users')
+    expect(render('{{ items.length > 1 ? "many" : "one" }}', state)).toBe('many')
+    expect(render("{{ entity.path ?? 'root' }}", state)).toBe('root')
+    expect(render('{{ entity?.missing?.deep }}|{{ items[1] }}', state)).toBe('|b')
+    expect(render('{{ (!items.length) }}{{ -2 * 3 + 1 }}{{ 7 % 4 }}', state)).toBe('false-53')
+    expect(render('{{ 1 == "1" }}{{ null == undefined }}{{ 0 == null }}', state)).toBe(
+      'truetruefalse',
+    )
+  })
+
+  it('calls a helper the state hands over, with its owner as `this`', () => {
+    const string = {
+      prefix: 'App',
+      pascal(this: { prefix: string }, value: unknown) {
+        return `${this.prefix}${String(value).charAt(0).toUpperCase()}${String(value).slice(1)}`
+      },
+    }
+    expect(render('{{ string.pascal(name) }}', { name: 'user', string })).toBe('AppUser')
+  })
+
+  it('hands a block the values its arguments compute', () => {
+    const out = compile('{{#note tone=level list=[1, 2] meta={ a: 1 } }}', {
+      props: ['level'],
+      blocks: { note: (args) => JSON.stringify(args) },
+    })({ level: 'warn' })
+    expect(out).toBe('{"tone":"warn","list":[1,2],"meta":{"a":1}}')
+  })
+})
+
+describe('stub templates — what a stub cannot reach', () => {
+  // The engine used to compile a template with `new Function`: a stub was
+  // code. These are the ways out a template could try, and each one stops.
+  it('reads no prototype — the road back to a Function constructor', () => {
+    expect(() => render('{{ name.constructor }}', { name: 'x' })).toThrowError(
+      /cannot read "constructor"/,
+    )
+    expect(() =>
+      render("{{ name.constructor.constructor('return process')() }}", { name: 'x' }),
+    ).toThrowError(/cannot read "constructor"/)
+    expect(() => render('{{ entity.__proto__ }}', { entity: {} })).toThrowError(/__proto__/)
+    expect(() => render("{{ entity['constr' + 'uctor'] }}", { entity: {} })).toThrowError(
+      /constructor/,
+    )
+  })
+
+  it('sees no inherited method, so it calls none', () => {
+    expect(render('[{{ entity.toString }}]', { entity: {} })).toBe('[]')
+    expect(() => render('{{ name.toUpperCase() }}', { name: 'x' })).toThrowError(
+      /is not a function/,
+    )
+  })
+
+  it('sees no global', () => {
+    for (const global of ['process', 'globalThis', 'require', 'Function', 'eval']) {
+      expect(() => render(`{{ ${global} }}`, {})).toThrowError(
+        new ReferenceError(`${global} is not defined`),
+      )
+    }
+  })
+
+  it('refuses JavaScript it does not interpret, at compile time', () => {
+    for (const source of ['{{ a = 1 }}', '{{ (() => 1)() }}', `{{ \`$\{a}\` }}`, '{{ a; b }}']) {
+      expect(() => compile(source, { props: ['a', 'b'] })).toThrowError(StubSyntaxError)
+    }
+  })
+
+  it('refuses an elif or an else with no if open', () => {
+    expect(() => render('{{#else}}x', {})).toThrowError(/outside an \{\{#if\}\}/)
+    expect(() => render('{{#each items}}{{#elif a}}{{/each}}', { items: [], a: 1 })).toThrowError(
+      StubSyntaxError,
     )
   })
 })

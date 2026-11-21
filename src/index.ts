@@ -314,9 +314,9 @@ export {
 export {
   compile as compileStub,
   escapeHtml,
-  generate as generateStub,
   render as renderStub,
   type StubBlock,
+  type StubFunction,
   StubSyntaxError,
   type StubValue,
   type TemplateOptions,
