@@ -170,6 +170,47 @@ export interface ReamrcConfig {
    * by passing `true`.
    */
   metaFiles?: MetaFileConfig[]
+  /**
+   * The phone app `ream android:*` builds from the app's aurora components
+   * (read by the CLI, which checks every value: see "Mobile apps" in its
+   * reference).
+   */
+  mobile?: MobileConfig
+}
+
+/** `mobile` in reamrc.ts: the phone app `ream android:*` builds. */
+export interface MobileConfig {
+  /** The app's name on the phone. */
+  name: string
+  /** The application id: dotted, each part starting with a letter (`ch.example.app`). */
+  id: string
+  /** The module that calls `run(App)` from `@c9up/orbit/react-native`. */
+  entry: string
+  /** versionName. Default `1.0.0`. */
+  version?: string
+  /** versionCode: a whole number from 1, raised for each store upload. */
+  build?: number
+  /** A PNG. */
+  icon?: string
+  /** The Tailwind entry compiled into orbit's style table. */
+  css?: string
+  android?: {
+    /** `CAMERA` stands for `android.permission.CAMERA`; a dotted name is kept as written. */
+    permissions?: string[]
+    /** Default `['arm64-v8a', 'x86_64']`. */
+    abis?: Array<'arm64-v8a' | 'x86_64' | 'armeabi-v7a' | 'x86'>
+    /** The release keystore; its passwords come from REAM_ANDROID_STORE_PASSWORD / REAM_ANDROID_KEY_PASSWORD. */
+    signing?: { keystore: string; alias: string }
+  }
+  /** Over-the-air updates (@c9up/robledo). */
+  updates?: {
+    /** The app's server, `…/__robledo`. */
+    url: string
+    /** What `ream generate:update-key` prints. */
+    publicKey: string
+    /** Where `ream android:publish` writes. Default `robledo`. */
+    directory?: string
+  }
 }
 
 /**

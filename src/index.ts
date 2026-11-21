@@ -280,6 +280,7 @@ export {
 export type {
   HyperServerLike,
   IgnitorConfig,
+  MobileConfig,
   ReamrcConfig,
   TestSuiteConfig,
   TestsConfig,
