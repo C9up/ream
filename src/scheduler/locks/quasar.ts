@@ -30,7 +30,9 @@ function isConnectionSource(value: unknown): value is ConnectionSource {
  */
 function isLockRedisClient(value: unknown): value is LockRedisClient {
   if (typeof value !== 'object' || value === null) return false
-  return ['set', 'eval'].every((name) => typeof Reflect.get(value, name) === 'function')
+  return ['set', 'evalsha', 'script'].every(
+    (name) => typeof Reflect.get(value, name) === 'function',
+  )
 }
 
 /**

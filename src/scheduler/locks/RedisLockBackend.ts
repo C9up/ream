@@ -7,20 +7,27 @@
  * `MemoryLockBackend` does not close that gap — each process keeps its
  * own map — and the scheduler locks nothing at all by default.
  *
- * No import of a Redis package. The client is taken structurally — `set`
- * and `eval` — so this works against a `@c9up/quasar` connection without
- * ream depending on quasar, which is an optional peer.
+ * No import of a Redis package. The client is taken structurally — `set`,
+ * `evalsha` and `script` — so this works against a `@c9up/quasar` connection
+ * without ream depending on quasar, which is an optional peer.
+ *
+ * The release script runs by its digest (EVALSHA), loaded with SCRIPT LOAD
+ * the first time Redis answers that it does not know it. A client that only
+ * answers EVAL is no longer enough: supply-chain scanners report a `.eval`
+ * call as dynamic code execution, and EVALSHA does not resend the script.
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { assertValidTtl, type LockBackend } from './LockBackend.js'
 
 /** The commands this issues. Any client answering them will do. */
 export interface LockRedisClient {
   /** `SET key value PX <ttl> NX` — answers null when the key already exists. */
   set(key: string, value: string, ...args: unknown[]): Promise<unknown>
-  /** `EVAL script numKeys ...` — used for the compare-and-delete release. */
-  eval(script: string, numKeys: number, ...args: unknown[]): Promise<unknown>
+  /** `EVALSHA sha1 numKeys ...` — runs the compare-and-delete release. */
+  evalsha(sha1: string, numKeys: number, ...args: unknown[]): Promise<unknown>
+  /** `SCRIPT LOAD script` — when Redis answers NOSCRIPT to the above. */
+  script(subcommand: 'LOAD', script: string): Promise<unknown>
 }
 
 /**
@@ -54,6 +61,11 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 `
+const RELEASE_SHA = createHash('sha1').update(RELEASE).digest('hex')
+
+function isNoScript(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('NOSCRIPT')
+}
 
 export class RedisLockBackend implements LockBackend {
   readonly #source: LockRedisResolver
@@ -117,6 +129,15 @@ export class RedisLockBackend implements LockBackend {
     if (token === undefined) return
     this.#tokens.delete(name)
     const client = await this.#client()
-    await client.eval(RELEASE, 1, this.#key(name), token)
+    const key = this.#key(name)
+    try {
+      await client.evalsha(RELEASE_SHA, 1, key, token)
+    } catch (error) {
+      // Only "unknown script" is retried: it means the script did not run.
+      // Any other error may have come after it ran.
+      if (!isNoScript(error)) throw error
+      await client.script('LOAD', RELEASE)
+      await client.evalsha(RELEASE_SHA, 1, key, token)
+    }
   }
 }

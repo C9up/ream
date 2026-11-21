@@ -2,14 +2,17 @@
  * The lock a second replica needs: without one, every instance runs every
  * scheduled task on every tick.
  */
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { LockRedisClient, ReamError } from '../../src/index.js'
 import { locks, RedisLockBackend } from '../../src/index.js'
 
-/** A Redis double honouring the two commands the backend issues. */
+/** A Redis double honouring the commands the backend issues. */
 function fakeRedis() {
   const store = new Map<string, { value: string; expiresAt: number }>()
   const calls: unknown[][] = []
+  /** The scripts SCRIPT LOAD was given, by digest — as Redis keeps them. */
+  const scripts = new Set<string>()
   const live = (key: string) => {
     const entry = store.get(key)
     if (entry === undefined) return undefined
@@ -30,10 +33,17 @@ function fakeRedis() {
       store.set(key, { value, expiresAt: Date.now() + Number(px) })
       return 'OK'
     },
-    async eval(_script, _numKeys, ...args) {
-      const [key, token] = args as [string, string]
-      calls.push(['eval', key, token])
-      if (live(key)?.value !== token) return 0
+    async script(subcommand, script) {
+      calls.push(['script', subcommand])
+      const sha = createHash('sha1').update(script).digest('hex')
+      scripts.add(sha)
+      return sha
+    },
+    async evalsha(sha, _numKeys, ...args) {
+      if (!scripts.has(sha)) throw new Error('NOSCRIPT No matching script.')
+      const [key, token] = args.map(String)
+      calls.push(['evalsha', key, token])
+      if (key === undefined || live(key)?.value !== token) return 0
       store.delete(key)
       return 1
     },
@@ -49,6 +59,34 @@ describe('RedisLockBackend', () => {
 
     expect(await first.acquire('invoices', 60_000)).toBe(true)
     expect(await second.acquire('invoices', 60_000)).toBe(false)
+  })
+
+  it('loads the release script once, then runs it by digest only', async () => {
+    const redis = fakeRedis()
+    const backend = new RedisLockBackend(redis)
+    await backend.acquire('a', 60_000)
+    await backend.release('a')
+    await backend.acquire('b', 60_000)
+    await backend.release('b')
+    const scripted = redis.calls.filter(([command]) => command !== 'set')
+    // NOSCRIPT the first time, so SCRIPT LOAD and EVALSHA again; then EVALSHA alone.
+    expect(scripted).toEqual([
+      ['script', 'LOAD'],
+      ['evalsha', 'ream:schedule:lock:a', expect.any(String)],
+      ['evalsha', 'ream:schedule:lock:b', expect.any(String)],
+    ])
+  })
+
+  it('does not run the release again after an error other than NOSCRIPT', async () => {
+    const redis = fakeRedis()
+    const backend = new RedisLockBackend(redis)
+    await backend.acquire('a', 60_000)
+    const evalsha = vi.fn(async () => {
+      throw new Error('READONLY You cannot write against a read only replica.')
+    })
+    redis.evalsha = evalsha
+    await expect(backend.release('a')).rejects.toThrow(/READONLY/)
+    expect(evalsha).toHaveBeenCalledTimes(1)
   })
 
   it('frees the name on release, for whichever instance asks next', async () => {
