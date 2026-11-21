@@ -119,6 +119,7 @@ universe through the container, never via a static import.
 | [@c9up/lumen](https://github.com/C9up/lumen) | Terminal UI — colours, tables, spinners, task lists (what the console prints with) |
 | [@c9up/nebula](https://github.com/C9up/nebula) | shadcn/ui ported to Aurora, as atomic design |
 | [@c9up/nova](https://github.com/C9up/nova) | Web Push notifications (VAPID) |
+| [@c9up/orbit](https://github.com/C9up/orbit) | Aurora components as native views on Android (Rust host, UI-thread gestures and motion) |
 | [@c9up/parsec](https://github.com/C9up/parsec) | Metrics & telemetry (Prometheus exporter, optional OpenTelemetry) |
 | [@c9up/photon](https://github.com/C9up/photon) | Frontend rendering engine |
 | [@c9up/prism](https://github.com/C9up/prism) | Image processing — resize, convert, crop, composite, watermark (Rust-native) |
@@ -126,6 +127,7 @@ universe through the container, never via a static import.
 | [@c9up/ream-cli](https://github.com/C9up/ream-cli) | CLI & code generators (Rust binary, `ream` command) |
 | [@c9up/ream-mcp](https://github.com/C9up/ream-mcp) | MCP server — agent-ready framework assistant |
 | [@c9up/relay](https://github.com/C9up/relay) | Realtime transport (SSE; WebSocket Hub protocol implemented, no server upgrade point yet) |
+| [@c9up/robledo](https://github.com/C9up/robledo) | Over-the-air updates for the mobile app (signed, verified, rolled back) |
 | [@c9up/rosetta](https://github.com/C9up/rosetta) | Internationalization (i18n) |
 | [@c9up/rover](https://github.com/C9up/rover) | Mail (SMTP, SES, Mailgun, SendGrid, Brevo, Resend, SparkPost, log) |
 | [@c9up/rune](https://github.com/C9up/rune) | Validation engine |
