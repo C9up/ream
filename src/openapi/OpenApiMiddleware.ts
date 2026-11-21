@@ -75,6 +75,12 @@ export class OpenApiMiddleware {
     return next()
   }
 
+  /**
+   * Swagger UI from jsDelivr at an exact version, with each file's
+   * Subresource Integrity hash: the browser refuses a file the CDN serves
+   * different from the one hashed here. Moving the version means recomputing
+   * both hashes: `curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A`.
+   */
   #renderSwaggerUi(): string {
     const { safeTitle } = this.#resolveSpec()
     return `<!DOCTYPE html>
@@ -82,11 +88,11 @@ export class OpenApiMiddleware {
 <head>
   <meta charset="UTF-8">
   <title>${safeTitle}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.35.1/swagger-ui.css" integrity="sha384-WlYgdmXYOOBWL5apwjDEZwN+U3HmXSSu5R6V5aGxEcf7z+KuRNwBhoxKVN1i3D5I" crossorigin="anonymous">
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.35.1/swagger-ui-bundle.js" integrity="sha384-J5eKRXKO1KzUTPkO0GRmGH2WEYUg6SSZlufilxvTwI6nmhLumjNWFMby3QQnyobZ" crossorigin="anonymous"></script>
   <script>
     SwaggerUIBundle({
       url: ${this.#safeSpecPathJs},

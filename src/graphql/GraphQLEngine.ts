@@ -596,18 +596,27 @@ export class GraphQLEngine {
     return { typeName, fields: raw.fields.map(mapRustField), variables: raw.variables }
   }
 
+  /**
+   * GraphiQL from jsDelivr, each file at an exact version and with its
+   * Subresource Integrity hash: the browser refuses a file the CDN serves
+   * different from the one hashed here, so a compromised CDN or package
+   * cannot run code on the page. React stays on 18: GraphiQL 3's browser
+   * build reads the `React` global, which only React 18's UMD files define
+   * (19 ships none). Moving a version means recomputing its hash:
+   * `curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A`.
+   */
   #renderPlayground(): string {
     return `<!DOCTYPE html>
 <html>
 <head>
   <title>GraphQL Playground</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/graphiql@3/graphiql.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/graphiql@3.9.0/graphiql.min.css" integrity="sha384-QMux00XgRtwRLSYIY3kw2rj1ovk5AuuliAchk+HSQbqdbGFnz9GYuqIlOqxhwCE2" crossorigin="anonymous" />
 </head>
 <body style="margin:0;overflow:hidden">
   <div id="graphiql" style="height:100vh"></div>
-  <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://cdn.jsdelivr.net/npm/graphiql@3/graphiql.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/graphiql@3.9.0/graphiql.min.js" integrity="sha384-8NGfVj4CVlqHajlZj+bPJT4thxPMHMJYn7DWK2CvtopLd02E7qsPHazniBYvVjOO" crossorigin="anonymous"></script>
   <script>
     const root = ReactDOM.createRoot(document.getElementById('graphiql'));
     root.render(React.createElement(GraphiQL, {
