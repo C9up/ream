@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { handleKey, helpLines, installShortcuts } from '../../src/dev/shortcuts.js'
 
@@ -49,6 +52,33 @@ describe('dev > the keyboard shortcuts', () => {
     // They act on this terminal, not on the server.
     expect(handleKey('h')).toBe(true)
     expect(handleKey('c')).toBe(true)
+  })
+
+  it('asks `ream dev` to open the address, through the file it names', () => {
+    // No process is started here: `ream dev` reads the file and opens it.
+    const dir = mkdtempSync(join(tmpdir(), 'ream-open-'))
+    const file = join(dir, 'open')
+    const previous = process.env.REAM_DEV_OPEN
+    process.env.REAM_DEV_OPEN = file
+    try {
+      expect(handleKey('o', { url: 'http://localhost:3333' })).toBe(true)
+      expect(readFileSync(file, 'utf8')).toBe('http://localhost:3333')
+      expect(existsSync(`${file}.next`)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.REAM_DEV_OPEN
+      else process.env.REAM_DEV_OPEN = previous
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prints the address when `ream dev` gave no file to write it to', () => {
+    const previous = process.env.REAM_DEV_OPEN
+    delete process.env.REAM_DEV_OPEN
+    try {
+      expect(handleKey('o', { url: 'http://localhost:3333' })).toBe(true)
+    } finally {
+      if (previous !== undefined) process.env.REAM_DEV_OPEN = previous
+    }
   })
 
   it('says so rather than opening nothing', () => {

@@ -13,12 +13,16 @@
  * exiting on the restart code is what makes the parent start it again, and
  * the graceful shutdown is already wired to a signal.
  *
- * NO dependency for opening a browser. Upstream imports `open`; this spawns
- * the platform's opener, which is the one thing that package does on the three
- * platforms a dev server runs on.
+ * NAMED DEVIATION — `o` does not start a process. Upstream imports `open`,
+ * which spawns the platform's opener from the application; a framework that
+ * reaches for a shell at run time is what supply-chain scanners flag, and
+ * rightly ask about. The application writes the address to the file `ream
+ * dev` names in REAM_DEV_OPEN, and `ream dev` — which already supervises
+ * processes — opens it, with no shell on any platform. Without that file (a
+ * `ream dev` that predates it) the address is printed instead.
  */
 
-import { spawn } from 'node:child_process'
+import { renameSync, writeFileSync } from 'node:fs'
 import { lumen } from '@c9up/lumen'
 import { clearScreen } from './fullReload.js'
 
@@ -77,8 +81,8 @@ function shortcutsFor(options: ShortcutsOptions): Shortcut[] {
           return
         }
         ui.logger.log('')
-        ui.logger.info(`Opening ${options.url}...`)
-        openBrowser(options.url)
+        if (requestOpen(options.url)) ui.logger.info(`Opening ${options.url}...`)
+        else ui.logger.info(`Open ${options.url} in your browser`)
       },
     },
     {
@@ -133,26 +137,20 @@ export function installShortcuts(options: ShortcutsOptions = {}): () => void {
 }
 
 /**
- * Hand the URL to whatever opens links here.
+ * Ask `ream dev` to open `url`; false when it gave no way to.
  *
- * Detached and ignored: an opener that writes to stderr, or outlives the dev
- * server, must not take the terminal or the exit with it.
+ * Written beside and renamed into place, so `ream dev` never reads half an
+ * address.
  */
-function openBrowser(url: string): void {
-  const command =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+function requestOpen(url: string): boolean {
+  const file = process.env.REAM_DEV_OPEN
+  if (file === undefined || file === '') return false
   try {
-    const child = spawn(command, [url], {
-      detached: true,
-      stdio: 'ignore',
-      shell: process.platform === 'win32',
-    })
-    child.unref()
-    child.on('error', () => {
-      // No opener on this machine — a headless container, say. The address was
-      // printed a moment ago; losing the click is not worth a crash.
-    })
+    writeFileSync(`${file}.next`, url)
+    renameSync(`${file}.next`, file)
+    return true
   } catch {
-    // Same.
+    // `ream dev` removed its directory on the way out; print the address.
+    return false
   }
 }
