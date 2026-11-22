@@ -11,7 +11,6 @@ crate-type = ["lib"]
 
 [dependencies]
 napi = { version = "3", features = ["async", "napi8", "serde-json"] }
-napi-derive = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }
