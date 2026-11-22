@@ -209,10 +209,10 @@ jobs:
             echo "::error::0 tests ran — test discovery is broken (check vitest include glob)"
             exit 1
           fi
-          skipped=$(jq '[.testResults[].assertionResults[] | select(.status=="skipped" or .status=="pending" or .status=="todo")] | length' test-results.json)
+          skipped=$(jq '[.testResults[].assertionResults[] | select(.status != "passed" and .status != "failed")] | length' test-results.json)
           if [ "$skipped" -ne 0 ]; then
             echo "::error::$skipped tests skipped — check the native binaries load and REAM_SKIP_NETWORK_TESTS is unset"
-            jq -r '.testResults[] | .name as $file | .assertionResults[] | select(.status=="skipped" or .status=="pending" or .status=="todo") | "\($file): \(.fullName)"' test-results.json
+            jq -r '.testResults[] | .name as $file | .assertionResults[] | select(.status != "passed" and .status != "failed") | "\($file): \(.fullName)"' test-results.json
             exit 1
           fi
         shell: bash
