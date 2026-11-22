@@ -25,6 +25,7 @@ const DEFAULT_MAX_RESPONSE_BYTES = 100 * 1024 * 1024
 
 import type { CookieSigner } from '../security/CookieSigner.js'
 import { Macroable } from '../utils/Macroable.js'
+import { safeStringify } from '../utils/safeStringify.js'
 import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
 import type { RedirectBuilder } from './RedirectBuilder.js'
 import {
@@ -67,24 +68,6 @@ function contentDisposition(disposition: string, filename: string): string {
   const base = `${disposition}; filename="${ascii}"`
   if (ascii === quoted) return base
   return `${base}; filename*=UTF-8''${encodeURIComponent(filename)}`
-}
-
-/**
- * JSON.stringify with AdonisJS-parity safety: `BigInt` values are emitted as
- * strings (native `JSON.stringify` throws on them) and circular references are
- * dropped instead of throwing — so `response.json()` / an object `send()` never
- * blows up on a payload the raw serializer can't handle.
- */
-function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>()
-  return JSON.stringify(value, (_key, val) => {
-    if (typeof val === 'bigint') return val.toString()
-    if (typeof val === 'object' && val !== null) {
-      if (seen.has(val)) return undefined
-      seen.add(val)
-    }
-    return val
-  })
 }
 
 /**

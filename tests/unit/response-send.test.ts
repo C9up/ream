@@ -37,14 +37,34 @@ describe('ream > Response.send() / json() — AdonisJS parity', () => {
     expect(JSON.parse(r.getBody())).toEqual({ id: '9007199254740993' })
   })
 
-  it('drops circular references in an object send() instead of throwing', () => {
+  it('writes a cycle as "[Circular]" in an object send() instead of throwing', () => {
     const cyclic: Record<string, unknown> = { name: 'x' }
     cyclic.self = cyclic
     const r = new Response()
     expect(() => r.send(cyclic)).not.toThrow()
-    const parsed = JSON.parse(r.getBody())
-    expect(parsed.name).toBe('x')
-    expect(parsed.self).toBeUndefined()
+    expect(JSON.parse(r.getBody())).toEqual({ name: 'x', self: '[Circular]' })
+  })
+
+  it('writes an object reached twice, as long as it is not its own ancestor', () => {
+    const shared = { id: 1 }
+    const r = new Response()
+    r.json({ a: shared, b: shared, list: [shared, { nested: shared }] })
+    expect(JSON.parse(r.getBody())).toEqual({
+      a: { id: 1 },
+      b: { id: 1 },
+      list: [{ id: 1 }, { nested: { id: 1 } }],
+    })
+  })
+
+  it('finds a cycle through an array and a nested object', () => {
+    const root: Record<string, unknown> = { name: 'root' }
+    root.children = [{ parent: root, leaf: { up: root } }]
+    const r = new Response()
+    r.json(root)
+    expect(JSON.parse(r.getBody())).toEqual({
+      name: 'root',
+      children: [{ parent: '[Circular]', leaf: { up: '[Circular]' } }],
+    })
   })
 })
 
