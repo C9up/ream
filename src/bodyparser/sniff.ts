@@ -1284,7 +1284,11 @@ function concat(parts: readonly Uint8Array[], length: number): Uint8Array {
 }
 
 /** `bytes` as a stream of slices, so nothing is copied that is never read. */
-function streamOf(bytes: Uint8Array): ReadableStream<BufferSource> {
+// `ArrayBufferView | ArrayBuffer` is DOM's `BufferSource`, spelled out: a
+// package that compiles these sources without the DOM lib (inker does) has
+// no `BufferSource`, and a narrower chunk type does not fit
+// `DecompressionStream`'s writable side under the DOM lib.
+function streamOf(bytes: Uint8Array): ReadableStream<ArrayBufferView | ArrayBuffer> {
   let offset = 0
   return new ReadableStream({
     pull(controller) {
