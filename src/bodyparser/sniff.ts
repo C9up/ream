@@ -200,7 +200,7 @@ class Cursor {
   /** Skip forward; past the end it stops at the end, as upstream. */
   ignore(length: number): void {
     const left = this.size - this.position
-    this.position += length > left ? left : length
+    this.position += Math.min(length, left)
   }
 
   safeIgnore(length: number, maximum: number): void {
