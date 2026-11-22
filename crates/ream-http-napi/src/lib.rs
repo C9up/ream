@@ -9,9 +9,10 @@ use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMod
 use napi::JsValue;
 use napi_derive::napi;
 use ream_http::{
-    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcLimits, GrpcReply, MultipartCounts,
-    RateLimitConfig, RateLimiter, ReamRequest, ReamResponse, ReamServer, ShieldConfig,
-    ShieldFilter, StreamRegistry, TrustedProxies,
+    BodyLimit, BodyLimits, ConnectionLimits, GrpcCall, GrpcLimits, GrpcReply, MessageData,
+    MultipartCounts, OriginPolicy, RateLimitConfig, RateLimiter, ReamRequest, ReamResponse,
+    ReamServer, SendError, ShieldConfig, ShieldFilter, StreamRegistry, TrustedProxies,
+    WebSocketEvent, WebSocketLimits, WebSocketRegistry,
 };
 use ream_napi_core::callback::FatalThreadsafeFunction;
 use ream_napi_core::catch_unwind_napi;
@@ -35,6 +36,9 @@ pub struct NapiResponse {
     pub headers: HashMap<String, String>,
     pub body: String,
     pub stream_id: Option<String>,
+    /// With status 101: the socket registered with `registerWebSocket` that
+    /// this answer opens.
+    pub websocket_id: Option<String>,
 }
 
 impl From<NapiResponse> for ReamResponse {
@@ -44,6 +48,7 @@ impl From<NapiResponse> for ReamResponse {
             headers: r.headers,
             body: r.body,
             stream_id: r.stream_id,
+            websocket_id: r.websocket_id.map(String::into_boxed_str),
         }
     }
 }
@@ -270,6 +275,47 @@ fn optional_millis(value: Option<u32>, default: Option<Duration>) -> Option<Dura
     }
 }
 
+/// Limits of every WebSocket connection. Omitted fields keep their default.
+#[napi(object)]
+pub struct NapiWebSocketConfig {
+    /// Largest incoming frame payload, bytes. Default 1 MiB.
+    pub max_frame_size: Option<u32>,
+    /// Largest incoming message, bytes. Default 1 MiB.
+    pub max_message_size: Option<u32>,
+    /// Silence before the connection is closed, ms; a ping goes out at half.
+    /// `0` never closes. Default 60 000.
+    pub idle_timeout: Option<u32>,
+    /// Bytes allowed to wait for a slow client, and for JavaScript, per
+    /// connection. Default 4 MiB.
+    pub max_buffered_bytes: Option<u32>,
+    /// Browser origins allowed to connect (`https://app.example.com`), or
+    /// `["*"]` for any. Omitted: same origin as the request's `Host` only.
+    pub allowed_origins: Option<Vec<String>>,
+}
+
+/// What a socket reports: a message (`text` or `binary`) or its close.
+#[napi(object)]
+pub struct NapiWebSocketEvent {
+    pub id: String,
+    /// `message` or `close`.
+    pub kind: String,
+    pub text: Option<String>,
+    pub binary: Option<Uint8Array>,
+    pub code: Option<u32>,
+    pub reason: Option<String>,
+}
+
+fn websocket_size(name: &str, value: Option<u32>, default: usize) -> napi::Result<usize> {
+    match value {
+        None => Ok(default),
+        Some(0) => Err(invalid_config(
+            "E_INVALID_WEBSOCKET_CONFIG",
+            format!("`{name}` must be at least 1 byte"),
+        )),
+        Some(bytes) => Ok(bytes as usize),
+    }
+}
+
 /// NAPI-exposed Hyper HTTP server.
 #[napi]
 pub struct HyperServer {
@@ -293,7 +339,15 @@ pub struct HyperServer {
     /// inner `ReamServer` (which clones the same handle on boot). Avoids
     /// "server not started" surprises for ahead-of-time stream setup.
     stream_registry: StreamRegistry,
+    /// WebSocket sockets, owned here for the same reason as the stream
+    /// registry: JS registers a socket from inside the request handler.
+    websockets: WebSocketRegistry,
+    /// Set by `onWebSocketEvent`; cleared by `close()` so it stops pinning
+    /// the event loop.
+    websocket_events: Arc<std::sync::Mutex<Option<Arc<WebSocketEvents>>>>,
 }
+
+type WebSocketEvents = FatalThreadsafeFunction<WebSocketEvent, NapiWebSocketEvent, ()>;
 
 #[napi]
 impl HyperServer {
@@ -343,6 +397,8 @@ impl HyperServer {
                 connection_limits: Arc::new(std::sync::Mutex::new(ConnectionLimits::default())),
                 rate_limiter: Arc::new(std::sync::Mutex::new(None)),
                 stream_registry: StreamRegistry::new(),
+                websockets: WebSocketRegistry::new(),
+                websocket_events: Arc::new(std::sync::Mutex::new(None)),
             })
         })
     }
@@ -685,6 +741,7 @@ impl HyperServer {
         })?;
         srv.set_grpc_limits(grpc_limits);
         srv.set_stream_registry(self.stream_registry.clone());
+        srv.set_websockets(self.websockets.clone());
 
         // Wire the shield filter if the JS side configured it before boot.
         // No call → no filter installed (server runs with `NoopFilter`).
@@ -822,6 +879,10 @@ impl HyperServer {
         if let Ok(mut guard) = self.grpc_cancel.lock() {
             *guard = None;
         }
+        self.websockets.set_event_sink(None);
+        if let Ok(mut guard) = self.websocket_events.lock() {
+            *guard = None;
+        }
         // Shared runtime is static — not dropped on close (reused by other crates)
         Ok(())
     }
@@ -930,6 +991,179 @@ impl HyperServer {
             tsfn.call((), ThreadsafeFunctionCallMode::NonBlocking);
         });
         Ok(())
+    }
+
+    // ─── WebSocket API ─────────────────────────────────────────
+    //
+    // An upgrade request reaches the request handler with `websocket: true`.
+    // To accept it the handler calls `registerWebSocket(id)` and answers 101
+    // with `websocketId: id`; anything else is sent as plain HTTP. Messages
+    // and the close arrive through the one `onWebSocketEvent` callback.
+
+    /// Limits of every WebSocket connection. Must be called BEFORE `listen()`.
+    #[napi]
+    pub fn configure_web_sockets(&self, config: NapiWebSocketConfig) -> napi::Result<()> {
+        let defaults = WebSocketLimits::default();
+        let max_message_size = websocket_size(
+            "maxMessageSize",
+            config.max_message_size,
+            defaults.max_message_size,
+        )?;
+        let max_frame_size = websocket_size(
+            "maxFrameSize",
+            config.max_frame_size,
+            defaults.max_frame_size.min(max_message_size),
+        )?;
+        let origins = match config.allowed_origins {
+            None => OriginPolicy::SameOrigin,
+            Some(list) if list.iter().any(|origin| origin == "*") => OriginPolicy::Any,
+            Some(list) => OriginPolicy::List(list),
+        };
+        self.websockets.configure(WebSocketLimits {
+            max_frame_size,
+            max_message_size,
+            idle_timeout: match config.idle_timeout {
+                None => defaults.idle_timeout,
+                Some(0) => None,
+                Some(ms) => Some(Duration::from_millis(u64::from(ms))),
+            },
+            max_buffered_bytes: websocket_size(
+                "maxBufferedBytes",
+                config.max_buffered_bytes,
+                defaults.max_buffered_bytes,
+            )?,
+            origins,
+        });
+        Ok(())
+    }
+
+    /// Register the callback told about every message and every close.
+    /// A message's bytes count against its socket's budget until this
+    /// callback has been called with it.
+    #[napi]
+    pub fn on_web_socket_event(
+        &self,
+        callback: Function<'static, NapiWebSocketEvent, ()>,
+    ) -> napi::Result<()> {
+        let tsfn: WebSocketEvents = callback
+            .build_threadsafe_function::<WebSocketEvent>()
+            .callee_handled::<false>()
+            .build_callback(|ctx: ThreadsafeCallContext<WebSocketEvent>| {
+                Ok(match ctx.value {
+                    WebSocketEvent::Message { id, data, permit } => {
+                        // The message is in JavaScript's hands from here on.
+                        drop(permit);
+                        let (text, binary) = match data {
+                            MessageData::Text(text) => (Some(text), None),
+                            MessageData::Binary(bytes) => (None, Some(Uint8Array::from(bytes))),
+                        };
+                        NapiWebSocketEvent {
+                            id,
+                            kind: "message".into(),
+                            text,
+                            binary,
+                            code: None,
+                            reason: None,
+                        }
+                    }
+                    WebSocketEvent::Close { id, code, reason } => NapiWebSocketEvent {
+                        id,
+                        kind: "close".into(),
+                        text: None,
+                        binary: None,
+                        code: Some(u32::from(code)),
+                        reason: Some(reason),
+                    },
+                })
+            })?;
+        let tsfn = Arc::new(tsfn);
+        let sink_tsfn = tsfn.clone();
+        self.websockets
+            .set_event_sink(Some(Arc::new(move |event: WebSocketEvent| {
+                sink_tsfn.call(event, ThreadsafeFunctionCallMode::NonBlocking);
+            })));
+        *self.websocket_events.lock().map_err(|_| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "WebSocket events mutex poisoned",
+            )
+        })? = Some(tsfn);
+        Ok(())
+    }
+
+    /// Reserve a socket ahead of answering 101. `false` when the id is taken.
+    #[napi]
+    pub fn register_web_socket(&self, id: String) -> bool {
+        self.websockets.register(id)
+    }
+
+    /// Forget a socket whose 101 will not be sent.
+    #[napi]
+    pub fn discard_web_socket(&self, id: String) {
+        self.websockets.discard(&id);
+    }
+
+    /// Queue a text message. Returns the bytes now waiting for the client,
+    /// `-1` when the socket is closed or closing, `-2` when this message
+    /// would pass `maxBufferedBytes` — the socket is then closed with 1013.
+    #[napi]
+    pub fn web_socket_send_text(&self, id: String, text: String) -> i64 {
+        send_outcome(self.websockets.send_text(&id, text))
+    }
+
+    /// Queue a binary message; same answer as `webSocketSendText`.
+    #[napi]
+    pub fn web_socket_send_binary(&self, id: String, data: Uint8Array) -> i64 {
+        send_outcome(self.websockets.send_binary(&id, data.to_vec()))
+    }
+
+    /// Bytes waiting for the client, `-1` for an unknown socket.
+    #[napi]
+    pub fn web_socket_buffered_amount(&self, id: String) -> i64 {
+        self.websockets
+            .buffered_amount(&id)
+            .map_or(-1, |bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
+    }
+
+    /// Start the closing handshake after what is queued. `false` when the
+    /// socket is unknown or already closing. Throws on a code a close frame
+    /// may not carry (RFC 6455 §7.4) or a reason over 123 bytes.
+    #[napi]
+    pub fn web_socket_close(
+        &self,
+        id: String,
+        code: Option<u32>,
+        reason: Option<String>,
+    ) -> napi::Result<bool> {
+        let code = code.unwrap_or(1000);
+        let sendable = code == 1000
+            || ((1001..=1014).contains(&code) && ![1004, 1005, 1006].contains(&code))
+            || (3000..=4999).contains(&code);
+        if !sendable {
+            return Err(invalid_config(
+                "E_WEBSOCKET_CLOSE_CODE",
+                format!("{code} is not a close code an endpoint may send"),
+            ));
+        }
+        let reason = reason.unwrap_or_default();
+        if reason.len() > 123 {
+            return Err(invalid_config(
+                "E_WEBSOCKET_CLOSE_REASON",
+                "A close reason is at most 123 bytes of UTF-8".into(),
+            ));
+        }
+        // `code` was range-checked above.
+        Ok(self
+            .websockets
+            .close(&id, u16::try_from(code).unwrap_or(1000), reason))
+    }
+}
+
+fn send_outcome(result: Result<usize, SendError>) -> i64 {
+    match result {
+        Ok(bytes) => i64::try_from(bytes).unwrap_or(i64::MAX),
+        Err(SendError::Closed) => -1,
+        Err(SendError::Overflow) => -2,
     }
 }
 

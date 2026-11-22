@@ -37,6 +37,15 @@ pub struct ReamResponse {
     /// if you need a preamble.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_id: Option<String>,
+
+    /// With status `101`, the socket (registered in the
+    /// [`WebSocketRegistry`](crate::websocket::WebSocketRegistry)) this
+    /// answer opens. Any other status discards it.
+    ///
+    /// Boxed: it is rare, and a second inline `Option<String>` would take
+    /// every response past the size clippy accepts in a `Result`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_id: Option<Box<str>>,
 }
 
 fn default_status() -> u16 {
@@ -50,6 +59,7 @@ impl Default for ReamResponse {
             headers: HashMap::new(),
             body: String::new(),
             stream_id: None,
+            websocket_id: None,
         }
     }
 }
@@ -64,6 +74,7 @@ impl ReamResponse {
             headers,
             body: body.into(),
             stream_id: None,
+            websocket_id: None,
         }
     }
 
@@ -76,6 +87,7 @@ impl ReamResponse {
             headers,
             body: body.into(),
             stream_id: None,
+            websocket_id: None,
         }
     }
 

@@ -25,8 +25,14 @@ cookie = "0.18"
 futures-util = "0.3"
 tokio-stream = "0.1"
 tonic = { version = "0.14", default-features = false, features = ["server", "codegen"] }
+# WebSocket framing (RFC 6455): masking, fragmentation, control frames, UTF-8
+# validation, the close handshake. The handshake itself goes through hyper;
+# `handshake` is only for `derive_accept_key`.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
+# A WebSocket client for the tests.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 tonic = { version = "0.14", default-features = false, features = ["server", "codegen", "transport"] }
 # A raw HTTP/2 client: the gRPC tests send what a gRPC client never would
 # (request trailers, a second message, a stream left open, a reset).

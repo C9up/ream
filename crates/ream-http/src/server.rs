@@ -7,6 +7,7 @@ use crate::limits::{BodyLimits, ConnectionLimits};
 use crate::request::ReamRequest;
 use crate::response::ReamResponse;
 use crate::stream_registry::StreamRegistry;
+use crate::websocket::WebSocketRegistry;
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Either, Full, StreamBody};
@@ -75,6 +76,9 @@ pub struct ReamServer {
     /// the response to streaming mode (SSE etc.). Always cloned out into the
     /// per-connection task so handlers / NAPI keep a coherent view.
     stream_registry: StreamRegistry,
+    /// WebSocket sockets — registered by JS before it answers an upgrade
+    /// request `101`, then driven here.
+    websockets: WebSocketRegistry,
     /// gRPC handler. `None` (default) leaves `application/grpc` requests on
     /// the HTTP path, exactly as before gRPC existed.
     grpc_handler: Option<crate::GrpcHandler>,
@@ -101,6 +105,7 @@ impl ReamServer {
             trusted_proxies: Arc::new(TrustedProxies::default()),
             rate_limiter: None,
             stream_registry: StreamRegistry::new(),
+            websockets: WebSocketRegistry::new(),
             grpc_handler: None,
             grpc_limits: crate::GrpcLimits::default(),
             body_limits: Arc::new(BodyLimits::default()),
@@ -120,6 +125,17 @@ impl ReamServer {
     /// `listen()` survive into the request-serving phase.
     pub fn set_stream_registry(&mut self, registry: StreamRegistry) {
         self.stream_registry = registry;
+    }
+
+    /// Hand out the WebSocket registry (sends, closes, limits, events).
+    pub fn websockets(&self) -> WebSocketRegistry {
+        self.websockets.clone()
+    }
+
+    /// Replace the WebSocket registry with an externally-owned one, as
+    /// [`set_stream_registry`](Self::set_stream_registry) does for streams.
+    pub fn set_websockets(&mut self, registry: WebSocketRegistry) {
+        self.websockets = registry;
     }
 
     /// Install an in-process rate limiter. Set to `None` (default) to skip
@@ -195,6 +211,7 @@ impl ReamServer {
             trusted_proxies: self.trusted_proxies.clone(),
             rate_limiter: self.rate_limiter.clone(),
             stream_registry: self.stream_registry.clone(),
+            websockets: self.websockets.clone(),
             grpc_handler: self.grpc_handler.clone(),
             grpc_limits: self.grpc_limits,
             body_limits: self.body_limits.clone(),
@@ -303,6 +320,8 @@ impl ReamServer {
         }
         // EOF every live SSE/streamed body so its connection can finish...
         self.stream_registry.drain().await;
+        // ...close every WebSocket with 1001 (going away)...
+        self.websockets.shutdown().await;
         // ...then tell all in-flight connections to wind down.
         if let Some(tx) = self.conn_shutdown_tx.take() {
             let _ = tx.send(true);
@@ -321,6 +340,7 @@ struct ServeContext {
     trusted_proxies: Arc<TrustedProxies>,
     rate_limiter: Option<Arc<crate::RateLimiter>>,
     stream_registry: StreamRegistry,
+    websockets: WebSocketRegistry,
     grpc_handler: Option<crate::GrpcHandler>,
     grpc_limits: crate::GrpcLimits,
     body_limits: Arc<BodyLimits>,
@@ -330,16 +350,18 @@ struct ServeContext {
 type ServiceBody = Either<ResponseBody, tonic::body::Body>;
 
 /// Serve one accepted connection until it closes, the server shuts down, or
-/// it sits idle past its bound. `_slot` is the connection-cap permit, released
-/// when this task ends.
+/// it sits idle past its bound. `slot` is the connection-cap permit, released
+/// when this task ends — or, when the connection became a WebSocket, when the
+/// socket closes.
 async fn serve_connection(
     stream: TcpStream,
     peer_ip: Arc<str>,
     context: Arc<ServeContext>,
     builder: AutoBuilder<TokioExecutor>,
     mut conn_shutdown: watch::Receiver<bool>,
-    _slot: Option<OwnedSemaphorePermit>,
+    slot: Option<OwnedSemaphorePermit>,
 ) {
+    let slot = slot.map(Arc::new);
     let activity = Arc::new(ConnActivity::new());
     let service = {
         let activity = activity.clone();
@@ -348,8 +370,9 @@ async fn serve_connection(
             let in_flight = activity.begin();
             let context = context.clone();
             let peer_ip = peer_ip.clone();
+            let slot = slot.clone();
             async move {
-                let response = handle_request(req, &peer_ip, &context).await?;
+                let response = handle_request(req, &peer_ip, &context, slot).await?;
                 // The guard rides on the body: the request counts as in
                 // flight until its response — SSE included — is fully sent.
                 Ok::<_, hyper::Error>(response.map(|body| TrackedBody {
@@ -360,7 +383,7 @@ async fn serve_connection(
         })
     };
 
-    let conn = builder.serve_connection(TokioIo::new(stream), service);
+    let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
     tokio::pin!(conn);
     tokio::select! {
         res = conn.as_mut() => {
@@ -506,9 +529,10 @@ impl<B: Body + Unpin> Body for TrackedBody<B> {
 
 /// Route one request through the guards, then to the gRPC or HTTP handler.
 async fn handle_request(
-    req: Request<Incoming>,
+    mut req: Request<Incoming>,
     peer_ip: &str,
     context: &ServeContext,
+    slot: Option<Arc<OwnedSemaphorePermit>>,
 ) -> Result<Response<ServiceBody>, hyper::Error> {
     let registry = &context.stream_registry;
     if let Some(grpc) = context
@@ -528,8 +552,23 @@ async fn handle_request(
             .await
             .map(Either::Right));
     }
+    // A WebSocket handshake is checked here — its headers and its Origin —
+    // and otherwise routed like any request: the application decides.
+    let upgrade = match crate::websocket::check_upgrade(&mut req, &context.websockets.limits()) {
+        Ok(upgrade) => upgrade,
+        Err(res) => {
+            return build_hyper_response(res, registry)
+                .await
+                .map(|r| r.map(Either::Left));
+        }
+    };
     let ream_req = match hyper_to_ream_request(req, peer_ip, context).await {
-        Ok(r) => r,
+        Ok(mut r) => {
+            if upgrade.is_some() {
+                crate::websocket::mark_request(&mut r);
+            }
+            r
+        }
         Err(res) => {
             // Body over its limit, too slow, or malformed — answered from
             // Rust, no NAPI crossing.
@@ -575,9 +614,20 @@ async fn handle_request(
         attach_rate_limit_headers(&mut ream_res, outcome);
     }
 
-    build_hyper_response(ream_res, registry)
-        .await
-        .map(|r| r.map(Either::Left))
+    match crate::websocket::answer(ream_res, upgrade, &context.websockets) {
+        crate::websocket::Answer::Http(res) => build_hyper_response(res, registry)
+            .await
+            .map(|r| r.map(Either::Left)),
+        crate::websocket::Answer::Accept(res, upgrade, id) => {
+            tokio::spawn(crate::websocket::run(
+                context.websockets.clone(),
+                id,
+                upgrade,
+                slot,
+            ));
+            Ok(build_buffered_response(res).map(Either::Left))
+        }
+    }
 }
 
 /// Build the 429 response for a blocked rate-limit outcome. Includes the
@@ -1271,6 +1321,7 @@ mod tests {
             headers,
             body: String::new(),
             stream_id: None,
+            websocket_id: None,
         };
 
         let hyper_res = build_buffered_response(ream_res);

@@ -79,6 +79,13 @@ pub struct ReamRequest {
     /// the raw header.
     #[serde(default)]
     pub cookies: HashMap<String, String>,
+
+    /// The request is a WebSocket handshake the server accepted to pass on:
+    /// HTTP/1.1 GET, version 13, a well-formed key and an allowed `Origin`.
+    /// The application completes it by answering `101` with a registered
+    /// socket id ([`ReamResponse::websocket_id`](crate::ReamResponse)).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub websocket: bool,
 }
 
 fn default_body_encoding() -> String {
@@ -123,6 +130,7 @@ impl ReamRequest {
             body_too_large: false,
             multipart: None,
             cookies: HashMap::new(),
+            websocket: false,
         }
     }
 }
