@@ -87,11 +87,18 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with: { version: 9 }
+        with: { version: 12.21.0 }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
+      # pnpm reads its settings (seven-day release age, allowed install
+      # scripts) from pnpm-workspace.yaml; .github/pnpm-ci.yaml says why it
+      # is kept there.
+      - run: cp .github/pnpm-ci.yaml pnpm-workspace.yaml
       - run: pnpm install --no-frozen-lockfile
+      # What this install put on the runner, devDependencies included,
+      # carries no high, critical or unpatched advisory.
+      - run: node .github/scripts/npm-audit.mjs --installed
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
       # The build project is `src` alone, so no test file was ever read by
       # `tsc`. This is the project that includes them; the 35 files still
@@ -117,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with: { version: 9 }
+        with: { version: 12.21.0 }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
@@ -134,7 +141,14 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
+      # pnpm reads its settings (seven-day release age, allowed install
+      # scripts) from pnpm-workspace.yaml; .github/pnpm-ci.yaml says why it
+      # is kept there.
+      - run: cp .github/pnpm-ci.yaml pnpm-workspace.yaml
       - run: pnpm install
+      # What this install put on the runner, devDependencies included,
+      # carries no high, critical or unpatched advisory.
+      - run: node .github/scripts/npm-audit.mjs --installed
       - name: Build NAPI binaries (${{ matrix.target }})
         run: pnpm build:napi
         env:
@@ -171,12 +185,19 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with: { version: 9 }
+        with: { version: 12.21.0 }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # pnpm reads its settings (seven-day release age, allowed install
+      # scripts) from pnpm-workspace.yaml; .github/pnpm-ci.yaml says why it
+      # is kept there.
+      - run: cp .github/pnpm-ci.yaml pnpm-workspace.yaml
       - run: pnpm install
+      # What this install put on the runner, devDependencies included,
+      # carries no high, critical or unpatched advisory.
+      - run: node .github/scripts/npm-audit.mjs --installed
       - name: Build host native binaries
         run: pnpm build:napi
       - name: Stage native binaries for integration tests
@@ -275,7 +296,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with: { version: 9 }
+        with: { version: 12.21.0 }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
@@ -336,7 +357,14 @@ jobs:
             echo "Drift gate passed: local $local_v > registry $npm_v"
             echo "dist_tag=latest" >> "$GITHUB_OUTPUT"
           fi
+      # pnpm reads its settings (seven-day release age, allowed install
+      # scripts) from pnpm-workspace.yaml; .github/pnpm-ci.yaml says why it
+      # is kept there.
+      - run: cp .github/pnpm-ci.yaml pnpm-workspace.yaml
       - run: pnpm install
+      # What this install put on the runner, devDependencies included,
+      # carries no high, critical or unpatched advisory.
+      - run: node .github/scripts/npm-audit.mjs --installed
       # Compile TS -> dist/ so the published tarball actually contains the
       # JS + .d.ts (package.json `files` ships dist/). Without this the publish
       # would pack source only and omit the compiled output.
