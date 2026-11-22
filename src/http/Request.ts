@@ -87,6 +87,12 @@ export interface RawRequest {
    * fixtures), the accessor falls back to inline header parsing.
    */
   cookies?: Dict
+  /**
+   * A WebSocket handshake the native server checked (HTTP/1.1 GET, version
+   * 13, a well-formed key, an allowed `Origin`) and passed on. Answered `101`
+   * by a WebSocket route; anything else answers it as plain HTTP.
+   */
+  websocket?: boolean
 }
 
 export class Request extends Macroable {
@@ -133,6 +139,15 @@ export class Request extends Macroable {
   }
 
   // ─── HTTP accessors ───────────────────────────────────────
+
+  /**
+   * Whether this request is a WebSocket handshake a WebSocket route can
+   * accept. `false` for every other request, a plain GET to a WebSocket
+   * route included.
+   */
+  upgradesToWebSocket(): boolean {
+    return this.#raw.websocket === true
+  }
 
   /**
    * The HTTP method, honouring `_method` form spoofing when enabled (AdonisJS

@@ -27,9 +27,17 @@ import {
   type TestResponse,
 } from './RequestBuilder.js'
 
+import { TestWebSocket, type TestWebSocketOptions } from './TestWebSocket.js'
+
 // The raw response shape + the rich response live in ApiResponse.ts and are
 // re-exported here so `@c9up/ream/testing` consumers keep their import path.
 export { ApiResponse, type TestResponse } from './RequestBuilder.js'
+export {
+  TestWebSocket,
+  type TestWebSocketClose,
+  type TestWebSocketOptions,
+  WebSocketRefused,
+} from './TestWebSocket.js'
 
 /**
  * Named-route manifest — `name → path pattern`, e.g. `{ 'users.show':
@@ -219,6 +227,23 @@ export class TestClient {
     // otherwise GET.
     const method: HttpMethod = typeof entry === 'object' && entry.method ? entry.method : 'GET'
     return this.fluent(method, resolveNamedRoute(this.#routes, name, params))
+  }
+
+  /**
+   * Open a WebSocket to `path` on the booted application, with the client's
+   * default headers and `options.headers` on the handshake. A refusal
+   * (a guard's 401, a 426 for a plain route) rejects with `WebSocketRefused`.
+   *
+   *   const socket = await client.ws('/chat', { headers: { cookie } })
+   *   socket.send('hi')
+   *   expect(await socket.next()).toBe('hi')
+   */
+  async ws(path: string, options: TestWebSocketOptions = {}): Promise<TestWebSocket> {
+    await this.boot()
+    return TestWebSocket.open(this.#port, path, {
+      ...options,
+      headers: { ...this.#headers, ...options.headers },
+    })
   }
 
   /**

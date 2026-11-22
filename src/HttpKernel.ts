@@ -17,6 +17,7 @@ import { hotReloadCount } from './dev/hmr.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
+import { openWebSocket, type WebSocketHub } from './http/WebSocket.js'
 import type {
   MiddlewareFunction,
   MiddlewareRegistry,
@@ -59,6 +60,11 @@ export interface HttpKernelConfig {
    */
   streamBackend?: () => import('./http/SseStream.js').StreamBackend | undefined
   /**
+   * The server's WebSocket sockets, resolved lazily like the stream backend.
+   * Without it a WebSocket route answers 501.
+   */
+  webSocketHub?: () => WebSocketHub | undefined
+  /**
    * Honour a `_method` form field on POST (AdonisJS `http.allowMethodSpoofing`).
    *
    * OFF by default, as upstream. An HTML form cannot send PUT or DELETE, so an
@@ -91,6 +97,11 @@ export interface HttpKernelResponse {
    * and feed the body from JS-pushed chunks.
    */
   streamId?: string
+  /**
+   * With status 101: the socket a WebSocket route opened. The native server
+   * completes the handshake and runs it.
+   */
+  websocketId?: string
 }
 
 /**
@@ -106,6 +117,8 @@ export interface HttpKernelRequest {
   body: string
   bodyEncoding?: 'utf8' | 'base64'
   remoteAddr?: string
+  /** A WebSocket handshake the native server checked and passed on. */
+  websocket?: boolean
 }
 
 export function createHttpKernel(
@@ -341,9 +354,15 @@ export function createHttpKernel(
           const chain = config.middleware.buildChain(
             match.route.middleware,
             [...routerMw, ...match.route.inlineMiddleware],
-            async (c) => {
-              await routeHandler(c)
-            },
+            match.route.websocket === true
+              ? async (c) => {
+                  // Reached only once the middleware and guards have let the
+                  // handshake through: the socket exists from here on.
+                  await routeHandler(openWebSocket(c, config.webSocketHub?.()))
+                }
+              : async (c) => {
+                  await routeHandler(c)
+                },
             { guards, roles, permissions, validators },
           )
 
@@ -400,6 +419,8 @@ export function createHttpKernel(
       // serializeResponse emits `streamId` next to an error body and
       // the HyperServer keeps feeding a dead stream slot forever.
       await ctx.response.abortStream()
+      // A socket registered for a handshake that ends in an error never opens.
+      ctx.response.abortWebSocket()
       try {
         // REPORT first, then handle — the AdonisJS order
         // (`#requestErrorResponder`: `await report(error, ctx)` before
@@ -523,6 +544,13 @@ async function serializeResponse(
   // stamps the request id and waits for a body still being produced.
   await ctx.response.finish()
   const streamId = ctx.response.getStreamId()
+  const websocketId = ctx.response.getWebSocketId()
+  // Registered, but the answer is no longer 101: the socket will not open.
+  if (websocketId === undefined) ctx.response.abortWebSocket()
+  else {
+    const protocol = ctx.response.getWebSocketProtocol()
+    if (protocol !== '') ctx.response.header('sec-websocket-protocol', protocol)
+  }
   const headers = ctx.response.getHeaders()
   const body = withDevScript(
     ctx.response.getBody(),
@@ -535,6 +563,7 @@ async function serializeResponse(
     headers: reconcileRepresentation(headers, ctx.response.getBody(), body),
     body,
     ...(streamId !== undefined ? { streamId } : {}),
+    ...(websocketId !== undefined ? { websocketId } : {}),
   }
 }
 

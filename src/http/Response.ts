@@ -33,6 +33,7 @@ import {
   type SseStreamOptions,
   type StreamBackend,
 } from './SseStream.js'
+import type { ServerWebSocket, WebSocketHub } from './WebSocket.js'
 
 /**
  * Reject CR / LF / NUL bytes in header names or values. Without this guard
@@ -171,6 +172,8 @@ export class Response extends Macroable {
   #redirectBuilderFactory?: () => RedirectBuilder
   #streamBackend?: StreamBackend
   #streamId?: string
+  /** The socket a WebSocket route opened for this handshake, and its hub. */
+  #webSocket?: { socket: ServerWebSocket; hub: WebSocketHub }
   #request?: { method(): string; header(key: string): string | undefined }
   #cookieSigner?: CookieSigner
 
@@ -1316,6 +1319,42 @@ export class Response extends Macroable {
    */
   getStreamId(): string | undefined {
     return this.#streamId
+  }
+
+  /**
+   * @internal Answer this handshake `101` with `socket`. Set by a WebSocket
+   * route, before its handler runs.
+   */
+  acceptWebSocket(socket: ServerWebSocket, hub: WebSocketHub): void {
+    this.#webSocket = { socket, hub }
+    this.status(101)
+  }
+
+  /**
+   * @internal The socket this answer opens: only while the status is still
+   * `101`. A later status (an error, a middleware that changed its mind)
+   * means no socket — the kernel then discards it with
+   * {@link abortWebSocket}.
+   */
+  getWebSocketId(): string | undefined {
+    if (this.#webSocket === undefined || this.getStatus() !== 101) return undefined
+    return this.#webSocket.socket.id
+  }
+
+  /** @internal The subprotocol the handler accepted, `''` when none. */
+  getWebSocketProtocol(): string {
+    return this.#webSocket?.socket.protocol ?? ''
+  }
+
+  /**
+   * @internal Forget the socket of a handshake that will not be answered
+   * `101`. It never opened, so its listeners hear nothing.
+   */
+  abortWebSocket(): void {
+    const opened = this.#webSocket
+    if (opened === undefined) return
+    this.#webSocket = undefined
+    opened.hub.discard(opened.socket)
   }
 
   /**

@@ -7,6 +7,7 @@
 import { singular, snakeCase } from '../helpers/string.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { safeDecodeURIComponent } from '../http/urlDecode.js'
+import { isWebSocketContext, type WebSocketContext } from '../http/WebSocket.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { LazyImport, MiddlewareClassConstructor, MiddlewareEntry } from '../server/Server.js'
@@ -66,6 +67,19 @@ export type LazyControllerAction = [loader: LazyControllerImport, method: string
  */
 export type RouteHandler = RouteHandlerFunction | ControllerAction | LazyControllerAction | string
 
+/** A WebSocket route's handler: the handshake's context, with its socket. */
+export type WebSocketRouteHandlerFunction = (ctx: WebSocketContext) => unknown
+
+/**
+ * What {@link Router.ws} takes: a closure on the socket's context, or a
+ * controller method (which receives the same context, `socket` included).
+ */
+export type WebSocketRouteHandler =
+  | WebSocketRouteHandlerFunction
+  | ControllerAction
+  | LazyControllerAction
+  | string
+
 /**
  * Param matcher — a bare RegExp, or the AdonisJS `{ match, cast }` shape.
  *
@@ -122,6 +136,12 @@ export interface RouteDefinition {
    * hard error there.
    */
   stringRef?: { controller: string; method: string }
+  /**
+   * A WebSocket route ({@link Router.ws}): its handler runs once the
+   * handshake has passed the middleware and guards, with the socket on the
+   * context. A plain request to it is answered 426.
+   */
+  websocket?: boolean
 }
 
 /**
@@ -1011,6 +1031,32 @@ export class Router extends Macroable {
   /** Register a route for all HTTP methods. */
   any(path: string, handler: RouteHandler): RouteBuilder {
     return this.route(path, '*', handler)
+  }
+
+  /**
+   * Register a WebSocket route. NAMED DEVIATION: AdonisJS has no WebSocket in
+   * its core, so this follows its routes rather than any upstream API — the
+   * route takes `.as()`, `.use()`, `.middleware()`, groups and prefixes like
+   * a GET, and those run on the handshake before any socket exists.
+   *
+   *   router.ws('/chat', ({ socket, auth }) => {
+   *     socket.on('message', (data) => socket.send(data))
+   *   }).use(middleware.auth())
+   */
+  ws(path: string, handler: WebSocketRouteHandler): RouteBuilder {
+    const routed: RouteHandler =
+      typeof handler === 'function'
+        ? (ctx: HttpContext) => {
+            if (!isWebSocketContext(ctx)) {
+              throw new Error(`[E_WEBSOCKET_CONTEXT] ${path} ran without its socket`)
+            }
+            return handler(ctx)
+          }
+        : handler
+    const builder = this.route(path, 'GET', routed)
+    const def = this.#routes.at(-1)
+    if (def !== undefined) def.websocket = true
+    return builder
   }
 
   // ─── Resource routes ──────────────────────────────────────

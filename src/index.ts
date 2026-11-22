@@ -86,6 +86,21 @@ export { RequestValidator } from './http/RequestValidator.js'
 export { Response } from './http/Response.js'
 export type { SseStreamOptions } from './http/SseStream.js'
 export { SseStream } from './http/SseStream.js'
+export type {
+  WebSocketBackend,
+  WebSocketClose,
+  WebSocketContext,
+  WebSocketEvent,
+  WebSocketMessage,
+  WebSocketState,
+} from './http/WebSocket.js'
+export {
+  E_WEBSOCKET_UNSUPPORTED,
+  E_WEBSOCKET_UPGRADE_REQUIRED,
+  isWebSocketContext,
+  ServerWebSocket,
+  WebSocketHub,
+} from './http/WebSocket.js'
 export { type GetterFn, Macroable, type MacroFn } from './utils/Macroable.js'
 
 // ─── Session ────────────────────────────────────────────────
@@ -212,6 +227,8 @@ export type {
   RouteHandler,
   RouteHandlerFunction,
   SignedUrlOptions,
+  WebSocketRouteHandler,
+  WebSocketRouteHandlerFunction,
 } from './router/Router.js'
 export {
   GroupBuilder,

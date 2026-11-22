@@ -36,6 +36,7 @@ import { createHttpKernel } from './HttpKernel.js'
 import { ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
 import { RequestValidator } from './http/RequestValidator.js'
+import { type WebSocketEvent, WebSocketHub } from './http/WebSocket.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
 import { MigrationRegistry } from './migrations/MigrationRegistry.js'
@@ -56,8 +57,10 @@ import { cancellableGrpc, type NativeGrpcHandler } from './server/nativeGrpc.js'
 import {
   type NativeBodyLimits,
   type NativeConnectionConfig,
+  type NativeWebSocketConfig,
   nativeBodyLimits,
   nativeConnectionConfig,
+  nativeWebSocketConfig,
 } from './server/nativeLimits.js'
 import { type GrpcLimits, Server } from './server/Server.js'
 import { clearApp, setApp } from './services/app.js'
@@ -349,6 +352,59 @@ export interface HyperServerLike {
   writeStreamBytes?(streamId: string, chunk: Uint8Array): Promise<boolean>
   closeStream?(streamId: string): Promise<boolean>
   onStreamDisconnect?(streamId: string, callback: () => void): void
+  // WebSocket primitives — optional like the streaming ones: a server
+  // without them answers a WebSocket route 501.
+  configureWebSockets?(config: NativeWebSocketConfig): void
+  onWebSocketEvent?(callback: (event: WebSocketEvent) => void): void
+  registerWebSocket?(id: string): boolean
+  discardWebSocket?(id: string): void
+  webSocketSendText?(id: string, text: string): number
+  webSocketSendBinary?(id: string, data: Uint8Array): number
+  webSocketBufferedAmount?(id: string): number
+  webSocketClose?(id: string, code?: number, reason?: string): boolean
+}
+
+/**
+ * The WebSocket hub of a server that implements every primitive, wired to
+ * its events; `undefined` for one that does not.
+ */
+function webSocketHubFor(
+  server: HyperServerLike,
+  onListenerError: (error: unknown) => void,
+): WebSocketHub | undefined {
+  const {
+    onWebSocketEvent,
+    registerWebSocket,
+    discardWebSocket,
+    webSocketSendText,
+    webSocketSendBinary,
+    webSocketBufferedAmount,
+    webSocketClose,
+  } = server
+  if (
+    onWebSocketEvent === undefined ||
+    registerWebSocket === undefined ||
+    discardWebSocket === undefined ||
+    webSocketSendText === undefined ||
+    webSocketSendBinary === undefined ||
+    webSocketBufferedAmount === undefined ||
+    webSocketClose === undefined
+  ) {
+    return undefined
+  }
+  const hub = new WebSocketHub(
+    {
+      registerWebSocket: registerWebSocket.bind(server),
+      discardWebSocket: discardWebSocket.bind(server),
+      webSocketSendText: webSocketSendText.bind(server),
+      webSocketSendBinary: webSocketSendBinary.bind(server),
+      webSocketBufferedAmount: webSocketBufferedAmount.bind(server),
+      webSocketClose: webSocketClose.bind(server),
+    },
+    onListenerError,
+  )
+  onWebSocketEvent.call(server, (event) => hub.dispatch(event))
+  return hub
 }
 
 export interface IgnitorConfig {
@@ -892,6 +948,8 @@ export class Ignitor {
       // created a few lines down, after the kernel — so the kernel
       // closes over the `this.#_httpServer` slot and reads it on every
       // request through the factory.
+      // Created with the server below; the kernel reads it per request.
+      let webSocketHub: WebSocketHub | undefined
       const kernel = createHttpKernel({
         router: this.#router,
         middleware: this.#middleware,
@@ -936,6 +994,7 @@ export class Ignitor {
           }
           return undefined
         },
+        webSocketHub: () => webSocketHub,
       })
 
       // Read HERE, not at construction: `#start/env` runs in `booting()`, so a
@@ -961,6 +1020,16 @@ export class Ignitor {
         this.#config.host ?? process.env.HOST ?? (this.#app.inProduction ? '0.0.0.0' : 'localhost')
       this.#_httpServer = this.#config.serverFactory(availablePort, this.#host)
       this.#_httpServer.onRequest(kernel)
+      webSocketHub = webSocketHubFor(this.#_httpServer, (error) => {
+        this.#errorBoundary.serviceError('WebSocket', error)
+      })
+      // AdonisJS `config/app.ts` → `http` has no WebSocket block (no core
+      // WebSocket upstream); `http.webSocket` sits next to the timeouts.
+      if (typeof this.#_httpServer.configureWebSockets === 'function') {
+        this.#_httpServer.configureWebSockets(
+          nativeWebSocketConfig(this.#app.config.get<unknown>('app.http')),
+        )
+      }
       const grpc = this.#server.getGrpcHandler()
       if (grpc) {
         if (typeof this.#_httpServer.onGrpc !== 'function') {

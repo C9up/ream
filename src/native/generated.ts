@@ -21,6 +21,11 @@ export interface NapiResponse {
   headers: Record<string, string>
   body: string
   streamId?: string
+  /**
+   * With status 101: the socket registered with `registerWebSocket` that
+   * this answer opens.
+   */
+  websocketId?: string
 }
 
 /**
@@ -142,6 +147,42 @@ export interface NapiConnectionConfig {
   requestTimeout?: number
   keepAliveTimeout?: number
   maxConnections?: number
+}
+
+/** Limits of every WebSocket connection. Omitted fields keep their default. */
+
+export interface NapiWebSocketConfig {
+  /** Largest incoming frame payload, bytes. Default 1 MiB. */
+  maxFrameSize?: number
+  /** Largest incoming message, bytes. Default 1 MiB. */
+  maxMessageSize?: number
+  /**
+   * Silence before the connection is closed, ms; a ping goes out at half.
+   * `0` never closes. Default 60 000.
+   */
+  idleTimeout?: number
+  /**
+   * Bytes allowed to wait for a slow client, and for JavaScript, per
+   * connection. Default 4 MiB.
+   */
+  maxBufferedBytes?: number
+  /**
+   * Browser origins allowed to connect (`https://app.example.com`), or
+   * `["*"]` for any. Omitted: same origin as the request's `Host` only.
+   */
+  allowedOrigins?: Array<string>
+}
+
+/** What a socket reports: a message (`text` or `binary`) or its close. */
+
+export interface NapiWebSocketEvent {
+  id: string
+  /** `message` or `close`. */
+  kind: string
+  text?: string
+  binary?: Uint8Array
+  code?: number
+  reason?: string
 }
 
 /** What `graphqlParse` runs and how far it may expand. */
@@ -344,6 +385,38 @@ export declare class HyperServer {
    * reentrant container calls without crossing-thread surprises.
    */
   onStreamDisconnect(streamId: string, callback: (streamId: string) => void): void
+  /** Limits of every WebSocket connection. Must be called BEFORE `listen()`. */
+  configureWebSockets(config: NapiWebSocketConfig): void
+  /**
+   * Register the callback told about every message and every close.
+   * A message's bytes count against its socket's budget until this
+   * callback has been called with it.
+   */
+  onWebSocketEvent(callback: (arg: NapiWebSocketEvent) => void): void
+  /** Reserve a socket ahead of answering 101. `false` when the id is taken. */
+  registerWebSocket(id: string): boolean
+  /** Forget a socket whose 101 will not be sent. */
+  discardWebSocket(id: string): void
+  /**
+   * Queue a text message. Returns the bytes now waiting for the client,
+   * `-1` when the socket is closed or closing, `-2` when this message
+   * would pass `maxBufferedBytes` — the socket is then closed with 1013.
+   */
+  webSocketSendText(id: string, text: string): number
+  /** Queue a binary message; same answer as `webSocketSendText`. */
+  webSocketSendBinary(id: string, data: Uint8Array): number
+  /** Bytes waiting for the client, `-1` for an unknown socket. */
+  webSocketBufferedAmount(id: string): number
+  /**
+   * Start the closing handshake after what is queued. `false` when the
+   * socket is unknown or already closing. Throws on a code a close frame
+   * may not carry (RFC 6455 §7.4) or a reason over 123 bytes.
+   */
+  webSocketClose(
+    id: string,
+    code?: number | undefined | null,
+    reason?: string | undefined | null,
+  ): boolean
 }
 
 /**

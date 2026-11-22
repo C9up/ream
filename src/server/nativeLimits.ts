@@ -47,6 +47,15 @@ export interface NativeBodyLimits {
 }
 
 /** Timeouts in milliseconds (`0` disables one) and the connection cap (`0` = unbounded). */
+/** What the native server takes for every WebSocket connection. */
+export interface NativeWebSocketConfig {
+  maxFrameSize?: number
+  maxMessageSize?: number
+  idleTimeout?: number
+  maxBufferedBytes?: number
+  allowedOrigins?: string[]
+}
+
 export interface NativeConnectionConfig {
   headersTimeout?: number
   requestTimeout?: number
@@ -106,6 +115,59 @@ export function nativeConnectionConfig(http: unknown): NativeConnectionConfig {
       )
     }
     config[key] = value
+  }
+  return config
+}
+
+const WEBSOCKET_SIZES = ['maxFrameSize', 'maxMessageSize', 'maxBufferedBytes'] as const
+
+function invalidWebSocket(key: string, expected: string, value: unknown): ReamError {
+  return new ReamError(
+    'E_IGNITOR_INVALID_HTTP_CONFIG',
+    `\`http.webSocket.${key}\` must be ${expected}, received ${JSON.stringify(value)}.`,
+    {
+      hint: 'Sizes are bytes or strings such as "1mb"; idleTimeout is milliseconds (0 never closes); allowedOrigins lists origins such as "https://app.example.com", or "*".',
+    },
+  )
+}
+
+/**
+ * `config/app.ts` → `http.webSocket`, for the native server. Omitted keys keep
+ * the server's defaults: 1 MiB frames and messages, 60 s idle, 4 MiB of
+ * backlog per connection, same-origin browsers only.
+ */
+export function nativeWebSocketConfig(http: unknown): NativeWebSocketConfig {
+  const config: NativeWebSocketConfig = {}
+  if (typeof http !== 'object' || http === null) return config
+  const given: unknown = Reflect.get(http, 'webSocket')
+  if (given === undefined) return config
+  if (typeof given !== 'object' || given === null) {
+    throw invalidWebSocket('', 'an object', given)
+  }
+  for (const key of WEBSOCKET_SIZES) {
+    const value: unknown = Reflect.get(given, key)
+    if (value === undefined) continue
+    if (typeof value !== 'number' && typeof value !== 'string') {
+      throw invalidWebSocket(key, 'a size', value)
+    }
+    const bytes = parseSize(value)
+    if (bytes < 1 || bytes > MAX_U32)
+      throw invalidWebSocket(key, `between 1 and ${MAX_U32} bytes`, value)
+    config[key] = bytes
+  }
+  const idle: unknown = Reflect.get(given, 'idleTimeout')
+  if (idle !== undefined) {
+    if (typeof idle !== 'number' || !Number.isInteger(idle) || idle < 0 || idle > MAX_U32) {
+      throw invalidWebSocket('idleTimeout', 'a whole number of milliseconds', idle)
+    }
+    config.idleTimeout = idle
+  }
+  const origins: unknown = Reflect.get(given, 'allowedOrigins')
+  if (origins !== undefined) {
+    if (!Array.isArray(origins) || !origins.every((o): o is string => typeof o === 'string')) {
+      throw invalidWebSocket('allowedOrigins', 'an array of origins', origins)
+    }
+    config.allowedOrigins = [...origins]
   }
   return config
 }
