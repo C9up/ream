@@ -10,8 +10,10 @@
  *       rpc.namespace('user', UserController)
  *
  *   - `start()` — mount `POST <config.rpc.path ?? '/rpc'>` on the core router,
- *     dispatching every request body (single or batch) to `RpcRouter.handle()`.
- *     In `start`, which is the phase upstream documents for routes.
+ *     dispatching every request body (single or batch) to `RpcRouter.handle()`,
+ *     and, with `rpc.webSocket` set, a WebSocket route on the same path serving
+ *     the same methods (`RpcRouter.webSocket()`). In `start`, which is the phase
+ *     upstream documents for routes.
  *
  * @implements Story 24.1, 24.2
  */
@@ -21,7 +23,7 @@ import type { HttpContext } from '../http/HttpContext.js'
 import type { AppContext } from '../Provider.js'
 import { Provider } from '../Provider.js'
 import type { Router } from '../router/Router.js'
-import { RpcRouter } from './RpcRouter.js'
+import { RpcRouter, type RpcWebSocketOptions } from './RpcRouter.js'
 
 export interface RpcProviderOptions {
   /** Override the `RpcRouter` instance — used by tests. */
@@ -45,6 +47,12 @@ export interface RpcConfig {
    * `application/jsonrequest`.
    */
   contentTypes?: string[]
+  /**
+   * Also serve the methods over a WebSocket on the same path, behind the same
+   * `guards` (run on the handshake). `true` takes the default bounds; an
+   * object sets them. Off by default.
+   */
+  webSocket?: boolean | RpcWebSocketOptions
 }
 
 export class RpcProvider extends Provider {
@@ -100,6 +108,12 @@ export class RpcProvider extends Provider {
     // decorator metadata otherwise.
     const guards = config?.guards ?? []
     if (guards.length > 0) route.guard(...guards)
+
+    const webSocket = config?.webSocket
+    if (webSocket !== undefined && webSocket !== false) {
+      const socketRoute = router.ws(path, this.rpc.webSocket(webSocket === true ? {} : webSocket))
+      if (guards.length > 0) socketRoute.guard(...guards)
+    }
   }
 }
 

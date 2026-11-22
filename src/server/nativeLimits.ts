@@ -46,7 +46,6 @@ export interface NativeBodyLimits {
   multipart?: NativeMultipartLimit
 }
 
-/** Timeouts in milliseconds (`0` disables one) and the connection cap (`0` = unbounded). */
 /** What the native server takes for every WebSocket connection. */
 export interface NativeWebSocketConfig {
   maxFrameSize?: number
@@ -56,6 +55,7 @@ export interface NativeWebSocketConfig {
   allowedOrigins?: string[]
 }
 
+/** Timeouts in milliseconds (`0` disables one) and the connection cap (`0` = unbounded). */
 export interface NativeConnectionConfig {
   headersTimeout?: number
   requestTimeout?: number

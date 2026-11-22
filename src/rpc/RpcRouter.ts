@@ -7,6 +7,7 @@
  *   rpc.method('task.validate', handler).guard('jwt').role('cs_member')
  *   rpc.namespace('task', TaskController, ['show', 'update'])  // listed methods, DI-resolved per call
  *   rpc.group({ guard: 'jwt' }, (r) => { r.method('user.find', handler) })
+ *   router.ws('/rpc', rpc.webSocket())  // the same methods over a WebSocket
  *
  * @implements MISS-27
  */
@@ -27,9 +28,11 @@ import {
   holdsPermissions,
   isUnauthorizedError,
 } from '../http/permissions.js'
+import type { WebSocketContext, WebSocketMessage } from '../http/WebSocket.js'
 import type { MiddlewareRegistry, RuntimeValidator } from '../middleware/Pipeline.js'
 import { composeMiddleware, runValidator } from '../middleware/Pipeline.js'
 import { safeJsonParse } from '../utils/safeJsonParse.js'
+import { safeStringify } from '../utils/safeStringify.js'
 
 export type RpcHandler = (ctx: HttpContext, params: unknown) => Promise<unknown> | unknown
 
@@ -181,6 +184,62 @@ const DEFAULT_CONTENT_TYPES = [
 /** `Application/JSON; charset=utf-8` → `application/json`. */
 function mediaType(contentType: string | undefined): string {
   return (contentType?.split(';')[0] ?? '').trim().toLowerCase()
+}
+
+/** Calls a batch may hold; a longer one is refused whole. */
+const MAX_BATCH = 50
+
+/**
+ * What one JSON-RPC message gets back: `body` to send, or nothing for a
+ * notification or an all-notification batch. `status` is the HTTP status the
+ * POST endpoint answers with; a WebSocket has none and sends only the body.
+ */
+interface RpcReply {
+  status: number
+  body?: unknown
+}
+
+export interface RpcWebSocketOptions {
+  /**
+   * Messages of one socket handled at the same time. A slow method holds one
+   * slot; the socket's other messages keep being answered. Default 16.
+   */
+  maxInFlight?: number
+  /**
+   * Messages of one socket waiting for a slot. A client that keeps sending
+   * past this is not reading its answers: the socket is closed with 1013
+   * rather than queue without bound. Default 256.
+   */
+  maxQueued?: number
+}
+
+/** The id of a single reply, `null` for a batch or anything else. */
+function replyId(body: unknown): JsonRpcId {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null
+  const id: unknown = Reflect.get(body, 'id')
+  return typeof id === 'string' || typeof id === 'number' ? id : null
+}
+
+/**
+ * Write a reply the way its transport writes one, and answer -32603 when it
+ * cannot be serialized — a result whose `toJSON` throws used to escape to the
+ * kernel as a plain 500, which is not a JSON-RPC answer. The caller gets its
+ * id back when the reply is a single one.
+ */
+function writeReply(ctx: HttpContext, body: unknown, write: (body: unknown) => void): void {
+  try {
+    write(body)
+  } catch (error) {
+    const detail = `The reply could not be serialized: ${error instanceof Error ? error.message : String(error)}`
+    const id = replyId(body)
+    reportFailure(ctx, error, '(reply)', id, detail)
+    write(internalError(detail, id))
+  }
+}
+
+/** `value` when it is a positive integer, `fallback` otherwise. */
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isInteger(value) && value > 0 ? value : fallback
 }
 
 export interface RpcRouterOptions {
@@ -359,61 +418,132 @@ export class RpcRouter {
       ctx.response.status(415).send('')
       return
     }
+    // `raw()` stays outside the reply: its 413 is not a parse error.
+    const reply = await this.#answer(ctx, ctx.request.raw())
+    // A notification, or a batch of nothing but notifications, runs for its
+    // side effects and MUST NOT receive a reply (§4.1, §6).
+    if (reply.body === undefined) {
+      ctx.response.status(204).send('')
+      return
+    }
+    writeReply(ctx, reply.body, (body) => ctx.response.status(reply.status).json(body))
+  }
 
-    // Parsed here, not through `request.body()`, which turns malformed JSON
-    // into `{}` — and §5.1 answers invalid JSON with -32700, not -32600.
-    // `raw()` stays outside the try: its 413 is not a parse error.
-    const raw = ctx.request.raw()
+  /**
+   * A WebSocket route handler serving the registered methods, one JSON-RPC
+   * message (single or batch) per text message, answered on the socket:
+   *
+   *   router.ws('/rpc', rpc.webSocket()).use(middleware.auth())
+   *
+   * Every message goes through the path POST uses — the same parse, batch
+   * limit, guards, roles, permissions, middleware, validators and error
+   * codes — with the HANDSHAKE's context: the auth the upgrade request
+   * carried is the auth of every call on the socket, as relay's hubs do. A
+   * role taken away while the socket is open counts from the next
+   * connection; a `.permission()` gate asks the auth layer on each call.
+   *
+   * Calls on one socket share that context, as a batch's calls do: per-call
+   * state belongs in the handler, not on `ctx`. Up to `maxInFlight` messages
+   * run at once and answer as they finish, so replies can come out of order
+   * (JSON-RPC matches them by id); the calls of one batch run in order and
+   * come back as one reply. A binary message is answered with the -32700 an
+   * unparsable POST body gets. The size of a message is bounded by the
+   * server (`http.webSocket.maxMessageSize`).
+   */
+  webSocket(options: RpcWebSocketOptions = {}): (ctx: WebSocketContext) => void {
+    const maxInFlight = positiveInteger(options.maxInFlight, 16)
+    const maxQueued = positiveInteger(options.maxQueued, 256)
+    return (ctx) => {
+      const { socket } = ctx
+      const waiting: string[] = []
+      let running = 0
+      const send = (body: unknown): void => {
+        writeReply(ctx, body, (reply) => {
+          socket.send(safeStringify(reply))
+        })
+      }
+      const drain = (): void => {
+        while (running < maxInFlight) {
+          const text = waiting.shift()
+          if (text === undefined) return
+          running++
+          this.#answer(ctx, text)
+            .then(
+              (reply) => {
+                if (reply.body !== undefined) send(reply.body)
+              },
+              (error: unknown) => {
+                // #answer maps every failure of a call to its reply; reaching
+                // here is a fault of the router itself, still answered.
+                const detail = error instanceof Error ? error.message : String(error)
+                reportFailure(ctx, error, '(websocket message)', null, detail)
+                send(internalError(detail, null))
+              },
+            )
+            .finally(() => {
+              running--
+              drain()
+            })
+        }
+      }
+      socket.on('message', (data: WebSocketMessage, isBinary: boolean) => {
+        if (isBinary || typeof data !== 'string') {
+          send(rpcError(-32700, 'Parse error', null))
+          return
+        }
+        if (waiting.length >= maxQueued) {
+          socket.close(1013, 'Too many JSON-RPC messages waiting')
+          return
+        }
+        waiting.push(data)
+        drain()
+      })
+      socket.on('close', () => {
+        // What has not started never will: nobody is left to read it.
+        waiting.length = 0
+      })
+    }
+  }
+
+  /**
+   * One JSON-RPC message, single or batch, as text: the path POST and the
+   * WebSocket share. Parsed here, not through `request.body()`, which turns
+   * malformed JSON into `{}` — and §5.1 answers invalid JSON with -32700.
+   */
+  async #answer(ctx: HttpContext, raw: string): Promise<RpcReply> {
     let body: unknown
     try {
       // Without prototype poisoning: a `__proto__` key in a call's params
       // would swap the prototype of whatever a handler `Object.assign`s it into.
       body = safeJsonParse(raw)
     } catch {
-      ctx.response.status(200).json(rpcError(-32700, 'Parse error', null))
-      return
+      return { status: 200, body: rpcError(-32700, 'Parse error', null) }
     }
 
-    // Batch support (max 50 to prevent DoS)
-    if (Array.isArray(body)) {
-      // §6: "If the batch rpc call itself fails to be recognized as an valid
-      // JSON or as an Array with at least one value, the response from the
-      // Server MUST be a single Response object." An empty batch answered with
-      // 204 No Content, which is what this replies when every call in a batch
-      // was a notification — so a client that sent nothing was told its calls
-      // had run.
-      if (body.length === 0) {
-        ctx.response.status(200).json(rpcError(-32600, 'Invalid Request', null))
-        return
-      }
-      if (body.length > 50) {
-        ctx.response.status(400).json(rpcError(-32600, 'Batch too large (max 50)', null))
-        return
-      }
-      // Note: batch items share the same ctx (auth state). Each is processed sequentially.
-      // Notifications still run (side-effects) but their result is omitted from
-      // the reply per JSON-RPC §4.1.
-      const results: unknown[] = []
-      for (const req of body) {
-        const r = await this.#processOne(ctx, req)
-        if (!isNotification(req)) results.push(r)
-      }
-      // An all-notification batch produces no response body (spec: no reply).
-      if (results.length === 0) {
-        ctx.response.status(204).send('')
-        return
-      }
-      ctx.response.status(200).json(results)
-      return
+    if (!Array.isArray(body)) {
+      const result = await this.#processOne(ctx, body)
+      return isNotification(body) ? { status: 204 } : { status: 200, body: result }
     }
-
-    const result = await this.#processOne(ctx, body)
-    // A notification runs for side-effects but MUST NOT receive a reply.
-    if (isNotification(body)) {
-      ctx.response.status(204).send('')
-      return
+    // §6: "If the batch rpc call itself fails to be recognized as an valid
+    // JSON or as an Array with at least one value, the response from the
+    // Server MUST be a single Response object." An empty batch answered with
+    // nothing would tell a client that sent nothing its calls had run.
+    if (body.length === 0) {
+      return { status: 200, body: rpcError(-32600, 'Invalid Request', null) }
     }
-    ctx.response.status(200).json(result)
+    if (body.length > MAX_BATCH) {
+      return { status: 400, body: rpcError(-32600, `Batch too large (max ${MAX_BATCH})`, null) }
+    }
+    // The calls of a batch share the context (auth state) and run in order.
+    // Notifications still run (side effects) but their result is omitted
+    // from the reply per JSON-RPC §4.1.
+    const results: unknown[] = []
+    for (const req of body) {
+      const r = await this.#processOne(ctx, req)
+      if (!isNotification(req)) results.push(r)
+    }
+    // An all-notification batch produces no reply at all.
+    return results.length === 0 ? { status: 204 } : { status: 200, body: results }
   }
 
   /**
