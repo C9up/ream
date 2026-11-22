@@ -1023,6 +1023,7 @@ export class Ignitor {
       webSocketHub = webSocketHubFor(this.#_httpServer, (error) => {
         this.#errorBoundary.serviceError('WebSocket', error)
       })
+      this.#server.reportWebSocketSupport(webSocketHub !== undefined)
       // AdonisJS `config/app.ts` → `http` has no WebSocket block (no core
       // WebSocket upstream); `http.webSocket` sits next to the timeouts.
       if (typeof this.#_httpServer.configureWebSockets === 'function') {
@@ -1386,6 +1387,8 @@ export class Ignitor {
       if (this.#hotReloadCleanup) this.#hotReloadCleanup()
     })
     await attempt(async () => {
+      // Closed: no socket can be opened any more, so nothing should offer one.
+      this.#server.reportWebSocketSupport(false)
       if (this.#_httpServer) await this.#_httpServer.close()
     })
     await attempt(() => this.#errorBoundary.uninstall())

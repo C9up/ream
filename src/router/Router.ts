@@ -203,6 +203,12 @@ function makeDefinition(method: string, path: string, handler: RouteHandler): Ro
  */
 export type MatchedParams = Record<string, string | string[]>
 
+/**
+ * The index key of WebSocket routes. Not an HTTP method — a request never
+ * carries it — so no request reaches a WebSocket route by its method alone.
+ */
+const WEBSOCKET_INDEX = 'WEBSOCKET'
+
 export interface MatchResult {
   route: RouteDefinition
   params: MatchedParams
@@ -1242,25 +1248,29 @@ export class Router extends Macroable {
       }
 
       const isParam = route.path.includes(':') || route.path.includes('*')
+      // A WebSocket route is indexed apart from the GET routes, so a GET and
+      // a WebSocket route can share a path: the handshake goes to one, a
+      // plain request to the other (see {@link match}).
+      const indexMethod = route.websocket === true ? WEBSOCKET_INDEX : route.method
 
       if (!isParam && !route.domain) {
         // Static route — O(1) exact match
-        const key = route.method === '*' ? `*:${route.path}` : `${route.method}:${route.path}`
+        const key = indexMethod === '*' ? `*:${route.path}` : `${indexMethod}:${route.path}`
         // Refused rather than overwritten, as AdonisJS does. A silent overwrite
         // is how an authenticated endpoint gets shadowed by a later, unguarded
         // one that happens to share its path — with nothing in the logs.
         if (this.#staticIndex.has(key)) {
           throw new Error(
-            `[E_DUPLICATE_ROUTE] Duplicate route found. "${route.method}: ${route.path}" route already exists.`,
+            `[E_DUPLICATE_ROUTE] Duplicate route found. "${route.websocket === true ? 'WS' : route.method}: ${route.path}" route already exists.`,
           )
         }
         this.#staticIndex.set(key, route)
       } else {
         // Parametric route — indexed by method
         const methods =
-          route.method === '*'
+          indexMethod === '*'
             ? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
-            : [route.method]
+            : [indexMethod]
         for (const m of methods) {
           if (!this.#paramIndex.has(m)) this.#paramIndex.set(m, [])
           this.#paramIndex.get(m)?.push(route)
@@ -1271,10 +1281,40 @@ export class Router extends Macroable {
     this.#indexDirty = false
   }
 
-  /** Find a matching route, extracting :param values and validating matchers. */
-  match(method: string, path: string, host?: string): MatchResult | undefined {
+  /**
+   * Find a matching route, extracting :param values and validating matchers.
+   *
+   * `webSocket` says the request is a WebSocket handshake. NAMED DEVIATION —
+   * AdonisJS has no WebSocket route to choose between: here a handshake goes
+   * to the WebSocket route of its path when there is one, and a plain GET to
+   * the GET route, so one path can serve both — a SignalR hub does, its
+   * Server-Sent Events stream and its socket share the URL. A plain GET that
+   * only a WebSocket route matches still reaches it, to be answered 426.
+   */
+  match(
+    method: string,
+    path: string,
+    host?: string,
+    options: { webSocket?: boolean } = {},
+  ): MatchResult | undefined {
     if (this.#indexDirty) this.#buildIndex()
+    if (options.webSocket === true && method === 'GET') {
+      const socket = this.#matchIndexed(WEBSOCKET_INDEX, path, host)
+      if (socket !== undefined) return socket
+    }
+    const direct = this.#matchIndexed(method, path, host)
+    if (direct !== undefined) return direct
 
+    // HEAD falls back to the matching GET route (RFC 9110 §9.3.2 semantics —
+    // same headers, no body). Without this, `curl -I` and LB health probes
+    // 404 on every GET-only route.
+    if (method === 'HEAD') return this.match('GET', path, host)
+    if (method === 'GET') return this.#matchIndexed(WEBSOCKET_INDEX, path, host)
+    return undefined
+  }
+
+  /** The route indexed under `method` for this path and host. */
+  #matchIndexed(method: string, path: string, host?: string): MatchResult | undefined {
     const candidates = [path]
     // Trailing-slash normalisation: `/users/` should match `/users`. Done as
     // a fallback (not a primary rewrite) so a route declared as `/users/`
@@ -1294,9 +1334,10 @@ export class Router extends Macroable {
       // 1. Try static exact match (O(1)). The index holds domain-less routes
       // only, so it is consulted only when no domain owns the request.
       if (domain === undefined) {
+        // A `router.any()` route answers every method, never a handshake.
         const staticRoute =
           this.#staticIndex.get(`${method}:${candidatePath}`) ??
-          this.#staticIndex.get(`*:${candidatePath}`)
+          (method === WEBSOCKET_INDEX ? undefined : this.#staticIndex.get(`*:${candidatePath}`))
         if (staticRoute) return { route: staticRoute, params: {}, subdomains: {} }
       }
 
@@ -1328,13 +1369,6 @@ export class Router extends Macroable {
           subdomains: domain?.subdomains ?? {},
         }
       }
-    }
-
-    // HEAD falls back to the matching GET route (RFC 9110 §9.3.2 semantics —
-    // same headers, no body). Without this, `curl -I` and LB health probes
-    // 404 on every GET-only route.
-    if (method === 'HEAD') {
-      return this.match('GET', path, host)
     }
 
     return undefined

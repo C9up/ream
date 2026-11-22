@@ -89,6 +89,7 @@ export class Server {
   #trustedProxies: string[] = []
   #grpcHandler?: GrpcHandler
   #grpcLimits: GrpcLimits = {}
+  #webSockets = false
 
   constructor(router: Router) {
     this.#router = router
@@ -198,6 +199,26 @@ export class Server {
 
   getErrorHandler(): ExceptionHandler | undefined {
     return this.#resolvedErrorHandler
+  }
+
+  /**
+   * Whether the server under the application accepts WebSocket connections:
+   * `true` once a server holding every WebSocket primitive is listening,
+   * `false` before it starts and on a host without them (a test double, an
+   * older binary). What a package asks before it offers a WebSocket
+   * transport — relay's SignalR negotiate announces WebSockets only then.
+   *
+   * No AdonisJS counterpart: AdonisJS has no core WebSocket (its `Server`
+   * exposes the Node server, `getNodeServer()`, and a package attaches its
+   * own). Here the native server owns the socket, so the answer is a yes/no.
+   */
+  supportsWebSockets(): boolean {
+    return this.#webSockets
+  }
+
+  /** @internal Set by the Ignitor once it knows what its server can hold. */
+  reportWebSocketSupport(supported: boolean): void {
+    this.#webSockets = supported
   }
 
   getRouter(): Router {

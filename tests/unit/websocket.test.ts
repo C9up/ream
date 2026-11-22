@@ -265,6 +265,58 @@ describe('HttpKernel > WebSocket routes', () => {
     expect((await kernel(handshake('/live'))).status).toBe(501)
   })
 
+  it('serves a GET route and a WebSocket route on one path, by what the request is', async () => {
+    const { backend } = recordingBackend()
+    const hub = new WebSocketHub(backend)
+    for (const order of ['ws first', 'get first'] as const) {
+      const router = new Router()
+      const declare = {
+        ws: () => router.ws('/hub', ({ socket }) => socket.send('socket')),
+        get: () => router.get('/hub', ({ response }) => response.send('stream')),
+      }
+      if (order === 'ws first') {
+        declare.ws()
+        declare.get()
+      } else {
+        declare.get()
+        declare.ws()
+      }
+      const kernel = createHttpKernel({
+        router,
+        middleware: new MiddlewareRegistry(),
+        webSocketHub: () => hub,
+      })
+      const upgraded = await kernel(handshake('/hub'))
+      expect(upgraded.status, order).toBe(101)
+      const plain = await kernel({ ...handshake('/hub'), websocket: false })
+      expect(plain.status, order).toBe(200)
+      expect(plain.body, order).toBe('stream')
+    }
+  })
+
+  it('matches a parametric WebSocket route apart from a GET route of the same pattern', () => {
+    const router = new Router()
+    router.get('/rooms/:id', () => {}).as('room.page')
+    router.ws('/rooms/:id', () => {}).as('room.socket')
+    expect(router.match('GET', '/rooms/7', undefined, { webSocket: true })?.route.name).toBe(
+      'room.socket',
+    )
+    expect(router.match('GET', '/rooms/7')?.route.name).toBe('room.page')
+    expect(router.match('HEAD', '/rooms/7')?.route.name).toBe('room.page')
+  })
+
+  it('never hands a handshake to router.any(), and refuses two WebSocket routes on one path', () => {
+    const router = new Router()
+    router.any('/anything', () => {})
+    router.ws('/socket', () => {})
+    expect(router.match('GET', '/anything', undefined, { webSocket: true })?.route.method).toBe('*')
+    expect(router.match('POST', '/socket')).toBeUndefined()
+    // A plain GET to a WebSocket-only path still reaches it, to be answered 426.
+    expect(router.match('GET', '/socket')?.route.websocket).toBe(true)
+    router.ws('/socket', () => {})
+    expect(() => router.match('GET', '/socket')).toThrow(/E_DUPLICATE_ROUTE.*"WS: \/socket"/)
+  })
+
   it('registers the route as a GET flagged websocket, with the builder chain', () => {
     const router = new Router()
     router.ws('/chat/:room', () => {}).as('chat')

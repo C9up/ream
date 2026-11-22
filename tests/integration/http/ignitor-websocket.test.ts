@@ -129,6 +129,10 @@ describeIfNetwork('Ignitor > WebSocket routes', () => {
     expect((await socket.closed).code).toBe(1009)
   })
 
+  it('says the running server accepts WebSockets', () => {
+    expect(ignitor.getServer().supportsWebSockets()).toBe(true)
+  })
+
   it('refuses a foreign browser origin before routing (403)', async () => {
     const refused = await client
       .ws('/echo', { headers: { origin: 'https://evil.test' } })

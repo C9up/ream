@@ -202,7 +202,9 @@ export function createHttpKernel(
       config.allowMethodSpoofing === true
         ? spoofedMethod(reqData.method, reqData.query)
         : reqData.method
-    const match = config.router.match(method, reqData.path, host)
+    const match = config.router.match(method, reqData.path, host, {
+      webSocket: reqData.websocket === true,
+    })
     if (debugHttp.enabled) {
       debugHttp(
         '%s %s -> %s',
