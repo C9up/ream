@@ -1,80 +1,78 @@
 {
-	"root": true,
-	"$schema": "https://biomejs.dev/schemas/2.4.10/schema.json",
-	"assist": {
-		"actions": {
-			"source": {
-				"organizeImports": "on"
-			}
-		}
-	},
-	"linter": {
-		"enabled": true,
-		"rules": {
-			"recommended": true,
-			"suspicious": {
-				"noExplicitAny": "error"
-			},
-			"complexity": {
-				"noForEach": "off"
-			},
-			"style": {
-				"noNonNullAssertion": "error",
-				"useConst": "error",
-				"useImportType": "error"
-			},
-			"correctness": {
-				"noUnusedImports": "error"
-			}
-		}
-	},
-	"formatter": {
-		"enabled": true,
-		"indentStyle": "space",
-		"indentWidth": 2,
-		"lineWidth": 100
-	},
-	"javascript": {
-		"parser": {
-			"unsafeParameterDecoratorsEnabled": true
-		},
-		"formatter": {
-			"quoteStyle": "single",
-			"semicolons": "asNeeded",
-			"trailingCommas": "all"
-		}
-	},
-	"files": {
-		"includes": [
-			"**",
-			"!**/node_modules",
-			"!**/dist",
-			"!**/target",
-			"!**/*.node",
-			"!**/.turbo",
-			"!**/index.js",
-			"!**/index.d.ts",
-			"!**/tsconfig*.json",
-			"!**/package.json",
-			"!**/biome.json",
-			"!**/vitest.config.ts",
-			"!**/scripts/**",
-			"!**/*.generated.ts",
-			"!tests/fixtures/sniff"
-		]
-	},
-	"overrides": [
-		{
-			"includes": [
-				"src/console/BaseCommand.ts"
-			],
-			"linter": {
-				"rules": {
-					"complexity": {
-						"noThisInStatic": "off"
-					}
-				}
-			}
-		}
-	]
+  "root": true,
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "complexity": {
+        "noForEach": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useConst": "error",
+        "useImportType": "error"
+      },
+      "correctness": {
+        "noUnusedImports": "error"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": true
+    },
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all"
+    }
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/target",
+      "!**/*.node",
+      "!**/.turbo",
+      "!**/index.js",
+      "!**/index.d.ts",
+      "!**/tsconfig*.json",
+      "!**/package.json",
+      "!**/biome.json",
+      "!**/vitest.config.ts",
+      "!**/scripts/**",
+      "!**/*.generated.ts",
+      "!tests/fixtures/sniff"
+    ]
+  },
+  "overrides": [
+    {
+      "includes": ["src/console/BaseCommand.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noThisInStatic": "off"
+          }
+        }
+      }
+    }
+  ]
 }

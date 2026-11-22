@@ -269,7 +269,7 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.12",
+    "@biomejs/biome": "^2.6.8",
     "@c9up/comet": "^0.1.0",
     "@c9up/inker": "^0.1.20",
     "@types/node": "^22.20.1",
