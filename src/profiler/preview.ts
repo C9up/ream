@@ -28,10 +28,15 @@ export function isSecretKey(key: string): boolean {
 
 /** A JSON-safe preview of `value`. */
 export function preview(value: unknown): unknown {
-  return walk(value, 0, new WeakSet())
+  return walk(value, 0, new Set())
 }
 
-function walk(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+/**
+ * `path` holds the objects from the root to `value`, so only a cycle is shown
+ * as `[circular]`: a value reached through two keys is previewed under both.
+ * Remembering every object seen showed `[circular]` for a shared one.
+ */
+function walk(value: unknown, depth: number, path: Set<object>): unknown {
   if (value === null || value === undefined) return value ?? null
   switch (typeof value) {
     case 'string':
@@ -54,13 +59,21 @@ function walk(value: unknown, depth: number, seen: WeakSet<object>): unknown {
     return Number.isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString()
   if (value instanceof Error) return { name: value.name, message: value.message }
   if (Buffer.isBuffer(value)) return `[Buffer ${value.length} bytes]`
-  if (seen.has(value)) return '[circular]'
+  if (path.has(value)) return '[circular]'
   if (depth >= MAX_DEPTH)
     return Array.isArray(value) ? `[array ${value.length}]` : `[${typeName(value)}]`
-  seen.add(value)
+  path.add(value)
+  try {
+    return walkObject(value, depth, path)
+  } finally {
+    path.delete(value)
+  }
+}
 
+/** {@link walk} for an object already on `path`. */
+function walkObject(value: object, depth: number, path: Set<object>): unknown {
   if (Array.isArray(value)) {
-    const items = value.slice(0, MAX_ITEMS).map((item) => walk(item, depth + 1, seen))
+    const items = value.slice(0, MAX_ITEMS).map((item) => walk(item, depth + 1, path))
     if (value.length > MAX_ITEMS) items.push(`… ${value.length - MAX_ITEMS} more`)
     return items
   }
@@ -68,22 +81,22 @@ function walk(value: unknown, depth: number, seen: WeakSet<object>): unknown {
     return walk(
       Object.fromEntries([...value.entries()].map(([k, v]) => [String(k), v])),
       depth,
-      seen,
+      path,
     )
   }
-  if (value instanceof Set) return walk([...value], depth, seen)
+  if (value instanceof Set) return walk([...value], depth, path)
 
   // A model or entity usually serialises itself the way it wants to be seen.
   const toJSON = Reflect.get(value, 'toJSON')
   const source: unknown = typeof toJSON === 'function' ? safeCall(() => toJSON.call(value)) : value
-  if (source !== value) return walk(source, depth, seen)
+  if (source !== value) return walk(source, depth, path)
 
   const out: Record<string, unknown> = {}
   const name = typeName(value)
   if (name !== 'Object') out['@type'] = name
   const keys = Object.keys(value)
   for (const key of keys.slice(0, MAX_KEYS)) {
-    out[key] = isSecretKey(key) ? REDACTED : walk(Reflect.get(value, key), depth + 1, seen)
+    out[key] = isSecretKey(key) ? REDACTED : walk(Reflect.get(value, key), depth + 1, path)
   }
   if (keys.length > MAX_KEYS) out['…'] = `${keys.length - MAX_KEYS} more keys`
   return out

@@ -338,6 +338,13 @@ describe('profiler > previews', () => {
     const node: Record<string, unknown> = { name: 'root' }
     node.self = node
     expect(preview(node)).toEqual({ name: 'root', self: '[circular]' })
+    // Reached twice without a cycle: shown both times.
+    const shared = { id: 7 }
+    expect(preview({ a: shared, b: shared, list: [shared, shared] })).toEqual({
+      a: { id: 7 },
+      b: { id: 7 },
+      list: [{ id: 7 }, { id: 7 }],
+    })
     expect(String(preview('x'.repeat(1000)))).toContain('(1000 chars)')
     const list = preview(Array.from({ length: 100 }, (_, i) => i))
     expect(Array.isArray(list) ? list.at(-1) : undefined).toBe('… 75 more')
