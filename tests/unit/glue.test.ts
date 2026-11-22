@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
+import { getServiceRegistry } from '../../src/decorators/Service.js'
 import {
   Container,
   clearServiceRegistry,
@@ -240,7 +241,6 @@ describe('HttpKernel > integration', () => {
 
 describe('clearServiceRegistry > test isolation', () => {
   it('clears the global registry', async () => {
-    const { getServiceRegistry } = await import('../../src/decorators/Service.js')
     clearServiceRegistry()
     expect(getServiceRegistry().size).toBe(0)
   })

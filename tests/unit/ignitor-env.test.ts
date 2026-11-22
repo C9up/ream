@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Ignitor } from '../../src/index.js'
+import { getEncryption } from '../../src/services/encryption.js'
 
 describe('ignitor > .env auto-loading (console + web parity)', () => {
   const created: string[] = []
@@ -131,8 +132,6 @@ describe("ignitor > a keyless app does not inherit the previous one's signer", (
   }
 
   it('leaves the service locator empty for the second application', async () => {
-    const { getEncryption } = await import('../../src/services/encryption.js')
-
     const withKey = await new Ignitor(projectWithEnv(`APP_KEY=${'k'.repeat(32)}\n`))
       .setEnvironment('console')
       .start()

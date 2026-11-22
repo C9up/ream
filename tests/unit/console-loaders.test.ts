@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { IndexGenerator } from '../../src/console/IndexGenerator.js'
 import { Kernel } from '../../src/console/Kernel.js'
 import { FsLoader } from '../../src/console/loaders.js'
+import { Ignitor } from '../../src/Ignitor.js'
 
 const FIXTURES = new URL('../fixtures/console-app/commands/', import.meta.url)
 
@@ -103,7 +104,6 @@ describe('reamrc `commands` > a package ships a loader', () => {
   }
 
   it('is recognised by both of the module shapes a package can ship', async () => {
-    const { Ignitor } = await import('../../src/Ignitor.js')
     const ignitor = new Ignitor(APP_ROOT).useRcFile({
       commands: [async () => loaderModule, async () => ({ default: Alpha })],
     })

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { Session } from '../../src/session/Session.js'
+import { Session } from '../../src/session/Session.js'
 import SessionMiddleware from '../../src/session/SessionMiddleware.js'
 import { defined } from '../__helpers__/defined.js'
 
@@ -173,7 +173,6 @@ describe('SessionMiddleware > server-side driver (memory)', () => {
 
 describe('Session > regenerate() unit', () => {
   it('rotates sessionId, marks dirty, preserves data, exposes originalSessionId', async () => {
-    const { Session } = await import('../../src/session/Session.js')
     const s = new Session('original-id', { existing: 'value' })
     expect(s.sessionId).toBe('original-id')
     expect(s.wasRegenerated()).toBe(false)
@@ -192,7 +191,6 @@ describe('Session > regenerate() unit', () => {
   })
 
   it('each regenerate() call produces a fresh id (no collision / no reuse)', async () => {
-    const { Session } = await import('../../src/session/Session.js')
     const ids = new Set<string>()
     for (let i = 0; i < 50; i++) {
       const s = new Session('seed')

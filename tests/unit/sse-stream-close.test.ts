@@ -6,6 +6,7 @@
  * exactly once — not be replayed.
  */
 import { describe, expect, it } from 'vitest'
+import { Response } from '../../src/http/Response.js'
 import { SseStream } from '../../src/http/SseStream.js'
 
 /** Minimal in-memory backend that lets the test trigger disconnect. */
@@ -138,7 +139,6 @@ describe('SseStream > frame injection guard', () => {
 
 describe('Response.abortStream — handler threw after sse()', () => {
   it('closes the backend slot and drops the streamId so no dead stream is serialized', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const closed: string[] = []
     const backend = {
       registerStream: async () => true,
@@ -167,7 +167,6 @@ describe('Response.abortStream — handler threw after sse()', () => {
   })
 
   it('abortStream is a no-op when no stream was opened', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     await expect(res.abortStream()).resolves.toBeUndefined()
     expect(res.getStreamId()).toBeUndefined()

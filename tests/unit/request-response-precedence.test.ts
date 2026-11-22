@@ -4,8 +4,14 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { ExceptionHandler } from '../../src/http/Exception.js'
+import { RedirectBuilder } from '../../src/http/RedirectBuilder.js'
 import { Request } from '../../src/http/Request.js'
 import { Response } from '../../src/http/Response.js'
+// Imported here, not inside a test: the first load of the barrel compiles the
+// whole framework, and under a loaded machine that took a test past its 5 s
+// timeout (bug 118).
+import { createHttpKernel, MiddlewareRegistry, matchers, Router } from '../../src/index.js'
 
 /** A request whose JSON body, if any, the body parser has already decoded. */
 function request(query: string, body = '', headers: Record<string, string> = {}): Request {
@@ -51,23 +57,22 @@ describe('Response > redirect(path) redirects', () => {
     response.setRedirectFactory(() => {
       const record: { path?: string; status?: number; qs?: boolean } = {}
       calls.push(record)
-      const builder = {
-        status(code: number) {
+      return new (class extends RedirectBuilder {
+        override status(code: number): this {
           record.status = code
-          return builder
-        },
-        withQs() {
+          return this
+        }
+        override withQs(): this {
           record.qs = true
-          return builder
-        },
-        toPath(path: string) {
+          return this
+        }
+        override toPath(path: string): void {
           record.path = path
-        },
-        back() {
+        }
+        override back(): void {
           record.path = 'back'
-        },
-      }
-      return builder as never
+        }
+      })(response)
     })
     return { response, calls }
   }
@@ -108,7 +113,6 @@ describe('HttpKernel > an error is reported before it is handled', () => {
   it('reports even when handle() throws', async () => {
     // AdonisJS awaits `report` before `handle`. Handling first meant a throwing
     // handler swallowed the report: the error left no trace in the logs.
-    const { createHttpKernel, MiddlewareRegistry, Router } = await import('../../src/index.js')
     const reported: unknown[] = []
     const router = new Router()
     router.get('/boom', () => {
@@ -117,14 +121,14 @@ describe('HttpKernel > an error is reported before it is handled', () => {
     const kernel = createHttpKernel({
       router,
       middleware: new MiddlewareRegistry(),
-      exceptionHandler: {
-        async report(error: unknown) {
+      exceptionHandler: new (class extends ExceptionHandler {
+        override async report(error: unknown): Promise<void> {
           reported.push(error)
-        },
-        async handle() {
+        }
+        override async handle(): Promise<void> {
           throw new Error('the handler itself failed')
-        },
-      } as never,
+        }
+      })(false),
     })
 
     const res = await kernel({
@@ -136,14 +140,14 @@ describe('HttpKernel > an error is reported before it is handled', () => {
     })
 
     expect(reported).toHaveLength(1)
-    expect((reported[0] as Error).message).toBe('boom')
+    expect(reported[0]).toBeInstanceOf(Error)
+    expect(reported[0] instanceof Error && reported[0].message).toBe('boom')
     expect(res.status).toBe(500)
   })
 })
 
 describe('Router > matchers cast the param', () => {
   it('hands the handler a number, not a string', async () => {
-    const { Router, matchers } = await import('../../src/index.js')
     const router = new Router()
     router.get('/orders/:id', async () => {}).where('id', matchers.number())
 
@@ -153,7 +157,6 @@ describe('Router > matchers cast the param', () => {
   })
 
   it('lowercases a uuid, so a key built from it is stable', async () => {
-    const { Router, matchers } = await import('../../src/index.js')
     const router = new Router()
     router.get('/u/:id', async () => {}).where('id', matchers.uuid())
     const upper = '3F2504E0-4F89-41D3-9A0C-0305E82C3301'
@@ -162,7 +165,6 @@ describe('Router > matchers cast the param', () => {
   })
 
   it('leaves a param alone when its matcher has no cast', async () => {
-    const { Router, matchers } = await import('../../src/index.js')
     const router = new Router()
     router.get('/p/:slug', async () => {}).where('slug', matchers.slug())
 
@@ -170,7 +172,6 @@ describe('Router > matchers cast the param', () => {
   })
 
   it('still refuses a param the matcher rejects', async () => {
-    const { Router, matchers } = await import('../../src/index.js')
     const router = new Router()
     router.get('/orders/:id', async () => {}).where('id', matchers.number())
 
@@ -179,7 +180,6 @@ describe('Router > matchers cast the param', () => {
   })
 
   it('takes route(pattern, methods, handler), the AdonisJS order', async () => {
-    const { Router } = await import('../../src/index.js')
     const router = new Router()
     router.route('/things', ['GET', 'POST'], async () => {})
 

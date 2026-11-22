@@ -1,7 +1,10 @@
 import 'reflect-metadata'
 import { afterEach, describe, expect, it } from 'vitest'
+import { Application } from '../../src/Application.js'
+import ScheduleList from '../../src/commands/ScheduleList.js'
 import { Ignitor } from '../../src/index.js'
 import { ScheduleProvider } from '../../src/scheduler/ScheduleProvider.js'
+import { Scheduler } from '../../src/scheduler/Scheduler.js'
 
 /**
  * What actually has to be true for a `@Schedule` in `app/modules/**` to fire.
@@ -90,7 +93,6 @@ describe('scheduler > a @Schedule declared in app/modules', () => {
 
 describe('scheduler > schedule:list explains an empty list', () => {
   it('names the missing modules.path', async () => {
-    const { Application } = await import('../../src/Application.js')
     const app = new Application()
     app.setAppRoot(APP_ROOT)
     app.rcContents({})
@@ -99,7 +101,6 @@ describe('scheduler > schedule:list explains an empty list', () => {
   })
 
   it('names the autoload list that skipped the file', async () => {
-    const { Application } = await import('../../src/Application.js')
     const app = new Application()
     app.setAppRoot(APP_ROOT)
     app.rcContents({ modules: { path: MODULES } })
@@ -113,8 +114,6 @@ describe('scheduler > schedule:list explains an empty list', () => {
 async function listOutputFor(app: {
   container: { singleton: (token: string, factory: () => unknown) => unknown }
 }): Promise<string[]> {
-  const { default: ScheduleList } = await import('../../src/commands/ScheduleList.js')
-  const { Scheduler } = await import('../../src/scheduler/Scheduler.js')
   const scheduler = new Scheduler()
   app.container.singleton('scheduler', () => scheduler)
 

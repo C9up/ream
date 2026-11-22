@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { Container } from '../../src/container/Container.js'
 import { Request } from '../../src/http/Request.js'
+import { Response } from '../../src/http/Response.js'
 import { CookieSigner } from '../../src/security/CookieSigner.js'
 
 /**
@@ -79,26 +81,22 @@ describe('security regressions > request/cookie parsing', () => {
 
 describe('security regressions > CRLF header injection', () => {
   it('Response.header rejects CRLF in value', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     expect(() => res.header('x-custom', 'value\r\ninjected: true')).toThrow(/CRLF/)
   })
 
   it('Response.header accepts normal values', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     expect(() => res.header('x-custom', 'normal value')).not.toThrow()
   })
 
   it('Response.type rejects CRLF/NUL (no response-splitting via content-type)', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     expect(() => res.type('text/html\r\nset-cookie: evil=1')).toThrow(/CRLF/)
     expect(() => res.type('text/html\0')).toThrow(/CRLF/)
   })
 
   it('Response.type accepts a normal content-type', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     expect(() => res.type('application/json')).not.toThrow()
     // AdonisJS parity: mime-types resolution appends the default charset.
@@ -108,7 +106,6 @@ describe('security regressions > CRLF header injection', () => {
 
 describe('security regressions > Response.append Set-Cookie stays multi-line', () => {
   it('append("set-cookie", ...) keeps each cookie on its own line (not comma-joined)', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     res.append('set-cookie', 'a=1; Path=/')
     res.append('set-cookie', 'b=2; Path=/')
@@ -120,7 +117,6 @@ describe('security regressions > Response.append Set-Cookie stays multi-line', (
   })
 
   it('append Set-Cookie interleaves with cookie() into the same channel', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     res.plainCookie('sid', 'abc', { path: '/', encode: false })
     res.append('set-cookie', 'flag=on; Path=/')
@@ -131,7 +127,6 @@ describe('security regressions > Response.append Set-Cookie stays multi-line', (
   })
 
   it('append on a non-Set-Cookie header still comma-joins (unchanged)', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = new Response()
     res.append('accept', 'text/html')
     res.append('accept', 'application/json')
@@ -141,7 +136,6 @@ describe('security regressions > Response.append Set-Cookie stays multi-line', (
 
 describe('security regressions > cookie SameSite=None requires Secure', () => {
   it('Response.cookie throws when SameSite=None is paired with secure=false', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none', secure: false })).toThrow(
       /SameSite=None requires Secure/,
@@ -149,7 +143,6 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
   })
 
   it('Response.cookie throws when SameSite=None is paired with secure omitted', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none' })).toThrow(
       /SameSite=None requires Secure/,
@@ -157,13 +150,11 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
   })
 
   it('Response.cookie accepts SameSite=None when secure=true', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none', secure: true })).not.toThrow()
   })
 
   it('Response.cookie still accepts SameSite=lax/strict without Secure', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     expect(() => res.cookie('a', 'b', { sameSite: 'lax' })).not.toThrow()
     expect(() => res.cookie('c', 'd', { sameSite: 'strict' })).not.toThrow()
@@ -172,7 +163,6 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
 
 describe('security regressions > cookie maxAge=0 emits Max-Age=0 (RFC 6265 delete-now)', () => {
   it('Response.cookie maxAge=0 → Set-Cookie carries Max-Age=0', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     res.cookie('sid', '', { maxAge: 0, path: '/' })
     const setCookie = res.getHeaders()['set-cookie']
@@ -180,21 +170,18 @@ describe('security regressions > cookie maxAge=0 emits Max-Age=0 (RFC 6265 delet
   })
 
   it('Response.cookie maxAge=-1 → Set-Cookie carries Max-Age=-1', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     res.cookie('sid', '', { maxAge: -1 })
     expect(res.getHeaders()['set-cookie']).toContain('Max-Age=-1')
   })
 
   it('Response.cookie maxAge omitted → no Max-Age attribute', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     res.cookie('sid', 'abc', { path: '/' })
     expect(res.getHeaders()['set-cookie']).not.toContain('Max-Age')
   })
 
   it('Response.cookie maxAge=3600 → Set-Cookie carries Max-Age=3600 (positive path)', async () => {
-    const { Response } = await import('../../src/http/Response.js')
     const res = await signingResponse(Response)
     res.cookie('sid', 'abc', { maxAge: 3600 })
     expect(res.getHeaders()['set-cookie']).toContain('Max-Age=3600')
@@ -203,13 +190,11 @@ describe('security regressions > cookie maxAge=0 emits Max-Age=0 (RFC 6265 delet
 
 describe('security regressions > Container reserved tokens', () => {
   it('rejects __proto__ as token', async () => {
-    const { Container } = await import('../../src/container/Container.js')
     const c = new Container()
     expect(() => c.singleton('__proto__', () => 'evil')).toThrow(/Reserved/)
   })
 
   it('rejects constructor as token', async () => {
-    const { Container } = await import('../../src/container/Container.js')
     const c = new Container()
     expect(() => c.singleton('constructor', () => 'evil')).toThrow(/Reserved/)
   })
@@ -225,7 +210,6 @@ describe('security regressions > trustedProxies CIDR', () => {
   // the server fills `ip`, JS uses it verbatim.
 
   it('uses the pre-resolved ip when the server set it', async () => {
-    const { Request } = await import('../../src/http/Request.js')
     const req = new Request({
       method: 'GET',
       path: '/',
@@ -239,7 +223,6 @@ describe('security regressions > trustedProxies CIDR', () => {
   })
 
   it('returns the server-resolved peer when the proxy was untrusted', async () => {
-    const { Request } = await import('../../src/http/Request.js')
     const req = new Request({
       method: 'GET',
       path: '/',
@@ -259,7 +242,6 @@ describe('security regressions > trustedProxies CIDR', () => {
     // headers are NEVER trusted in TS-land; the only way to assert a
     // proxy-resolved IP is to set `ip:` on the fixture, mirroring what the
     // HyperServer ships at runtime.
-    const { Request } = await import('../../src/http/Request.js')
     const req = new Request({
       method: 'GET',
       path: '/',
@@ -273,7 +255,6 @@ describe('security regressions > trustedProxies CIDR', () => {
   })
 
   it('TS fallback falls all the way back to 127.0.0.1 when remoteAddr is also absent', async () => {
-    const { Request } = await import('../../src/http/Request.js')
     const req = new Request({
       method: 'GET',
       path: '/',

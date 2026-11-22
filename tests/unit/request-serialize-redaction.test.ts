@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { Request } from '../../src/http/Request.js'
+import { CookieSigner } from '../../src/security/CookieSigner.js'
 
 const request = (headers: Record<string, string>) =>
   new Request({ method: 'GET', path: '/orders', query: 'q=1', headers, body: '' }, {})
@@ -62,30 +63,23 @@ describe('Request.serializeSafe > credentials do not reach the log', () => {
 
 describe('CookieSigner > a key anyone can read is not a key', () => {
   it('refuses the placeholder the scaffolding used to ship', async () => {
-    const { CookieSigner } = await import('../../src/security/CookieSigner.js')
-
     // With it, cookies, sessions, CSRF tokens and signed URLs can all be
     // forged by anyone who has read the repository.
     expect(() => new CookieSigner('change-me-to-a-unique-32+-byte-secret!!')).toThrow(/placeholder/)
   })
 
   it('refuses it whatever case or padding it arrives in', async () => {
-    const { CookieSigner } = await import('../../src/security/CookieSigner.js')
-
     expect(() => new CookieSigner('  CHANGE-ME-TO-A-UNIQUE-32+-BYTE-SECRET!!  ')).toThrow(
       /placeholder/,
     )
   })
 
   it('still refuses an absent or too-short key', async () => {
-    const { CookieSigner } = await import('../../src/security/CookieSigner.js')
-
     expect(() => new CookieSigner('')).toThrow(/Missing APP_KEY/)
     expect(() => new CookieSigner('short')).toThrow(/at least 16/)
   })
 
   it('accepts a real one', async () => {
-    const { CookieSigner } = await import('../../src/security/CookieSigner.js')
     const { randomBytes } = await import('node:crypto')
 
     expect(() => new CookieSigner(randomBytes(32).toString('base64url'))).not.toThrow()

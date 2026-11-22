@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { inspect } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 /**
  * Every `@c9up/ream/services/*` accessor stands in for a singleton the Ignitor
@@ -23,6 +23,14 @@ const ACCESSORS = [
 ] as const
 
 describe('service accessors > pre-boot behaviour', () => {
+  // The first load of these modules compiles most of the framework; done in
+  // the hook (10 s), it no longer runs under one test's 5 s timeout on a
+  // loaded machine (bug 118). Each test still loads its module itself — a
+  // cached namespace is probed for `then` the same way.
+  beforeAll(async () => {
+    await Promise.all(ACCESSORS.map(({ load }) => load()))
+  })
+
   for (const { name, load } of ACCESSORS) {
     describe(name, () => {
       it('answers undefined to `then` instead of throwing', async () => {
