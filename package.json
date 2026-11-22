@@ -250,7 +250,6 @@
   },
   "dependencies": {
     "@c9up/lumen": "^0.1.2",
-    "file-type": "^22.0.2",
     "reflect-metadata": "^0.2.2"
   },
   "peerDependencies": {

@@ -44,7 +44,7 @@ describe('MultipartFile.detectType() — magic-byte content detection', () => {
     expect(spoof.validate({ extnames: ['txt'] })).toBe(false) // real type is png, not txt
   })
 
-  it('falls back to the client extension for content file-type cannot fingerprint (text)', async () => {
+  it('falls back to the client extension for content without a signature (text)', async () => {
     const file = new MultipartFile({
       fieldName: 'note',
       clientName: 'note.txt',

@@ -59,7 +59,8 @@
 			"!**/biome.json",
 			"!**/vitest.config.ts",
 			"!**/scripts/**",
-			"!**/*.generated.ts"
+			"!**/*.generated.ts",
+			"!tests/fixtures/sniff"
 		]
 	},
 	"overrides": [

@@ -64,6 +64,7 @@ import { errorCode } from '../helpers/errors.js'
 import { Macroable } from '../utils/Macroable.js'
 import { parseSize } from './parseSize.js'
 import { parseFormFields, type QsParseOptions } from './qsParse.js'
+import { sniffableExtensions, sniffFileType } from './sniff.js'
 
 export interface FileValidationOptions {
   /** Largest accepted size: bytes, or a value such as `'2mb'` or `'1.5 mb'`. */
@@ -192,7 +193,7 @@ export class MultipartFile extends Macroable {
   /** The Content-Type the client sent — attacker-controlled, the fallback only. */
   readonly #headerMime: string
 
-  /** Magic-byte fingerprint — set by {@link detectType}; absent for content `file-type` can't detect (text: txt/csv/svg/json). */
+  /** Magic-byte fingerprint — set by {@link detectType}; absent for content without a signature (text: txt/csv/svg/json). */
   #detected?: { ext: string; mime: string }
   /** Whether the magic-byte pass has run, however it turned out. */
   #detectionRan = false
@@ -215,17 +216,16 @@ export class MultipartFile extends Macroable {
   }
 
   /**
-   * Fingerprint the real file type from its magic bytes (via `file-type`), so
-   * validation + storage don't trust the attacker-controlled filename/header.
-   * Mirrors AdonisJS, which detects binary types this way. Call once after
-   * construction (the BodyParser middleware does this for every uploaded file).
-   * Content `file-type` can't fingerprint (text formats) leaves the client
-   * extension in force — same fallback AdonisJS uses.
+   * Fingerprint the real file type from its magic bytes, so validation and
+   * storage don't trust the attacker-controlled filename/header. AdonisJS
+   * detects binary types this way, with `file-type`; ream answers the same
+   * from its own port of that table ({@link sniffFileType}), without the
+   * dependency. Call once after construction (the BodyParser middleware does
+   * this for every uploaded file). Content without a signature (text formats)
+   * leaves the client extension in force — same fallback AdonisJS uses.
    */
   async detectType(): Promise<void> {
-    const { fileTypeFromBuffer, supportedExtensions } = await import('file-type')
-    detectableExtensions = supportedExtensions
-    const result = await fileTypeFromBuffer(this.content)
+    const result = await sniffFileType(this.content)
     if (result) this.#detected = { ext: result.ext, mime: result.mime }
     this.#detectionRan = true
   }
@@ -243,7 +243,7 @@ export class MultipartFile extends Macroable {
 
   /**
    * Magic-byte-detected MIME type — TRUSTWORTHY (content-derived). `undefined`
-   * for text formats `file-type` can't fingerprint. Use this, not {@link type}.
+   * for text formats, which carry no signature. Use this, not {@link type}.
    */
   get detectedType(): string | undefined {
     return this.#detected?.mime
@@ -326,8 +326,7 @@ export class MultipartFile extends Macroable {
    */
   #claimsATypeItCannotBe(extnames: string[]): boolean {
     if (this.#detected || !this.#detectionRan) return false
-    if (!detectableExtensions) return false
-    return extnames.every((extension) => detectableExtensions?.has(extension))
+    return extnames.every((extension) => sniffableExtensions.has(extension))
   }
 
   get isValid(): boolean {
@@ -470,11 +469,3 @@ export function hydrateMultipartPayload(
   )
   return { fields, files }
 }
-
-/**
- * The extensions `file-type` can recognise, captured on the first detection.
- *
- * Module-level because it is a property of the library, not of a file, and
- * because `validate()` is synchronous while reading it is not.
- */
-let detectableExtensions: ReadonlySet<string> | undefined
