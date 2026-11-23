@@ -25,7 +25,7 @@ pub fn throw_ream_error() -> napi::Result<String> {
         Err(ream_error!("TEST_ERROR", "This is a test error")
             .with_hint("This hint should appear in TypeScript")
             .with_context("module", "napi-test")
-            .with_docs_url("https://docs.ream.dev/errors/TEST_ERROR")
+            .with_docs_url("https://example.com/errors/TEST_ERROR")
             .into())
     })
 }

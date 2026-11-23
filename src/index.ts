@@ -360,7 +360,7 @@ export {
   PIPELINE_STAGES,
   validatePipelineConfig,
 } from './errors/PipelineStageError.js'
-export { isReamError, ReamError } from './errors/ReamError.js'
+export { DOCS_BASE_URL, errorDocsUrl, isReamError, ReamError } from './errors/ReamError.js'
 
 // ─── Utilities ──────────────────────────────────────────────
 

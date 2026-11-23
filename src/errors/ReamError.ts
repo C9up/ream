@@ -9,6 +9,18 @@
 
 import { currentNodeEnv } from '../env/nodeEnv.js'
 
+/** Where the framework's documentation is served. */
+export const DOCS_BASE_URL = 'https://r-eam.com'
+
+/**
+ * The documentation of an error code: its row in the error index, whose anchor
+ * is the code in lower case with `-` for `_` (`E_ATLAS_QUERY_ERROR` →
+ * `#e-atlas-query-error`).
+ */
+export function errorDocsUrl(code: string): string {
+  return `${DOCS_BASE_URL}/en/reference/errors#${code.toLowerCase().replaceAll('_', '-')}`
+}
+
 /**
  * Is this a Ream error, and one of these codes?
  *
@@ -96,7 +108,7 @@ export class ReamError extends Error {
     this.hint = options?.hint
     this.sourceFile = options?.sourceFile
     this.sourceLine = options?.sourceLine
-    this.docsUrl = options?.docsUrl ?? `https://docs.ream.dev/errors/${code}`
+    this.docsUrl = options?.docsUrl ?? errorDocsUrl(code)
     this.pipelineStage = options?.pipelineStage
   }
 

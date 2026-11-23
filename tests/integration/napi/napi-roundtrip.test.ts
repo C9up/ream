@@ -43,7 +43,7 @@ describe('napi-roundtrip > error handling', () => {
       expect(parsed.message).toBe('This is a test error')
       expect(parsed.hint).toBe('This hint should appear in TypeScript')
       expect(parsed.context.module).toBe('napi-test')
-      expect(parsed.docsUrl).toBe('https://docs.ream.dev/errors/TEST_ERROR')
+      expect(parsed.docsUrl).toBe('https://example.com/errors/TEST_ERROR')
       expect(parsed.sourceFile).toBeDefined()
       expect(parsed.sourceLine).toBeDefined()
     }

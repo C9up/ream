@@ -20,11 +20,11 @@ use std::fmt;
 /// ```
 /// use ream_napi_core::ReamError;
 ///
-/// let err = ReamError::new("ATLAS_QUERY_ERROR", "Column 'statut' not found")
-///     .with_hint("Did you mean: status?")
-///     .with_context("entity", "Order")
+/// let err = ReamError::new("E_CONTAINER_NOT_FOUND", "No binding found for 'mailer'")
+///     .with_hint("Did you mean: mail?")
+///     .with_context("token", "mailer")
 ///     .with_source_location(file!(), line!())
-///     .with_docs_url("https://docs.ream.dev/errors/ATLAS_QUERY_ERROR");
+///     .with_docs_url("https://r-eam.com/en/reference/errors#e-container-not-found");
 /// ```
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,12 +161,12 @@ mod tests {
 
     #[test]
     fn test_error_builder_pattern() {
-        let err = ReamError::new("ATLAS_QUERY_ERROR", "Column not found")
+        let err = ReamError::new("TEST_QUERY_ERROR", "Column not found")
             .with_hint("Did you mean: status?")
             .with_context("entity", "Order")
             .with_context("column", "statut")
             .with_source_location("src/query.rs", 42)
-            .with_docs_url("https://docs.ream.dev/errors/ATLAS_QUERY_ERROR");
+            .with_docs_url("https://example.com/errors/TEST_QUERY_ERROR");
 
         assert_eq!(err.hint.as_deref(), Some("Did you mean: status?"));
         assert_eq!(err.context.get("entity").map(|s| s.as_str()), Some("Order"));
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(err.source_line, Some(42));
         assert_eq!(
             err.docs_url.as_deref(),
-            Some("https://docs.ream.dev/errors/ATLAS_QUERY_ERROR")
+            Some("https://example.com/errors/TEST_QUERY_ERROR")
         );
     }
 
@@ -202,7 +202,7 @@ mod tests {
         let err = ReamError::new("TEST", "msg")
             .with_context("key", "val")
             .with_source_location("test.rs", 10)
-            .with_docs_url("https://docs.ream.dev/errors/TEST");
+            .with_docs_url("https://example.com/errors/TEST");
         let json = err.to_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["code"], "TEST");
@@ -211,7 +211,7 @@ mod tests {
         // Verify camelCase serialization
         assert_eq!(parsed["sourceFile"], "test.rs");
         assert_eq!(parsed["sourceLine"], 10);
-        assert_eq!(parsed["docsUrl"], "https://docs.ream.dev/errors/TEST");
+        assert_eq!(parsed["docsUrl"], "https://example.com/errors/TEST");
         // hint is None, should not be in JSON
         assert!(parsed.get("hint").is_none());
         // snake_case keys should NOT exist

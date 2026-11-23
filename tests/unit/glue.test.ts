@@ -25,11 +25,11 @@ describe('ReamError > construction', () => {
       hint: 'Did you mean: status?',
       sourceFile: 'crates/ream-query/src/compiler.rs',
       sourceLine: 142,
-      docsUrl: 'https://docs.ream.dev/errors/E_ATLAS_ERROR',
+      docsUrl: 'https://r-eam.com/en/reference/errors#e-atlas-error',
     })
     expect(err.context.entity).toBe('Order')
     expect(err.hint).toBe('Did you mean: status?')
-    expect(err.docsUrl).toContain('docs.ream.dev')
+    expect(err.docsUrl).toContain('r-eam.com')
   })
 })
 
