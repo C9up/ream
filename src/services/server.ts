@@ -7,6 +7,7 @@
  *   server.use([() => import('#middleware/logging')])
  */
 
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import type { Server } from '../server/Server.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
@@ -32,8 +33,11 @@ export function getServer(): Server | undefined {
 
 const server: Server = createServiceProxy<Server>(
   () => instance,
-  'Server accessed before initialization. ' +
-    'Ensure your kernel files are loaded as preloads in reamrc.ts.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      'Server accessed before initialization. ' +
+        'Ensure your kernel files are loaded as preloads in reamrc.ts.',
+    ]),
 )
 
 export default server

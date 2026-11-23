@@ -1,3 +1,4 @@
+import { E_INVALID_ENV_VARIABLES } from '../errors/codes.js'
 import {
   defineIdentifier,
   defineIdentifierIfMissing,
@@ -37,17 +38,6 @@ type EnvRecord<S extends Record<string, SchemaNode<unknown>>> = {
   [K in keyof S]: EnvOutput<S[K]>
 }
 
-/** Raised when one or more environment variables fail validation. */
-export class EnvValidationException extends Error {
-  /** Human-readable, newline-joined list of every failure (cf. Adonis `error.help`). */
-  readonly help: string
-  constructor(failures: string[]) {
-    super('Environment variables validation failed')
-    this.name = 'E_INVALID_ENV_VARIABLES'
-    this.help = failures.join('\n')
-  }
-}
-
 export class Env<Values extends Record<string, unknown>> {
   /** The validation schema surface — `Env.schema.string()`, `.number()`, … */
   static readonly schema = schema
@@ -81,7 +71,7 @@ export class Env<Values extends Record<string, unknown>> {
 
   /**
    * Load `.env*` files, validate `process.env` against `schema`, and return a
-   * typed `Env`. Throws {@link EnvValidationException} (aggregating every
+   * typed `Env`. Throws `E_INVALID_ENV_VARIABLES` (aggregating every
    * failure) if validation fails.
    */
   static async create<S extends Record<string, SchemaNode<unknown>>>(
@@ -98,7 +88,7 @@ export class Env<Values extends Record<string, unknown>> {
    *
    * `create` reads `process.env`; this validates any record — a parsed `.env`
    * file, a fixture, a subset a test wants to check — and aggregates every
-   * failure into one {@link EnvValidationException} rather than stopping at
+   * failure into one `E_INVALID_ENV_VARIABLES` rather than stopping at
    * the first.
    */
   static rules<S extends Record<string, SchemaNode<unknown>>>(
@@ -114,10 +104,11 @@ export class Env<Values extends Record<string, unknown>> {
           try {
             collected[key] = node.validate(key, values[key])
           } catch (err) {
-            failures.push(err instanceof Error ? err.message : String(err))
+            if (err instanceof E_INVALID_ENV_VARIABLES) failures.push(...err.failures)
+            else failures.push(err instanceof Error ? err.message : String(err))
           }
         }
-        if (failures.length > 0) throw new EnvValidationException(failures)
+        if (failures.length > 0) throw new E_INVALID_ENV_VARIABLES(failures)
 
         // The ONE isolated type-erasure boundary (the same place zod /
         // @adonisjs/env cast internally): every entry of `collected` was

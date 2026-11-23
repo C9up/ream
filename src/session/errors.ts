@@ -47,9 +47,12 @@ export class E_SESSION_TAGGING_NOT_SUPPORTED extends Exception {
   static override status = 500
   static override code = 'E_SESSION_TAGGING_NOT_SUPPORTED'
 
-  constructor(method: string) {
+  /** `missingCommand` names the Redis command a Redis client lacks, when that is the reason. */
+  constructor(method: string, missingCommand?: string) {
     super(
-      `session.${method}() is not supported by the configured session store. Use the memory, redis, or database store.`,
+      missingCommand === undefined
+        ? `session.${method}() is not supported by the configured session store. Use the memory, redis, or database store.`
+        : `session.${method}() needs the Redis \`${missingCommand}\` command, which the configured client does not expose.`,
       { status: 500, code: 'E_SESSION_TAGGING_NOT_SUPPORTED' },
     )
   }

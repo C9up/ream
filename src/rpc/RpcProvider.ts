@@ -18,7 +18,7 @@
  * @implements Story 24.1, 24.2
  */
 
-import { ReamError } from '../errors/ReamError.js'
+import { E_RPC_PROVIDER_ALREADY_REGISTERED } from '../errors/codes.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { AppContext } from '../Provider.js'
 import { Provider } from '../Provider.js'
@@ -73,13 +73,7 @@ export class RpcProvider extends Provider {
       // Idempotent re-register: tracked with a flag rather than
       // `container.resolve('rpc')` because resolution is now async.
       if (this.#registered) return
-      throw new ReamError(
-        'E_RPC_PROVIDER_ALREADY_REGISTERED',
-        "Container token 'rpc' is already bound to a different instance",
-        {
-          hint: 'Only one RpcProvider can own the rpc binding. Remove the duplicate provider from your reamrc.ts.',
-        },
-      )
+      throw new E_RPC_PROVIDER_ALREADY_REGISTERED()
     }
     this.rpc.useContainer(container)
     container.singleton('rpc', () => this.rpc)

@@ -19,9 +19,10 @@
  * at the read, every body is buffered before any JS-side limit can apply.
  */
 
+import type { Exception } from '@c9up/flare'
 import type { BodyParserConfig } from '../bodyparser/BodyParserMiddleware.js'
 import { parseSize } from '../bodyparser/parseSize.js'
-import { ReamError } from '../errors/ReamError.js'
+import { E_IGNITOR_INVALID_HTTP_CONFIG } from '../errors/codes.js'
 
 /** One body-parser section as the native server takes it (bytes). */
 export interface NativeBodyLimit {
@@ -108,10 +109,11 @@ export function nativeConnectionConfig(http: unknown): NativeConnectionConfig {
     const value: unknown = Reflect.get(http, key)
     if (value === undefined) continue
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_U32) {
-      throw new ReamError(
-        'E_IGNITOR_INVALID_HTTP_CONFIG',
-        `\`http.${key}\` must be a whole number between 0 and ${MAX_U32}, received ${String(value)}.`,
-        { hint: 'Timeouts are in milliseconds; 0 disables the bound.' },
+      throw Object.assign(
+        new E_IGNITOR_INVALID_HTTP_CONFIG([
+          `\`http.${key}\` must be a whole number between 0 and ${MAX_U32}, received ${String(value)}.`,
+        ]),
+        { help: 'Timeouts are in milliseconds; 0 disables the bound.' },
       )
     }
     config[key] = value
@@ -121,12 +123,13 @@ export function nativeConnectionConfig(http: unknown): NativeConnectionConfig {
 
 const WEBSOCKET_SIZES = ['maxFrameSize', 'maxMessageSize', 'maxBufferedBytes'] as const
 
-function invalidWebSocket(key: string, expected: string, value: unknown): ReamError {
-  return new ReamError(
-    'E_IGNITOR_INVALID_HTTP_CONFIG',
-    `\`http.webSocket.${key}\` must be ${expected}, received ${JSON.stringify(value)}.`,
+function invalidWebSocket(key: string, expected: string, value: unknown): Exception {
+  return Object.assign(
+    new E_IGNITOR_INVALID_HTTP_CONFIG([
+      `\`http.webSocket.${key}\` must be ${expected}, received ${JSON.stringify(value)}.`,
+    ]),
     {
-      hint: 'Sizes are bytes or strings such as "1mb"; idleTimeout is milliseconds (0 never closes); allowedOrigins lists origins such as "https://app.example.com", or "*".',
+      help: 'Sizes are bytes or strings such as "1mb"; idleTimeout is milliseconds (0 never closes); allowedOrigins lists origins such as "https://app.example.com", or "*".',
     },
   )
 }

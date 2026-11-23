@@ -33,6 +33,12 @@
  * text, and cannot run code.
  */
 
+import {
+  E_REAM_STUB_EVALUATION,
+  E_REAM_STUB_FORBIDDEN_KEY,
+  E_REAM_STUB_SYNTAX,
+} from '../errors/codes.js'
+
 /** What a template may read. Scalars, lists, nested records, and helpers. */
 export type StubValue =
   | string
@@ -59,15 +65,6 @@ export interface TemplateOptions {
   blocks?: Record<string, StubBlock>
   /** Applied to every `{{ }}`. Identity by default — see the header. */
   escape?: (value: unknown) => string
-}
-
-/** Raised when a template cannot be read, naming what is wrong with it. */
-export class StubSyntaxError extends Error {
-  readonly code = 'E_REAM_STUB_SYNTAX'
-  constructor(message: string) {
-    super(message)
-    this.name = 'StubSyntaxError'
-  }
 }
 
 /** HTML escaping, for a stub that does template markup. */
@@ -188,9 +185,9 @@ function tokenize(source: string): Token[] {
         const next = source.charAt(end)
         if (next === char) break
         if (char === '`' && next === '$' && source.charAt(end + 1) === '{') {
-          throw new StubSyntaxError(
+          throw new E_REAM_STUB_SYNTAX([
             `A template literal cannot interpolate in a stub expression: ${source}`,
-          )
+          ])
         }
         if (next === '\\') {
           end++
@@ -200,14 +197,14 @@ function tokenize(source: string): Token[] {
           value += next
         }
       }
-      if (end >= source.length) throw new StubSyntaxError(`Unterminated string in: ${source}`)
+      if (end >= source.length) throw new E_REAM_STUB_SYNTAX([`Unterminated string in: ${source}`])
       tokens.push({ kind: 'string', value })
       at = end + 1
       continue
     }
     const punct = PUNCTUATORS.find((candidate) => source.startsWith(candidate, at))
     if (punct === undefined) {
-      throw new StubSyntaxError(`Unexpected "${char}" in: ${source}`)
+      throw new E_REAM_STUB_SYNTAX([`Unexpected "${char}" in: ${source}`])
     }
     tokens.push({ kind: 'punct', value: punct })
     at += punct.length
@@ -235,9 +232,9 @@ function parseExpression(source: string): Expr {
   const expect = (value: string): void => {
     if (!isPunct(value)) {
       const token = peek()
-      throw new StubSyntaxError(
+      throw new E_REAM_STUB_SYNTAX([
         `Expected "${value}"${token === undefined ? ' at the end' : ` before "${String(token.value)}"`} in: ${source}`,
-      )
+      ])
     }
     at++
   }
@@ -254,7 +251,7 @@ function parseExpression(source: string): Expr {
 
   const primary = (): Expr => {
     const token = peek()
-    if (token === undefined) throw new StubSyntaxError(`Expression expected in: ${source}`)
+    if (token === undefined) throw new E_REAM_STUB_SYNTAX([`Expression expected in: ${source}`])
     at++
     if (token.kind === 'number' || token.kind === 'string') {
       return { kind: 'literal', value: token.value }
@@ -274,7 +271,7 @@ function parseExpression(source: string): Expr {
       while (!isPunct('}')) {
         const key = peek()
         if (key === undefined || (key.kind !== 'name' && key.kind !== 'string')) {
-          throw new StubSyntaxError(`An object key is a name or a string, in: ${source}`)
+          throw new E_REAM_STUB_SYNTAX([`An object key is a name or a string, in: ${source}`])
         }
         at++
         let value: Expr = { kind: 'name', name: String(key.value) }
@@ -282,7 +279,7 @@ function parseExpression(source: string): Expr {
           at++
           value = expression(0)
         } else if (key.kind !== 'name') {
-          throw new StubSyntaxError(`Expected ":" after "${key.value}" in: ${source}`)
+          throw new E_REAM_STUB_SYNTAX([`Expected ":" after "${key.value}" in: ${source}`])
         }
         entries.push({ key: String(key.value), value })
         if (!isPunct('}')) expect(',')
@@ -293,7 +290,7 @@ function parseExpression(source: string): Expr {
     if (token.value === '!' || token.value === '-' || token.value === '+') {
       return { kind: 'unary', operator: token.value, operand: unaryOperand() }
     }
-    throw new StubSyntaxError(`Unexpected "${token.value}" in: ${source}`)
+    throw new E_REAM_STUB_SYNTAX([`Unexpected "${token.value}" in: ${source}`])
   }
 
   /** A unary operator applies to a postfix expression, not to a binary one. */
@@ -319,7 +316,7 @@ function parseExpression(source: string): Expr {
         }
         const name = peek()
         if (name?.kind !== 'name') {
-          throw new StubSyntaxError(`A property name is expected after "." in: ${source}`)
+          throw new E_REAM_STUB_SYNTAX([`A property name is expected after "." in: ${source}`])
         }
         at++
         node = {
@@ -367,7 +364,7 @@ function parseExpression(source: string): Expr {
   const result = expression(0)
   const rest = peek()
   if (rest !== undefined) {
-    throw new StubSyntaxError(`Unexpected "${String(rest.value)}" in: ${source}`)
+    throw new E_REAM_STUB_SYNTAX([`Unexpected "${String(rest.value)}" in: ${source}`])
   }
   return result
 }
@@ -391,7 +388,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readProperty(object: unknown, property: unknown): unknown {
   const key = typeof property === 'number' ? property : String(property)
   if (typeof key === 'string' && FORBIDDEN.has(key)) {
-    throw new TypeError(`A stub cannot read "${key}".`)
+    throw new E_REAM_STUB_FORBIDDEN_KEY([`A stub cannot read "${key}".`])
   }
   if (typeof object === 'string' || Array.isArray(object)) {
     if (key === 'length') return object.length
@@ -403,7 +400,7 @@ function readProperty(object: unknown, property: unknown): unknown {
     return Object.hasOwn(object, key) ? Reflect.get(object, key) : undefined
   }
   if (object === null || object === undefined) {
-    throw new TypeError(`Cannot read "${String(key)}" of ${String(object)}.`)
+    throw new E_REAM_STUB_EVALUATION([`Cannot read "${String(key)}" of ${String(object)}.`])
   }
   return undefined
 }
@@ -414,7 +411,7 @@ function lookup(name: string, scope: Scope): unknown {
     return Object.hasOwn(scope.state, name) ? scope.state[name] : undefined
   }
   // As before: an undeclared name is the template's mistake, not an empty value.
-  throw new ReferenceError(`${name} is not defined`)
+  throw new E_REAM_STUB_EVALUATION([`${name} is not defined`])
 }
 
 function describe(expr: Expr): string {
@@ -526,7 +523,7 @@ function evaluate(expr: Expr, scope: Scope): unknown {
       }
       if (expr.optional && (callee === null || callee === undefined)) return undefined
       if (typeof callee !== 'function') {
-        throw new TypeError(`${describe(expr.callee)} is not a function`)
+        throw new E_REAM_STUB_EVALUATION([`${describe(expr.callee)} is not a function`])
       }
       return Reflect.apply(
         callee,
@@ -550,7 +547,8 @@ function evaluate(expr: Expr, scope: Scope): unknown {
     case 'object': {
       const out: Record<string, unknown> = {}
       for (const entry of expr.entries) {
-        if (FORBIDDEN.has(entry.key)) throw new TypeError(`A stub cannot set "${entry.key}".`)
+        if (FORBIDDEN.has(entry.key))
+          throw new E_REAM_STUB_FORBIDDEN_KEY([`A stub cannot set "${entry.key}".`])
         out[entry.key] = evaluate(entry.value, scope)
       }
       return out
@@ -590,8 +588,8 @@ const ARGS = /([a-zA-Z$_][^\s=]*)\s*=\s*((["`'])(?:(?=(\\?))\4.)*?\3|{[^}]*}|\[[
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
 
 function identifier(name: string, where: string): string {
-  if (!IDENTIFIER.test(name)) throw new StubSyntaxError(`"${name}" is not a name, in ${where}`)
-  if (FORBIDDEN.has(name)) throw new StubSyntaxError(`"${name}" cannot be bound, in ${where}`)
+  if (!IDENTIFIER.test(name)) throw new E_REAM_STUB_SYNTAX([`"${name}" is not a name, in ${where}`])
+  if (FORBIDDEN.has(name)) throw new E_REAM_STUB_SYNTAX([`"${name}" cannot be bound, in ${where}`])
   return name
 }
 
@@ -600,8 +598,8 @@ function expressionOf(source: string, tag: string): Expr {
   try {
     return parseExpression(source)
   } catch (error) {
-    if (error instanceof StubSyntaxError) {
-      throw new StubSyntaxError(`This stub does not compile — ${tag}: ${error.message}`)
+    if (error instanceof E_REAM_STUB_SYNTAX) {
+      throw new E_REAM_STUB_SYNTAX([`This stub does not compile — ${tag}: ${error.message}`])
     }
     throw error
   }
@@ -640,7 +638,7 @@ function parse(input: string, options: TemplateOptions): Template {
       // A comment. It leaves no trace in the output.
     } else if (first === '#') {
       const parsed = BLOCK.exec(inner)
-      if (parsed === null) throw new StubSyntaxError(`Unreadable block: {{${inner}}}`)
+      if (parsed === null) throw new E_REAM_STUB_SYNTAX([`Unreadable block: {{${inner}}}`])
       const action = parsed[1] ?? ''
       const rest = (parsed[2] ?? '').trim()
       openBlock(action, rest, tag)
@@ -648,12 +646,12 @@ function parse(input: string, options: TemplateOptions): Template {
       const closing = inner.slice(1).trim()
       const opened = stack.pop()
       if (opened === undefined) {
-        throw new StubSyntaxError(`Closed "${closing}" with nothing open.`)
+        throw new E_REAM_STUB_SYNTAX([`Closed "${closing}" with nothing open.`])
       }
       if (opened.kind !== closing) {
-        throw new StubSyntaxError(
+        throw new E_REAM_STUB_SYNTAX([
           `Expected to close "${opened.kind}"; closed "${closing}" instead.`,
-        )
+        ])
       }
     } else {
       // Both forms interpolate the same way — see the header.
@@ -663,7 +661,7 @@ function parse(input: string, options: TemplateOptions): Template {
   }
 
   const open = stack.pop()
-  if (open !== undefined) throw new StubSyntaxError(`Unterminated "${open.kind}" block.`)
+  if (open !== undefined) throw new E_REAM_STUB_SYNTAX([`Unterminated "${open.kind}" block.`])
   text(input.slice(last))
   return { nodes: root, declared }
 
@@ -680,7 +678,7 @@ function parse(input: string, options: TemplateOptions): Template {
     if (action === 'var') {
       const at = rest.indexOf('=')
       if (at === -1) {
-        throw new StubSyntaxError(`{{#var}} needs an assignment: {{#var ${rest}}}`)
+        throw new E_REAM_STUB_SYNTAX([`{{#var}} needs an assignment: {{#var ${rest}}}`])
       }
       const name = identifier(rest.slice(0, at).trim(), tag)
       const value = rest
@@ -730,7 +728,7 @@ function parse(input: string, options: TemplateOptions): Template {
     if (action === 'elif' || action === 'else') {
       const frame = stack.at(-1)
       if (frame === undefined || frame.node.kind !== 'if' || frame.node.otherwise !== undefined) {
-        throw new StubSyntaxError(`{{#${action}}} outside an {{#if}}: ${tag}`)
+        throw new E_REAM_STUB_SYNTAX([`{{#${action}}} outside an {{#if}}: ${tag}`])
       }
       if (action === 'elif') {
         const branch = { test: expressionOf(rest, tag), body: [] }
@@ -760,11 +758,11 @@ function parse(input: string, options: TemplateOptions): Template {
       return
     }
 
-    throw new StubSyntaxError(
+    throw new E_REAM_STUB_SYNTAX([
       `Unknown "${action}" block. Known: expect, var, if, elif, else, each${
         Object.keys(blocks).length > 0 ? `, ${Object.keys(blocks).join(', ')}` : ''
       }.`,
-    )
+    ])
   }
 }
 
@@ -797,9 +795,9 @@ function run(
         const items: unknown[] =
           typeof list === 'string' ? [...list] : Array.isArray(list) ? list : []
         if (!Array.isArray(list) && typeof list !== 'string') {
-          throw new TypeError(
+          throw new E_REAM_STUB_EVALUATION([
             `{{#each}} needs a list; got ${list === null ? 'null' : typeof list}.`,
-          )
+          ])
         }
         for (let index = 0; index < items.length; index++) {
           scope.locals.set(node.index, index)
@@ -813,7 +811,9 @@ function run(
         for (const arg of node.args) {
           const value = evaluate(arg.value, scope)
           if (!isStubValue(value)) {
-            throw new TypeError(`{{#${node.name}}} received a value that is not data: ${arg.key}`)
+            throw new E_REAM_STUB_EVALUATION([
+              `{{#${node.name}}} received a value that is not data: ${arg.key}`,
+            ])
           }
           args[arg.key] = value
         }

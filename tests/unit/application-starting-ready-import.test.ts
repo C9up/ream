@@ -140,9 +140,10 @@ describe('Application > import through the importer', () => {
   it('names the module that has no default export', async () => {
     const root = appDirectory()
     const app = new Application({ importer: await appImporter(root) })
-    await expect(app.importDefault('#listeners/named_only')).rejects.toThrow(
-      /#listeners\/named_only/,
-    )
+    await expect(app.importDefault('#listeners/named_only')).rejects.toMatchObject({
+      code: 'E_APP_MISSING_DEFAULT_EXPORT',
+      message: expect.stringMatching(/#listeners\/named_only/),
+    })
   })
 
   it('refuses to import without an importer', () => {

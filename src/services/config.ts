@@ -11,14 +11,18 @@
  */
 
 import type { ConfigStore } from '../ConfigLoader.js'
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import { getApp } from './app.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
 const config: ConfigStore = createServiceProxy<ConfigStore>(
   () => getApp()?.config,
-  'Config accessed before initialization. ' +
-    'The store is built during the boot phase — read it from inside a provider, ' +
-    'a preload, or a request, not at module top level.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      'Config accessed before initialization. ' +
+        'The store is built during the boot phase — read it from inside a provider, ' +
+        'a preload, or a request, not at module top level.',
+    ]),
 )
 
 export default config

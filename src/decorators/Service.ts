@@ -6,6 +6,7 @@
 
 import 'reflect-metadata'
 import type { ServiceMetadata, ServiceScope, ServiceToken } from '../container/types.js'
+import { E_CONTAINER_INVALID_DECORATOR_TARGET } from '../errors/codes.js'
 
 const SERVICE_METADATA_KEY = Symbol('ream:service')
 const INJECT_METADATA_KEY = Symbol('ream:inject')
@@ -52,7 +53,7 @@ export function Service(options: { scope?: ServiceScope; as?: string } = {}): Cl
     // construct signature; the guard is what states that a decorated class IS
     // constructible.
     if (!isConstructor(target)) {
-      throw new TypeError('@Service() can only decorate a class')
+      throw new E_CONTAINER_INVALID_DECORATOR_TARGET(['@Service() can only decorate a class'])
     }
     serviceRegistry.set(target, metadata)
     Reflect.defineMetadata(SERVICE_METADATA_KEY, metadata, target)
@@ -145,7 +146,9 @@ export function inject(): ClassDecorator & MethodDecorator {
   return (target: object, propertyKey?: string | symbol): void => {
     if (propertyKey === undefined) {
       if (typeof target !== 'function') {
-        throw new TypeError('@inject() decorates a class or one of its methods')
+        throw new E_CONTAINER_INVALID_DECORATOR_TARGET([
+          '@inject() decorates a class or one of its methods',
+        ])
       }
       Service({ scope: 'transient' })(target)
       return

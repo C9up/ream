@@ -193,8 +193,18 @@ describe('CookieSigner > purpose and expiry (AdonisJS parity)', () => {
   })
 
   it('refuses a missing or trivially short APP_KEY', () => {
-    expect(() => new CookieSigner('')).toThrow(/Missing APP_KEY/)
-    expect(() => new CookieSigner('short')).toThrow(/at least 16 characters/)
+    expect(() => new CookieSigner('')).toThrow(
+      expect.objectContaining({
+        code: 'E_MISSING_ENCRYPTER_KEY',
+        message: 'Missing key. The key is required to encrypt values',
+      }),
+    )
+    expect(() => new CookieSigner('short')).toThrow(
+      expect.objectContaining({
+        code: 'E_INSECURE_ENCRYPTER_KEY',
+        message: 'The value of your key should be at least 16 characters long',
+      }),
+    )
   })
 })
 

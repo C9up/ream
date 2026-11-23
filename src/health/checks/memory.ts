@@ -1,3 +1,4 @@
+import { E_HEALTH_INVALID_THRESHOLD } from '../../errors/codes.js'
 import bytes from '../../helpers/bytes.js'
 import { Result } from '../Result.js'
 import type { HealthCheckResult } from '../types.js'
@@ -105,11 +106,14 @@ export function runMemoryCheck(
 /** The threshold setters both memory checks expose, shared verbatim. */
 export function parseByteThreshold(value: string | number, method: string): number {
   const parsed = bytes.parse(value)
-  if (parsed === null) throw new Error(`Invalid byte value for ${method}: ${value}`)
+  if (parsed === null)
+    throw new E_HEALTH_INVALID_THRESHOLD([`Invalid byte value for ${method}: ${value}`])
   return parsed
 }
 
 export function assertPercentage(value: number, label: string): void {
   if (value < 0 || value > 100)
-    throw new Error(`${label} threshold percentage must be between 0 and 100.`)
+    throw new E_HEALTH_INVALID_THRESHOLD([
+      `${label} threshold percentage must be between 0 and 100.`,
+    ])
 }

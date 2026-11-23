@@ -15,6 +15,7 @@
  * task, a console command — where there is no request to scope to.
  */
 
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import type { ChildLoggerSource } from '../http/HttpContext.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
@@ -40,10 +41,13 @@ export function getLogger(): ChildLoggerSource | undefined {
 
 const logger: ChildLoggerSource = createServiceProxy<ChildLoggerSource>(
   () => instance,
-  'Logger accessed before initialization. ' +
-    'ream declares the contract but implements no logger — install one (`@c9up/spectrum`) ' +
-    "and register its provider, which binds it as 'logger'. Inside a request, prefer " +
-    '`ctx.logger`, which is scoped to the correlation id.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      'Logger accessed before initialization. ' +
+        'ream declares the contract but implements no logger — install one (`@c9up/spectrum`) ' +
+        "and register its provider, which binds it as 'logger'. Inside a request, prefer " +
+        '`ctx.logger`, which is scoped to the correlation id.',
+    ]),
 )
 
 export default logger

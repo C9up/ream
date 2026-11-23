@@ -154,7 +154,12 @@ describe('Router.builder — the fluent UrlBuilder (AdonisJS parity)', () => {
   })
 
   it('fails the same way urlFor does on a missing param', () => {
-    expect(() => router().builder().make('users.show')).toThrow(/missing params/)
+    expect(() => router().builder().make('users.show')).toThrow(
+      expect.objectContaining({
+        code: 'E_MISSING_ROUTE_PARAMS',
+        message: expect.stringMatching(/missing params/),
+      }),
+    )
   })
 
   it('urlBuilder is the property name for the same thing', () => {
@@ -428,7 +433,9 @@ describe('Router > a parameterised domain', () => {
   it('refuses a domain whose parameter has no name', () => {
     const router = new Router()
     router.get('/', () => {}).domain(':.app.test')
-    expect(() => router.commit()).toThrow(/E_INVALID_ROUTE_DOMAIN/)
+    expect(() => router.commit()).toThrow(
+      expect.objectContaining({ code: 'E_INVALID_ROUTE_DOMAIN' }),
+    )
   })
 
   it('hands the values to the handler as ctx.subdomains', async () => {

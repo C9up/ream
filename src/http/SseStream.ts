@@ -33,6 +33,8 @@
  * `data: ` so the consumer browser reassembles them with newlines.
  */
 
+import { E_STREAM_REGISTER } from '../errors/codes.js'
+
 /** Minimal backend the writer needs — the HyperServer NAPI fits exactly. */
 export interface StreamBackend {
   registerStream(streamId: string): Promise<boolean>
@@ -237,7 +239,7 @@ export async function openSseStream(
     // Hex collision is astronomically improbable, but surfacing it
     // cleanly beats a silent stream-id mismatch (the response builder
     // would then 500 with E_STREAM_UNKNOWN, which is far less helpful).
-    throw new Error(`[ream] failed to reserve SSE stream id ${id} — collision in the registry`)
+    throw new E_STREAM_REGISTER([id])
   }
   // First frame: the recommended retry hint. Conforms to the EventSource
   // reconnection backoff spec; falling through with the default 5s.

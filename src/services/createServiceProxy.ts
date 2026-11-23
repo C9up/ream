@@ -13,12 +13,14 @@
 /**
  * Build the proxy an accessor module default-exports.
  *
- * @param read     Returns the live singleton, or `undefined` before boot.
- * @param notReady Message thrown when something reads the accessor too early.
+ * @param read  Returns the live singleton, or `undefined` before boot.
+ * @param raise Builds the error thrown when something reads the accessor too
+ *              early: `E_SERVICE_NOT_BOOTED` unless the accessor has a more
+ *              precise reason to be empty.
  */
 export function createServiceProxy<T extends object>(
   read: () => T | undefined,
-  notReady: string,
+  raise: () => Error,
 ): T {
   // The target is never read through — every trap forwards to `read()`.
   const target: T = Object.create(null)
@@ -36,7 +38,7 @@ export function createServiceProxy<T extends object>(
       }
       const instance = read()
       if (!instance) {
-        throw new Error(notReady)
+        throw raise()
       }
       // Bind methods so private-field writes inside the class resolve against
       // the real instance brand instead of the Proxy.

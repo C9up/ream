@@ -14,7 +14,17 @@
  *   repeated flags accumulate for `@flags.array()`
  */
 
-import { ReamError } from '../errors/ReamError.js'
+import type { Exception } from '@c9up/flare'
+import {
+  E_CONSOLE_INVALID_FLAG_GROUP,
+  E_CONSOLE_INVALID_FLAG_VALUE,
+  E_CONSOLE_MISSING_ARGUMENT,
+  E_CONSOLE_MISSING_ARGUMENT_VALUE,
+  E_CONSOLE_MISSING_FLAG,
+  E_CONSOLE_MISSING_FLAG_VALUE,
+  E_CONSOLE_UNEXPECTED_ARGUMENT,
+  E_CONSOLE_UNKNOWN_FLAG,
+} from '../errors/codes.js'
 import type { ArgumentMetaData, FlagMetaData, ParsedInput } from './types.js'
 
 export interface ParseOptions {
@@ -185,11 +195,9 @@ export function parseArgv(argv: readonly string[], options: ParseOptions = {}): 
           continue
         }
         if (meta.type !== 'boolean') {
-          throw new ReamError(
-            'E_CONSOLE_INVALID_FLAG_GROUP',
-            `Cannot group "-${char}" with other flags${where} — "--${meta.flagName}" expects a value.`,
-            { hint: `Pass it on its own: -${char} <value>` },
-          )
+          throw Object.assign(new E_CONSOLE_INVALID_FLAG_GROUP([char, where, meta.flagName]), {
+            help: `Pass it on its own: -${char} <value>`,
+          })
         }
         push(meta, true)
       }
@@ -282,10 +290,11 @@ function consume(
       push(meta, value === 'true')
       return index
     }
-    throw new ReamError(
-      'E_CONSOLE_INVALID_FLAG_VALUE',
-      `Flag "--${meta.flagName}"${where} is a boolean and cannot take the value "${value}".`,
-      { hint: `Use --${meta.flagName} or --no-${meta.flagName}` },
+    throw Object.assign(
+      new E_CONSOLE_INVALID_FLAG_VALUE([
+        `Flag "--${meta.flagName}"${where} is a boolean and cannot take the value "${value}".`,
+      ]),
+      { help: `Use --${meta.flagName} or --no-${meta.flagName}` },
     )
   }
 
@@ -308,10 +317,9 @@ function consume(
       else push(meta, '')
       return index
     }
-    throw new ReamError(
-      'E_CONSOLE_MISSING_FLAG_VALUE',
-      `Flag "--${meta.flagName}"${where} expects a value.`,
-      { hint: `Example: --${meta.flagName}=<value>` },
+    throw Object.assign(
+      new E_CONSOLE_MISSING_FLAG_VALUE([`Flag "--${meta.flagName}"${where} expects a value.`]),
+      { help: `Example: --${meta.flagName}=<value>` },
     )
   }
   push(meta, next)
@@ -334,10 +342,7 @@ function materialiseFlags(
     if (values === undefined) {
       if (meta.default !== undefined) out[meta.propertyName] = meta.default
       else if (meta.required && strict) {
-        throw new ReamError(
-          'E_CONSOLE_MISSING_FLAG',
-          `Missing required flag "--${meta.flagName}"${where}.`,
-        )
+        throw new E_CONSOLE_MISSING_FLAG([meta.flagName, where])
       }
       continue
     }
@@ -351,10 +356,9 @@ function materialiseFlags(
         const last = String(values[values.length - 1])
         const parsed = Number(last)
         if (last.trim() === '' || Number.isNaN(parsed)) {
-          throw new ReamError(
-            'E_CONSOLE_INVALID_FLAG_VALUE',
+          throw new E_CONSOLE_INVALID_FLAG_VALUE([
             `Flag "--${meta.flagName}"${where} expects a number, got "${last}".`,
-          )
+          ])
         }
         out[meta.propertyName] = parsed
         break
@@ -409,10 +413,7 @@ function materialiseArgs(
     // expand, so it is reported rather than accepted (Console) — unless the
     // argument declares that an empty value means something.
     if (value === '' && meta.allowEmptyValue !== true && strict) {
-      throw new ReamError(
-        'E_CONSOLE_MISSING_ARGUMENT_VALUE',
-        `Missing value for argument "${meta.argumentName}"${where}.`,
-      )
+      throw new E_CONSOLE_MISSING_ARGUMENT_VALUE([meta.argumentName, where])
     }
     out[meta.propertyName] = value
   }
@@ -429,11 +430,14 @@ function materialiseArgs(
       extraArgs.push(...extra)
       return out
     }
-    throw new ReamError(
-      'E_CONSOLE_UNEXPECTED_ARGUMENT',
-      `Unexpected argument${extra.length > 1 ? 's' : ''} ${extra.map((value) => `"${value}"`).join(', ')}${where}.`,
+    throw Object.assign(
+      new E_CONSOLE_UNEXPECTED_ARGUMENT([
+        extra.length > 1 ? 's' : '',
+        extra.map((value) => `"${value}"`).join(', '),
+        where,
+      ]),
       {
-        hint:
+        help:
           declared.length === 0
             ? 'This command takes no positional arguments.'
             : `It takes ${declared.length}: ${declared.map((arg) => arg.argumentName).join(', ')}.`,
@@ -478,20 +482,14 @@ export function validateParsed(
     if (arg.required && value === undefined) throw missingArgument(arg, where)
     if (value === undefined || arg.allowEmptyValue === true) return
     if (value === '' || (Array.isArray(value) && value.length === 0)) {
-      throw new ReamError(
-        'E_CONSOLE_MISSING_ARGUMENT_VALUE',
-        `Missing value for argument "${arg.argumentName}"${where}.`,
-      )
+      throw new E_CONSOLE_MISSING_ARGUMENT_VALUE([arg.argumentName, where])
     }
   })
 
   const unknown = parsed.unknownFlags ?? []
   if (declarations.allowUnknownFlags !== true && unknown.length > 0) {
     const flag = unknown[0] ?? ''
-    throw new ReamError(
-      'E_CONSOLE_UNKNOWN_FLAG',
-      `Unknown flag "${flag.length === 1 ? `-${flag}` : `--${flag}`}"${where}.`,
-    )
+    throw new E_CONSOLE_UNKNOWN_FLAG([flag.length === 1 ? `-${flag}` : `--${flag}`, where])
   }
 
   const flags: Record<string, unknown> = parsed.flags ?? {}
@@ -503,19 +501,15 @@ export function validateParsed(
     const value = flags[key]
 
     if (flag.required && !mentioned) {
-      throw new ReamError(
-        'E_CONSOLE_MISSING_FLAG',
-        `Missing required flag "--${flag.flagName}"${where}.`,
-      )
+      throw new E_CONSOLE_MISSING_FLAG([flag.flagName, where])
     }
     if (!mentioned || flag.allowEmptyValue === true) continue
 
     if (flag.type === 'number') {
       if (value === undefined || Number.isNaN(value)) {
-        throw new ReamError(
-          'E_CONSOLE_INVALID_FLAG_VALUE',
+        throw new E_CONSOLE_INVALID_FLAG_VALUE([
           `Flag "--${flag.flagName}"${where} expects a number, got "${String(value)}".`,
-        )
+        ])
       }
       continue
     }
@@ -524,10 +518,9 @@ export function validateParsed(
     // yields '' from a parser, and an empty array for a repeatable flag.
     if (flag.type === 'boolean') continue
     if (value === '' || (Array.isArray(value) && value.length === 0)) {
-      throw new ReamError(
-        'E_CONSOLE_MISSING_FLAG_VALUE',
+      throw new E_CONSOLE_MISSING_FLAG_VALUE([
         `Missing value for flag "--${flag.flagName}"${where}.`,
-      )
+      ])
     }
   }
 }
@@ -575,24 +568,21 @@ function define(target: object, property: string, value: unknown): void {
  * Exported so `BaseCommand.validate()` reports a missing argument with the very
  * message the parser uses — two wordings for one rule is how they drift apart.
  */
-export function missingArgument(meta: ArgumentMetaData, where = ''): ReamError {
-  return new ReamError(
-    'E_CONSOLE_MISSING_ARGUMENT',
-    `Missing required argument "${meta.argumentName}"${where}.`,
-    meta.description ? { hint: meta.description } : undefined,
-  )
-}
-
-function unknownFlag(token: string, where: string, declared: readonly FlagMetaData[]): ReamError {
-  const known = declared.map((f) => `--${f.flagName}`).join(', ')
-  return new ReamError('E_CONSOLE_UNKNOWN_FLAG', `Unknown flag "${token}"${where}.`, {
-    hint: known.length > 0 ? `Known flags: ${known}` : 'This command declares no flags.',
+export function missingArgument(meta: ArgumentMetaData, where = ''): Exception {
+  return Object.assign(new E_CONSOLE_MISSING_ARGUMENT([meta.argumentName, where]), {
+    help: meta.description,
   })
 }
 
-function invalidNegation(token: string, where: string): ReamError {
-  return new ReamError(
-    'E_CONSOLE_INVALID_FLAG_VALUE',
+function unknownFlag(token: string, where: string, declared: readonly FlagMetaData[]): Exception {
+  const known = declared.map((f) => `--${f.flagName}`).join(', ')
+  return Object.assign(new E_CONSOLE_UNKNOWN_FLAG([token, where]), {
+    help: known.length > 0 ? `Known flags: ${known}` : 'This command declares no flags.',
+  })
+}
+
+function invalidNegation(token: string, where: string): Exception {
+  return new E_CONSOLE_INVALID_FLAG_VALUE([
     `"${token}"${where} negates a boolean flag and cannot carry a value.`,
-  )
+  ])
 }

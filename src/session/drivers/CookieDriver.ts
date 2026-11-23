@@ -1,3 +1,4 @@
+import { E_SESSION_MISSING_SECRET } from '../../errors/codes.js'
 import { CookieSigner } from '../../security/CookieSigner.js'
 import type { SessionDriver } from '../Session.js'
 
@@ -20,9 +21,9 @@ export class CookieDriver implements SessionDriver {
 
   constructor(secret: string, cookieName = 'ream_session') {
     if (!secret) {
-      throw new Error(
+      throw new E_SESSION_MISSING_SECRET([
         'CookieDriver requires a secret for session encryption. Set session.secret in your config.',
-      )
+      ])
     }
     this.#signer = new CookieSigner(secret)
     this.#purpose = cookieName

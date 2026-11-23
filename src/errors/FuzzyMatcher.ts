@@ -4,6 +4,8 @@
  * @implements FR72
  */
 
+import { E_REAM_INTERNAL } from './codes.js'
+
 /**
  * Calculate Levenshtein distance between two strings.
  */
@@ -48,7 +50,7 @@ export function levenshtein(a: string, b: string): number {
 function cell(row: number[], index: number): number {
   const value = row[index]
   if (value === undefined) {
-    throw new RangeError(`levenshtein: column ${index} was read before it was written`)
+    throw new E_REAM_INTERNAL([`levenshtein: column ${index} was read before it was written`])
   }
   return value
 }

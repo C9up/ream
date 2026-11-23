@@ -15,6 +15,7 @@
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
 import type { RequestBag } from './collectors.js'
+import { listenForHandledErrors } from './handledError.js'
 import { PROFILER_TOKEN_HEADER, type Profiler } from './Profiler.js'
 import { isSecretKey, preview, REDACTED } from './preview.js'
 
@@ -28,7 +29,9 @@ export function profileRequest(profiler: Profiler): MiddlewareFunction {
         // want to open.
         ctx.response.header(PROFILER_TOKEN_HEADER, scope.token)
         try {
-          await next()
+          // The kernel answers an error where it is thrown, so `next()`
+          // resolves for a request that failed: the error comes through here.
+          await listenForHandledErrors((error) => profiler.recordException(error), next)
         } finally {
           // After routing, because this runs ahead of it: the pattern and the
           // controller are only on the context once a route has matched. In a
@@ -44,10 +47,11 @@ export function profileRequest(profiler: Profiler): MiddlewareFunction {
 /**
  * The status the response will carry.
  *
- * When the work threw, the exception handler has not run yet — the error is
- * still travelling outwards — so the response still holds whatever it held
- * before. Read the error the way the handler will instead, and fall back to
- * 500, which is what an error carrying no status becomes.
+ * The kernel answers an error before `next()` resolves, so the response
+ * already holds its status. Only an error the kernel never saw (a middleware
+ * ahead of this one, a kernel built without error handling) arrives here
+ * thrown: read it the way the handler would, and fall back to 500, which is
+ * what an error carrying no status becomes.
  */
 function statusOf(ctx: HttpContext, error: unknown): number {
   if (error === undefined) return ctx.response.getStatus()

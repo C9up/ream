@@ -121,7 +121,9 @@ describe('ServerWebSocket', () => {
     const { backend } = recordingBackend()
     const socket = new ServerWebSocket('a', backend, ['chat.v1', 'chat.v2'], () => {})
     expect(socket.acceptProtocol('chat.v2').protocol).toBe('chat.v2')
-    expect(() => socket.acceptProtocol('chat.v3')).toThrow(/E_WEBSOCKET_PROTOCOL/)
+    expect(() => socket.acceptProtocol('chat.v3')).toThrow(
+      expect.objectContaining({ code: 'E_WEBSOCKET_PROTOCOL' }),
+    )
   })
 })
 
@@ -314,7 +316,12 @@ describe('HttpKernel > WebSocket routes', () => {
     // A plain GET to a WebSocket-only path still reaches it, to be answered 426.
     expect(router.match('GET', '/socket')?.route.websocket).toBe(true)
     router.ws('/socket', () => {})
-    expect(() => router.match('GET', '/socket')).toThrow(/E_DUPLICATE_ROUTE.*"WS: \/socket"/)
+    expect(() => router.match('GET', '/socket')).toThrow(
+      expect.objectContaining({
+        code: 'E_DUPLICATE_ROUTE',
+        message: expect.stringMatching(/"WS: \/socket"/),
+      }),
+    )
   })
 
   it('registers the route as a GET flagged websocket, with the builder chain', () => {

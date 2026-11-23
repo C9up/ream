@@ -7,6 +7,7 @@
  * sometimes lacks them is worse than no type at all.
  */
 
+import { E_CONSOLE_ASSERTION_FAILED } from '../errors/codes.js'
 import type { CapturedLog, Ui } from './cliui.js'
 import type { CommandAssertions, CommandInstance, CommandSnapshot } from './types.js'
 
@@ -22,25 +23,27 @@ export function createAssertions(command: Subject, ui: Ui): CommandAssertions {
   return {
     assertSucceeded(): void {
       if (command.exitCode === 0) return
-      throw new Error(
+      throw new E_CONSOLE_ASSERTION_FAILED([
         `Expected the command to succeed, but it exited with ${String(command.exitCode)}.` +
           (command.error === undefined ? '' : `\n  Cause: ${String(command.error)}`),
-      )
+      ])
     },
 
     assertFailed(): void {
       if (command.exitCode !== 0) return
-      throw new Error('Expected the command to fail, but it exited with 0.')
+      throw new E_CONSOLE_ASSERTION_FAILED(['Expected the command to fail, but it exited with 0.'])
     },
 
     assertExitCode(expected: number): void {
       if (command.exitCode === expected) return
-      throw new Error(`Expected exit code ${expected}, got ${String(command.exitCode)}.`)
+      throw new E_CONSOLE_ASSERTION_FAILED([
+        `Expected exit code ${expected}, got ${String(command.exitCode)}.`,
+      ])
     },
 
     assertNotExitCode(unexpected: number): void {
       if (command.exitCode !== unexpected) return
-      throw new Error(`Expected the exit code NOT to be ${unexpected}.`)
+      throw new E_CONSOLE_ASSERTION_FAILED([`Expected the exit code NOT to be ${unexpected}.`])
     },
 
     assertLog(message: string, stream?: 'stdout' | 'stderr'): void {
@@ -49,10 +52,10 @@ export function createAssertions(command: Subject, ui: Ui): CommandAssertions {
         (entry) => entry.message === message && (stream === undefined || entry.stream === stream),
       )
       if (found) return
-      throw new Error(
+      throw new E_CONSOLE_ASSERTION_FAILED([
         `Expected a log ${stream === undefined ? '' : `on ${stream} `}equal to:\n  ${message}\n` +
           `Got:\n${formatLogs(captured)}`,
-      )
+      ])
     },
 
     assertLogMatches(pattern: RegExp, stream?: 'stdout' | 'stderr'): void {
@@ -61,7 +64,9 @@ export function createAssertions(command: Subject, ui: Ui): CommandAssertions {
         (entry) => pattern.test(entry.message) && (stream === undefined || entry.stream === stream),
       )
       if (found) return
-      throw new Error(`Expected a log matching ${String(pattern)}.\nGot:\n${formatLogs(captured)}`)
+      throw new E_CONSOLE_ASSERTION_FAILED([
+        `Expected a log matching ${String(pattern)}.\nGot:\n${formatLogs(captured)}`,
+      ])
     },
 
     /**
@@ -82,10 +87,10 @@ export function createAssertions(command: Subject, ui: Ui): CommandAssertions {
           ),
       )
       if (missing.length === 0) return
-      throw new Error(
+      throw new E_CONSOLE_ASSERTION_FAILED([
         `Expected the table to include the rows:\n${JSON.stringify(missing, null, 2)}\n` +
           `Got:\n${JSON.stringify(actual, null, 2)}`,
-      )
+      ])
     },
   }
 }

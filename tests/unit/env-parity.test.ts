@@ -7,8 +7,27 @@ import {
   removeIdentifier,
 } from '../../src/env/interpolate.js'
 import { Secret } from '../../src/env/Secret.js'
+import { errors } from '../../src/errors/aggregate.js'
 
 const NOWHERE = new URL('file:///ream-env-tests-nonexistent/')
+
+/**
+ * The `help` of the `E_INVALID_ENV_VARIABLES` a validation throws: its message
+ * is the generic one, the failing variable is on `help`.
+ */
+function failureHelp(validate: () => unknown): string {
+  try {
+    validate()
+  } catch (error) {
+    expect(error).toBeInstanceOf(errors.E_INVALID_ENV_VARIABLES)
+    expect(error).toHaveProperty(
+      'message',
+      'Validation failed for one or more environment variables',
+    )
+    return error instanceof errors.E_INVALID_ENV_VARIABLES ? (error.help ?? '') : ''
+  }
+  throw new Error('the validation did not throw')
+}
 
 describe('Env.schema.secret (AdonisJS parity)', () => {
   it('wraps the value in a Secret that redacts but can be released', () => {
@@ -24,7 +43,7 @@ describe('Env.schema.secret (AdonisJS parity)', () => {
   })
 
   it('required secret throws when absent', () => {
-    expect(() => Env.schema.secret().validate('APP_KEY', '')).toThrow(/APP_KEY/)
+    expect(failureHelp(() => Env.schema.secret().validate('APP_KEY', ''))).toMatch(/^- .*APP_KEY/)
   })
 })
 
@@ -34,13 +53,15 @@ describe('Env.schema string uuid format + custom message', () => {
     expect(node.validate('ID', '3f2504e0-4f89-41d3-9a0c-0305e82c3301')).toBe(
       '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
     )
-    expect(() => node.validate('ID', 'not-a-uuid')).toThrow(/valid uuid/)
+    expect(failureHelp(() => node.validate('ID', 'not-a-uuid'))).toMatch(/valid uuid/)
   })
 
   it('uses a custom message when provided', () => {
-    expect(() =>
-      Env.schema.number({ message: 'PORT must be numeric' }).validate('PORT', 'x'),
-    ).toThrow('PORT must be numeric')
+    expect(
+      failureHelp(() =>
+        Env.schema.number({ message: 'PORT must be numeric' }).validate('PORT', 'x'),
+      ),
+    ).toBe('- PORT must be numeric')
   })
 })
 
@@ -50,7 +71,9 @@ describe('Env.schema optionalWhen', () => {
   })
 
   it('is required when the condition is false', () => {
-    expect(() => Env.schema.string().optionalWhen(false).validate('X', undefined)).toThrow(/X/)
+    expect(
+      failureHelp(() => Env.schema.string().optionalWhen(false).validate('X', undefined)),
+    ).toMatch(/X/)
   })
 
   it('accepts a predicate condition', () => {

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { RpcRouter } from '../../src/rpc/RpcRouter.js'
-import { rpcCall, sendRpc, thrownReamError } from '../__helpers__/rpc.js'
+import { rpcCall, sendRpc, thrownException } from '../__helpers__/rpc.js'
 
 const methodNotFound = (id: number) => ({
   jsonrpc: '2.0',
@@ -67,7 +67,7 @@ describe('RpcRouter > namespace() exposes only the methods it is given', () => {
     for (const name of ['missing', 'constructor', 'toString', 'hasOwnProperty', 'computed', '']) {
       // Names arrive untyped from JavaScript callers.
       const names: string[] = [name]
-      const error = thrownReamError(() => {
+      const error = thrownException(() => {
         Reflect.apply(rpc.namespace, rpc, ['user', UserController, names])
       })
       expect(error.code).toBe('E_RPC_UNKNOWN_CONTROLLER_METHOD')
@@ -79,7 +79,7 @@ describe('RpcRouter > namespace() exposes only the methods it is given', () => {
     const rpc = new RpcRouter()
     const names: string[] = ['show', 'missing']
     expect(
-      thrownReamError(() => {
+      thrownException(() => {
         Reflect.apply(rpc.namespace, rpc, ['user', UserController, names])
       }).code,
     ).toBe('E_RPC_UNKNOWN_CONTROLLER_METHOD')
@@ -103,7 +103,7 @@ describe('RpcRouter > namespace() exposes only the methods it is given', () => {
 describe('RpcRouter > reserved and invalid method names', () => {
   it('refuses to register a name in the reserved rpc. namespace', () => {
     const rpc = new RpcRouter()
-    expect(thrownReamError(() => rpc.method('rpc.discover', () => 'x')).code).toBe(
+    expect(thrownException(() => rpc.method('rpc.discover', () => 'x')).code).toBe(
       'E_RPC_RESERVED_METHOD_NAME',
     )
     class Introspection {
@@ -111,7 +111,7 @@ describe('RpcRouter > reserved and invalid method names', () => {
         return 'x'
       }
     }
-    expect(thrownReamError(() => rpc.namespace('rpc', Introspection, ['discover'])).code).toBe(
+    expect(thrownException(() => rpc.namespace('rpc', Introspection, ['discover'])).code).toBe(
       'E_RPC_RESERVED_METHOD_NAME',
     )
     expect(rpc.getMethods()).toEqual([])
@@ -119,9 +119,9 @@ describe('RpcRouter > reserved and invalid method names', () => {
 
   it('refuses an empty or non-string name', () => {
     const rpc = new RpcRouter()
-    expect(thrownReamError(() => rpc.method('', () => 'x')).code).toBe('E_RPC_INVALID_METHOD_NAME')
+    expect(thrownException(() => rpc.method('', () => 'x')).code).toBe('E_RPC_INVALID_METHOD_NAME')
     expect(
-      thrownReamError(() => {
+      thrownException(() => {
         Reflect.apply(rpc.method, rpc, [42, () => 'x'])
       }).code,
     ).toBe('E_RPC_INVALID_METHOD_NAME')

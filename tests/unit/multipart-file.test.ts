@@ -108,25 +108,28 @@ describe('MultipartFile.move() — the file name guard', () => {
 
   it('rejects a name containing path traversal (..)', async () => {
     const file = makeFile('attack.png')
-    await expect(file.move(workDir, { name: '../../etc/passwd' })).rejects.toThrow(
-      /must be a plain filename/,
-    )
+    await expect(file.move(workDir, { name: '../../etc/passwd' })).rejects.toMatchObject({
+      code: 'E_MULTIPART_UNSAFE_FILE_NAME',
+      message: expect.stringMatching(/must be a plain filename/),
+    })
   })
 
   it('rejects a name containing backslash separators', async () => {
     const file = makeFile('attack.png')
-    await expect(file.move(workDir, { name: 'sub\\dir\\evil.txt' })).rejects.toThrow(
-      /must be a plain filename/,
-    )
+    await expect(file.move(workDir, { name: 'sub\\dir\\evil.txt' })).rejects.toMatchObject({
+      code: 'E_MULTIPART_UNSAFE_FILE_NAME',
+      message: expect.stringMatching(/must be a plain filename/),
+    })
   })
 
   it('rejects a name containing a NUL byte', async () => {
     // Node rejects NUL at the syscall layer, but defense-in-depth: the guard
     // must reject before path.join.
     const file = makeFile('attack.png')
-    await expect(file.move(workDir, { name: 'safe\0.png' })).rejects.toThrow(
-      /must be a plain filename/,
-    )
+    await expect(file.move(workDir, { name: 'safe\0.png' })).rejects.toMatchObject({
+      code: 'E_MULTIPART_UNSAFE_FILE_NAME',
+      message: expect.stringMatching(/must be a plain filename/),
+    })
   })
 
   it('rejects a hostile clientName-derived extname when no name is supplied', async () => {
@@ -134,7 +137,10 @@ describe('MultipartFile.move() — the file name guard', () => {
     // "/etc/passwd", so the generated name would be "<hex>./etc/passwd": a
     // path with separators.
     const file = makeFile('../etc/passwd')
-    await expect(file.move(workDir)).rejects.toThrow(/derived file name .* unsafe/)
+    await expect(file.move(workDir)).rejects.toMatchObject({
+      code: 'E_MULTIPART_UNSAFE_FILE_NAME',
+      message: expect.stringMatching(/derived file name .* unsafe/),
+    })
     expect(file.state).toBe('consumed')
   })
 
@@ -381,6 +387,7 @@ describe('MultipartFile > move is atomic', () => {
       expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
       const rejected = results.find((r) => r.status === 'rejected')
       expect((rejected as PromiseRejectedResult).reason.message).toContain('already exists at')
+      expect(rejected).toMatchObject({ reason: { code: 'E_MULTIPART_FILE_EXISTS' } })
       // The winner's bytes are intact — not half of one and half of the other.
       expect(['first', 'second']).toContain(readFileSync(join(dir, 'same.txt'), 'utf8'))
     } finally {

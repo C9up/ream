@@ -9,6 +9,7 @@
  * Populated by `EventsProvider.boot()`.
  */
 
+import { E_SERVICE_NOT_BOOTED } from '../../errors/codes.js'
 import { createServiceProxy } from '../../services/createServiceProxy.js'
 import type { Emitter } from '../Emitter.js'
 
@@ -26,8 +27,11 @@ export function getEmitter(): Emitter | undefined {
 
 const emitter: Emitter = createServiceProxy<Emitter>(
   () => instance,
-  '[ream:events] Emitter singleton accessed before EventsProvider.boot() ran. ' +
-    'Check that `@c9up/ream/events/provider` is listed in your reamrc.ts providers.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      '[ream:events] Emitter singleton accessed before EventsProvider.boot() ran. ' +
+        'Check that `@c9up/ream/events/provider` is listed in your reamrc.ts providers.',
+    ]),
 )
 
 export default emitter

@@ -14,6 +14,13 @@
  * Reach via `@c9up/ream/events/testing` (NOT the main barrel).
  */
 
+import {
+  E_EVENTS_ASSERTION_FAILED,
+  E_EVENTS_DUPLICATE_REQUEST_HANDLER,
+  E_EVENTS_NO_REQUEST_HANDLER,
+  E_EVENTS_TIMEOUT,
+} from '../../errors/codes.js'
+
 export interface CapturedEmit {
   kind: 'emit'
   name: string
@@ -138,9 +145,7 @@ export class FakeBus {
 
   onRequest(name: string, callback: FakeBusRequestHandler): void {
     if (this.#requestHandlers.has(name)) {
-      throw new Error(
-        `FakeBus.onRequest: a handler is already registered for "${name}". Call reset() between registrations.`,
-      )
+      throw new E_EVENTS_DUPLICATE_REQUEST_HANDLER([name])
     }
     this.#requestHandlers.set(name, callback)
   }
@@ -148,7 +153,7 @@ export class FakeBus {
   request(name: string, data: string, timeoutMs: number = 5000): Promise<string> {
     const handler = this.#requestHandlers.get(name)
     if (!handler) {
-      return Promise.reject(new Error(`FakeBus: no request handler registered for "${name}"`))
+      return Promise.reject(new E_EVENTS_NO_REQUEST_HANDLER([name]))
     }
     // Only log requests the bus accepted. A handler-missing rejection
     // represents "code-under-test attempted a request the system was
@@ -162,7 +167,9 @@ export class FakeBus {
         if (settled) return
         settled = true
         reject(
-          new Error(`FakeBus.request: handler for "${name}" did not reply within ${timeoutMs}ms`),
+          new E_EVENTS_TIMEOUT([
+            `FakeBus.request: handler for "${name}" did not reply within ${timeoutMs}ms`,
+          ]),
         )
       }, timeoutMs)
       // Fake-timers note: `vi.useFakeTimers()` mocks the `setTimeout`
@@ -231,17 +238,17 @@ export class FakeBus {
   assertEmitted(name: string, predicate?: FakeBusPredicateArg): void {
     const match = makeMatcher(name, predicate)
     if (this.#emitted.some(match)) return
-    throw new Error(
+    throw new E_EVENTS_ASSERTION_FAILED([
       `FakeBus.assertEmitted('${name}'${describePredicate(predicate)}) failed — no captured emit matches.\n${describeCaptured(this.#emitted)}`,
-    )
+    ])
   }
 
   assertNotEmitted(name: string, predicate?: FakeBusPredicateArg): void {
     const match = makeMatcher(name, predicate)
     if (!this.#emitted.some(match)) return
-    throw new Error(
+    throw new E_EVENTS_ASSERTION_FAILED([
       `FakeBus.assertNotEmitted('${name}'${describePredicate(predicate)}) failed — at least one captured emit matches.\n${describeCaptured(this.#emitted)}`,
-    )
+    ])
   }
 }
 

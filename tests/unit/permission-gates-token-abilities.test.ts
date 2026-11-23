@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { GraphQLEngine } from '../../src/graphql/GraphQLEngine.js'
-import { E_FORBIDDEN } from '../../src/http/Exception.js'
+import { E_AUTHORIZATION_FAILURE } from '../../src/http/Exception.js'
 import { type AuthState, HttpContext } from '../../src/http/HttpContext.js'
 import { holdsPermissions } from '../../src/http/permissions.js'
 import { MiddlewareRegistry } from '../../src/middleware/Pipeline.js'
@@ -116,7 +116,11 @@ describe('HTTP route .permission() gate', () => {
       await chain(ctx, async () => {})
       return { ran }
     } catch (error) {
-      if (!(error instanceof E_FORBIDDEN)) throw error
+      if (!(error instanceof E_AUTHORIZATION_FAILURE)) throw error
+      // The code and message @c9up/warden's denied `authorize()` carries, and
+      // nothing that names the permission the route asks for.
+      expect(error.code).toBe('E_AUTHORIZATION_FAILURE')
+      expect(error.message).toBe('Access denied')
       return { ran, status: error.status }
     }
   }

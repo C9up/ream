@@ -207,7 +207,12 @@ describe('router > makeUrl', () => {
 
   it('throws on unknown route name', () => {
     const router = new Router()
-    expect(() => router.makeUrl('nope')).toThrow("Route 'nope' not found")
+    expect(() => router.makeUrl('nope')).toThrow(
+      expect.objectContaining({
+        code: 'E_CANNOT_LOOKUP_ROUTE',
+        message: 'Cannot lookup route "nope"',
+      }),
+    )
   })
 })
 
@@ -221,7 +226,12 @@ describe('router > urlFor (AdonisJS v7 naming)', () => {
   it('throws on a missing required param', () => {
     const router = new Router()
     router.get('/users/:id', async () => {}).as('users.show')
-    expect(() => router.urlFor('users.show')).toThrow(/missing params.*:id/)
+    expect(() => router.urlFor('users.show')).toThrow(
+      expect.objectContaining({
+        code: 'E_MISSING_ROUTE_PARAMS',
+        message: expect.stringMatching(/missing params.*:id/),
+      }),
+    )
   })
 
   it('makeUrl is a thin (deprecated) alias of urlFor', () => {

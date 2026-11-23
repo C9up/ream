@@ -13,7 +13,7 @@
  * @implements Story 28.3
  */
 
-import { ReamError } from '../../errors/ReamError.js'
+import { E_SCHEDULE_INVALID_LOCK_TTL } from '../../errors/codes.js'
 
 export interface LockBackend {
   /**
@@ -50,12 +50,9 @@ export interface LockBackend {
  */
 export function assertValidTtl(ttlMs: number): void {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
-    throw new ReamError(
-      'E_SCHEDULE_INVALID_LOCK_TTL',
-      `Lock TTL must be a finite positive number, got ${ttlMs}`,
-      {
-        hint: 'Use a millisecond value greater than zero (typical range 1_000 - 600_000).',
-      },
+    throw Object.assign(
+      new E_SCHEDULE_INVALID_LOCK_TTL([`Lock TTL must be a finite positive number, got ${ttlMs}`]),
+      { help: 'Use a millisecond value greater than zero (typical range 1_000 - 600_000).' },
     )
   }
 }

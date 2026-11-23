@@ -4,11 +4,26 @@
  * @implements FR24, FR25, FR26, FR27, FR28
  */
 
+import {
+  E_CANNOT_LOOKUP_ROUTE,
+  E_DUPLICATE_ROUTE,
+  E_DUPLICATE_ROUTE_NAME,
+  E_INVALID_CONTROLLER_REFERENCE,
+  E_INVALID_RESOURCE_NAME,
+  E_INVALID_ROUTE_DOMAIN,
+  E_MISSING_ROUTE_NAME,
+  E_MISSING_ROUTE_PARAMS,
+  E_NO_VIEW_ENGINE,
+  E_REAM_INTERNAL,
+  E_UNREGISTERED_CONTROLLER,
+  E_WEBSOCKET_CONTEXT,
+} from '../errors/codes.js'
 import { singular, snakeCase } from '../helpers/string.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { safeDecodeURIComponent } from '../http/urlDecode.js'
 import { isWebSocketContext, type WebSocketContext } from '../http/WebSocket.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
+import { E_MISSING_ENCRYPTER_KEY } from '../security/CookieSigner.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { LazyImport, MiddlewareClassConstructor, MiddlewareEntry } from '../server/Server.js'
 import { resolveMiddlewareEntry, resolveParametrizedMiddlewareEntry } from '../server/Server.js'
@@ -175,9 +190,7 @@ function makeDefinition(method: string, path: string, handler: RouteHandler): Ro
     // controller names may themselves be dotted; resolved at #buildIndex time.
     const dot = handler.lastIndexOf('.')
     if (dot <= 0 || dot === handler.length - 1) {
-      throw new Error(
-        `Invalid controller reference "${handler}" — expected the form "ControllerName.method".`,
-      )
+      throw new E_INVALID_CONTROLLER_REFERENCE([handler])
     }
     def.stringRef = { controller: handler.slice(0, dot), method: handler.slice(dot + 1) }
   } else if (Array.isArray(handler)) {
@@ -312,7 +325,7 @@ export class RouteBuilder extends Macroable {
     if (first === undefined) {
       // A route is constructed with at least one verb, so this cannot happen —
       // and this is where that is stated rather than asserted past.
-      throw new Error('Route has no definitions')
+      throw new E_REAM_INTERNAL(['Route has no definitions'])
     }
     return first
   }
@@ -560,9 +573,7 @@ export class GroupBuilder extends Macroable {
   as(namePrefix: string): this {
     for (const route of this.#routes) {
       if (!route.name) {
-        throw new Error(
-          `[E_MISSING_ROUTE_NAME] Cannot apply group name "${namePrefix}": route ${route.method} ${route.path} has no name. Name every route in a named group (\`.as(...)\`), or move the unnamed route out of the group.`,
-        )
+        throw new E_MISSING_ROUTE_NAME([namePrefix, route.method, route.path])
       }
       route.name = `${namePrefix}.${route.name}`
     }
@@ -629,7 +640,7 @@ export class RouteResource extends Macroable {
   }) {
     super()
     const resource = options.resource.replace(/^\//, '').replace(/\/$/, '')
-    if (!resource) throw new Error(`Invalid resource name "${options.resource}"`)
+    if (!resource) throw new E_INVALID_RESOURCE_NAME([options.resource])
     this.#resource = resource
     this.#controller = options.controller
     this.#shallow = options.shallow
@@ -831,10 +842,7 @@ export class OnRouteBuilder {
     this.#route = this.#router.get(this.#path, async (ctx) => {
       const candidate = Reflect.get(Object(ctx), 'view') ?? ctx.store.get('view')
       if (!isViewEngine(candidate)) {
-        throw new Error(
-          `[E_NO_VIEW_ENGINE] router.on('${this.#path}').render('${view}') needs a template engine. ` +
-            'Register one (its provider installs `ctx.view`), or seed `ctx.store` with a `view` that has a render() method.',
-        )
+        throw new E_NO_VIEW_ENGINE([this.#path, view])
       }
       const html = await candidate.render(view, data)
       ctx.response.type('text/html; charset=utf-8').send(html)
@@ -1054,7 +1062,7 @@ export class Router extends Macroable {
       typeof handler === 'function'
         ? (ctx: HttpContext) => {
             if (!isWebSocketContext(ctx)) {
-              throw new Error(`[E_WEBSOCKET_CONTEXT] ${path} ran without its socket`)
+              throw new E_WEBSOCKET_CONTEXT([path])
             }
             return handler(ctx)
           }
@@ -1213,11 +1221,12 @@ export class Router extends Macroable {
       if (route.stringRef && !route.lazyController) {
         const loader = this.#controllers.get(route.stringRef.controller)
         if (!loader) {
-          throw new Error(
-            `[E_UNREGISTERED_CONTROLLER] Route ${route.method} ${route.path} references ` +
-              `controller '${route.stringRef.controller}', which is not registered. Register it ` +
-              `with router.controllers({ ${route.stringRef.controller}: () => import('...') }).`,
-          )
+          throw new E_UNREGISTERED_CONTROLLER([
+            route.method,
+            route.path,
+            route.stringRef.controller,
+            route.stringRef.controller,
+          ])
         }
         route.lazyController = { loader, method: route.stringRef.method }
       }
@@ -1231,11 +1240,13 @@ export class Router extends Macroable {
         // and AdonisJS models those as a single route object. Only a name
         // reused for a DIFFERENT path is the ambiguity worth refusing.
         if (existing && existing.path !== route.path) {
-          throw new Error(
-            `[E_DUPLICATE_ROUTE_NAME] A route with name "${route.name}" already exists ` +
-              `(${existing.method} ${existing.path}); ${route.method} ${route.path} reuses it. ` +
-              `It may happen when two routes share a controller — give each an explicit name.`,
-          )
+          throw new E_DUPLICATE_ROUTE_NAME([
+            route.name,
+            existing.method,
+            existing.path,
+            route.method,
+            route.path,
+          ])
         }
         this.#nameIndex.set(route.name, route)
       }
@@ -1260,9 +1271,7 @@ export class Router extends Macroable {
         // is how an authenticated endpoint gets shadowed by a later, unguarded
         // one that happens to share its path — with nothing in the logs.
         if (this.#staticIndex.has(key)) {
-          throw new Error(
-            `[E_DUPLICATE_ROUTE] Duplicate route found. "${route.websocket === true ? 'WS' : route.method}: ${route.path}" route already exists.`,
-          )
+          throw new E_DUPLICATE_ROUTE([route.websocket === true ? 'WS' : route.method, route.path])
         }
         this.#staticIndex.set(key, route)
       } else {
@@ -1414,12 +1423,9 @@ export class Router extends Macroable {
     if (this.#indexDirty) this.#buildIndex()
     const route = this.#nameIndex.get(name)
     if (!route) {
-      throw new Error(
-        `Route '${name}' not found. Available: ${this.#routes
-          .filter((r) => r.name)
-          .map((r) => r.name)
-          .join(', ')}`,
-      )
+      // The registered names are not listed: `urlFor()` runs during a
+      // request, and this error's `help` would reach the client.
+      throw new E_CANNOT_LOOKUP_ROUTE([name])
     }
     let url = route.path
     if (params) {
@@ -1438,9 +1444,7 @@ export class Router extends Macroable {
     // as a configuration error rather than emitting a broken URL.
     const missing = url.match(/:[A-Za-z_][\w]*/g)
     if (missing && missing.length > 0) {
-      throw new Error(
-        `Cannot generate URL for route '${name}': missing params ${missing.join(', ')}`,
-      )
+      throw new E_MISSING_ROUTE_PARAMS([name, missing.join(', ')])
     }
     return url
   }
@@ -1468,9 +1472,9 @@ export class Router extends Macroable {
    */
   makeSignedUrl(name: string, params?: Record<string, string>, options?: SignedUrlOptions): string {
     if (!this.#signedUrl) {
-      throw new Error(
-        '[E_MISSING_APP_KEY] makeSignedUrl() requires an APP_KEY-backed signer. Set APP_KEY (>= 16 chars) so the encryption service is registered.',
-      )
+      throw Object.assign(new E_MISSING_ENCRYPTER_KEY(), {
+        help: 'makeSignedUrl() requires an APP_KEY-backed signer. Set APP_KEY (>= 16 chars) so the encryption service is registered.',
+      })
     }
     const path = this.urlFor(name, params)
     const withQs = options?.qs ? `${path}?${new URLSearchParams(options.qs).toString()}` : path
@@ -1554,7 +1558,7 @@ export class Router extends Macroable {
   /** Like {@link find} but throws when the route is absent (AdonisJS `findOrFail`). */
   findOrFail(identifier: string): RouteDefinition {
     const route = this.find(identifier)
-    if (!route) throw new Error(`Cannot find route for '${identifier}'`)
+    if (!route) throw new E_CANNOT_LOOKUP_ROUTE([identifier])
     return route
   }
 
@@ -1799,9 +1803,10 @@ function compileDomain(domain: string): CompiledDomain {
     if (!label.startsWith(':')) continue
     const name = label.slice(1)
     if (name === '' || names.has(name)) {
-      throw new Error(
-        `[E_INVALID_ROUTE_DOMAIN] The route domain "${domain}" has ${name === '' ? 'a parameter without a name' : `the parameter "${name}" twice`}.`,
-      )
+      throw new E_INVALID_ROUTE_DOMAIN([
+        domain,
+        name === '' ? 'a parameter without a name' : `the parameter "${name}" twice`,
+      ])
     }
     names.add(name)
   }

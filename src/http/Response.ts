@@ -11,7 +11,6 @@ import { randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { ReamError } from '../errors/ReamError.js'
 import { durationToSeconds } from '../helpers/duration.js'
 import { toErrnoException } from '../helpers/errors.js'
 import { etag, matchesIfNoneMatch } from './etag.js'
@@ -23,7 +22,15 @@ import { contentType } from './mime.js'
  */
 const DEFAULT_MAX_RESPONSE_BYTES = 100 * 1024 * 1024
 
+import {
+  E_RESPONSE_INVALID_COOKIE,
+  E_RESPONSE_INVALID_HEADER,
+  E_RESPONSE_NO_CONTEXT,
+  E_RESPONSE_SSE_UNSUPPORTED,
+  E_RESPONSE_TOO_LARGE,
+} from '../errors/codes.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
+import { E_MISSING_ENCRYPTER_KEY } from '../security/CookieSigner.js'
 import { Macroable } from '../utils/Macroable.js'
 import { safeStringify } from '../utils/safeStringify.js'
 import { E_HTTP_REQUEST_ABORTED } from './Exception.js'
@@ -44,9 +51,7 @@ import type { ServerWebSocket, WebSocketHub } from './WebSocket.js'
  */
 function assertNoCRLF(name: string, value: string): void {
   if (/[\r\n\0]/.test(name) || /[\r\n\0]/.test(value)) {
-    throw new Error(
-      `CRLF / NUL byte in header '${name}' is not allowed (response-splitting protection).`,
-    )
+    throw new E_RESPONSE_INVALID_HEADER([name])
   }
 }
 
@@ -388,19 +393,7 @@ export class Response extends Macroable {
 
   #assertBodyFits(bytes: number): void {
     if (bytes <= this.#maxBodyBytes) return
-    throw new ReamError(
-      'E_RESPONSE_TOO_LARGE',
-      `Response body is ${Math.round(bytes / 1_048_576)}MB, over the ${Math.round(this.#maxBodyBytes / 1_048_576)}MB ceiling.`,
-      {
-        context: {
-          bytes: String(bytes),
-          ceiling: String(this.#maxBodyBytes),
-        },
-        hint:
-          'The body is held whole in memory (and base64-encoded, ~2.3x) because responses are not streamed yet. ' +
-          'Raise `maxResponseBytes` in the kernel config, or serve large files with a signed URL from @c9up/archive.',
-      },
-    )
+    throw new E_RESPONSE_TOO_LARGE(bytes, this.#maxBodyBytes)
   }
 
   /** @internal Set the ceiling — injected by HttpKernel from its config. */
@@ -682,9 +675,7 @@ export class Response extends Macroable {
     statusCode = 302,
   ): RedirectBuilder | undefined {
     if (!this.#redirectBuilderFactory) {
-      throw new Error(
-        'redirect() requires an HttpContext. Response was created outside a request handler.',
-      )
+      throw new E_RESPONSE_NO_CONTEXT()
     }
     const builder = this.#redirectBuilderFactory()
     if (path === undefined) return builder
@@ -730,12 +721,12 @@ export class Response extends Macroable {
   }
 
   /**
-   * Abort the request with a body + status (AdonisJS parity) — throws
-   * `E_HTTP_REQUEST_ABORTED`, which the exception handler renders (a string body
-   * verbatim, anything else as JSON).
+   * Abort the request with a body and a status (400 when none is given):
+   * throws `E_HTTP_REQUEST_ABORTED`, which sends that body with that status
+   * (a string as text, anything else as JSON).
    */
-  abort(body: unknown, status = 400): never {
-    throw new E_HTTP_REQUEST_ABORTED(body, status)
+  abort(body: unknown, status?: number): never {
+    throw E_HTTP_REQUEST_ABORTED.invoke(body, status || 400)
   }
 
   /**
@@ -1048,10 +1039,7 @@ export class Response extends Macroable {
    */
   async sse(options?: SseStreamOptions): Promise<SseStream> {
     if (!this.#streamBackend) {
-      throw new Error(
-        '[ream] response.sse() requires a streaming-capable HyperServer host. ' +
-          'The current server has no stream backend wired.',
-      )
+      throw new E_RESPONSE_SSE_UNSUPPORTED()
     }
     // SSE wire format + safety defaults. The buffered body string stays
     // empty — every chunk goes through the registry instead.
@@ -1088,9 +1076,9 @@ export class Response extends Macroable {
    */
   cookie(name: string, value: string, options?: CookieOptions): this {
     if (!this.#cookieSigner) {
-      throw new Error(
-        'cookie() signs the value and needs APP_KEY — set it so the encryption service is registered, or use plainCookie() when the value does not need signing.',
-      )
+      throw Object.assign(new E_MISSING_ENCRYPTER_KEY(), {
+        help: 'cookie() signs the value and needs APP_KEY — set it so the encryption service is registered, or use plainCookie() when the value does not need signing.',
+      })
     }
     return this.#writeCookie(name, this.#cookieSigner.sign(value, undefined, name), options)
   }
@@ -1116,9 +1104,9 @@ export class Response extends Macroable {
    */
   encryptedCookie(name: string, value: string, options?: CookieOptions): this {
     if (!this.#cookieSigner) {
-      throw new Error(
-        'encryptedCookie() requires APP_KEY — set it so the encryption service is registered.',
-      )
+      throw Object.assign(new E_MISSING_ENCRYPTER_KEY(), {
+        help: 'encryptedCookie() requires APP_KEY — set it so the encryption service is registered.',
+      })
     }
     // The cookie name is the purpose, as for a signed cookie: a value issued
     // as one encrypted cookie cannot be replayed under another one's name.
@@ -1131,14 +1119,14 @@ export class Response extends Macroable {
     // a missing Secure here turns OAuth callbacks / iframe sessions into a
     // "works in dev (localhost relaxes Secure), breaks in prod" foot-gun.
     if (options?.sameSite === true) {
-      throw new Error(
+      throw new E_RESPONSE_INVALID_COOKIE([
         `Cookie '${name}': sameSite: true is not an attribute value — use 'lax', 'strict', 'none', or false to omit it.`,
-      )
+      ])
     }
     if (options?.sameSite === 'none' && !options.secure) {
-      throw new Error(
+      throw new E_RESPONSE_INVALID_COOKIE([
         `Cookie '${name}': SameSite=None requires Secure: true (browsers reject SameSite=None cookies without Secure).`,
-      )
+      ])
     }
     const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`]
     // `maxAge: 0` is the RFC 6265 "delete-now" signal used by logout flows. A
@@ -1160,7 +1148,7 @@ export class Response extends Macroable {
     if (options?.expires !== undefined) {
       const at = typeof options.expires === 'function' ? options.expires() : options.expires
       if (Number.isNaN(at.getTime())) {
-        throw new Error(`Cookie '${name}': expires is an invalid Date.`)
+        throw new E_RESPONSE_INVALID_COOKIE([`Cookie '${name}': expires is an invalid Date.`])
       }
       parts.push(`Expires=${at.toUTCString()}`)
     }
@@ -1171,9 +1159,9 @@ export class Response extends Macroable {
     // otherwise — say so rather than emit an attribute that will be ignored.
     if (options?.partitioned) {
       if (!options.secure) {
-        throw new Error(
+        throw new E_RESPONSE_INVALID_COOKIE([
           `Cookie '${name}': partitioned requires Secure: true (browsers ignore partitioned cookies without it).`,
-        )
+        ])
       }
       parts.push('Partitioned')
     }

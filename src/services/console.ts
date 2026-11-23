@@ -9,6 +9,7 @@
  */
 
 import type { Console } from '../console/Console.js'
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
 let instance: Console | undefined
@@ -29,8 +30,11 @@ export function clearConsole(consoleApp: Console): void {
 
 const consoleApp: Console = createServiceProxy<Console>(
   () => instance,
-  'Console accessed before initialization. ' +
-    'Ensure this code runs during or after the boot phase.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      'Console accessed before initialization. ' +
+        'Ensure this code runs during or after the boot phase.',
+    ]),
 )
 
 export default consoleApp

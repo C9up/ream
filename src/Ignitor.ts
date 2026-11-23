@@ -13,6 +13,8 @@
  * @implements FR17, FR20, FR23
  */
 
+import { inspect } from 'node:util'
+import { RuntimeException } from '@c9up/flare'
 import { Application } from './Application.js'
 import type { BodyParserConfig } from './bodyparser/BodyParserMiddleware.js'
 import type { Console } from './console/Console.js'
@@ -26,7 +28,6 @@ import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
 import { loadEnvFiles } from './env/loadEnvFiles.js'
 import { prettyPrintError } from './errors/prettyPrintError.js'
-import { ReamError } from './errors/ReamError.js'
 import type { Emitter } from './events/Emitter.js'
 import type { ShutdownHandle } from './GracefulShutdown.js'
 import { installGracefulShutdown } from './GracefulShutdown.js'
@@ -51,7 +52,7 @@ import {
   toolbarScript,
 } from './profiler/index.js'
 import { Router } from './router/Router.js'
-import { CookieSigner } from './security/CookieSigner.js'
+import { CookieSigner, E_INSECURE_ENCRYPTER_KEY } from './security/CookieSigner.js'
 import { SignedUrl } from './security/SignedUrl.js'
 import { cancellableGrpc, type NativeGrpcHandler } from './server/nativeGrpc.js'
 import {
@@ -80,6 +81,21 @@ import { installSessionTemplateTags } from './session/templateTags.js'
 export type { AppEnvironment } from './Application.js'
 
 import type { AppEnvironment } from './Application.js'
+import {
+  E_APP_SHUTDOWN_FAILED,
+  E_CONSOLE_DUPLICATE_COMMAND,
+  E_CONSOLE_INVALID_COMMAND,
+  E_IGNITOR_ALREADY_STARTED,
+  E_IGNITOR_GRPC_UNSUPPORTED,
+  E_IGNITOR_INVALID_PORT,
+  E_IGNITOR_NO_SERVER_FACTORY,
+  E_IGNITOR_WARMUP_ONLY,
+  E_INVALID_PRELOAD_FILE,
+  E_INVALID_PROVIDER,
+  E_MISSING_PRELOAD_FILE,
+  E_MISSING_PROVIDER_FILE,
+  E_REAMRC_UNKNOWN_OPTION,
+} from './errors/codes.js'
 
 /**
  * Reamrc config — like AdonisJS adonisrc.ts with defineConfig().
@@ -306,13 +322,9 @@ export function defineConfig(config: ReamrcConfig): ReamrcConfig {
     (key) => !TESTS_OPTIONS.includes(key as (typeof TESTS_OPTIONS)[number]),
   )
   if (unknown.length > 0) {
-    throw new ReamError(
-      'E_REAMRC_UNKNOWN_OPTION',
-      `\`tests\` has no option named ${unknown.map((k) => `\`${k}\``).join(', ')}.`,
-      {
-        hint: `The \`tests\` block accepts: ${TESTS_OPTIONS.join(', ')}. An option removed between versions is gone from the rc file too — the runner is configured in the bootstrap module now.`,
-      },
-    )
+    throw Object.assign(new E_REAMRC_UNKNOWN_OPTION([unknown.map((k) => `\`${k}\``).join(', ')]), {
+      help: `The \`tests\` block accepts: ${TESTS_OPTIONS.join(', ')}. An option removed between versions is gone from the rc file too — the runner is configured in the bootstrap module now.`,
+    })
   }
   return config
 }
@@ -468,6 +480,8 @@ export class Ignitor {
   #appRoot?: URL
   #reamrc?: ReamrcConfig
   #providers: ProviderContract[] = []
+  /** The rc file's preload entries, checked by the register phase. */
+  #preloadEntries: RcEntry[] = []
   #errorListeners: Array<(event: ErrorEvent) => void> = []
   #phase: 'created' | 'registered' | 'booted' | 'started' | 'ready' | 'shutdown' = 'created'
   #hotReloadCleanup?: () => void
@@ -679,9 +693,7 @@ export class Ignitor {
     setEncryption(undefined)
     if (appKey) {
       if (appKey.length < 16) {
-        throw new Error(
-          'APP_KEY is too short — use at least a 16-character (ideally 32-byte) random key for cookie signing/encryption.',
-        )
+        throw new E_INSECURE_ENCRYPTER_KEY()
       }
       const signer = new CookieSigner(appKey)
       this.#app.container.singleton('encryption', () => signer)
@@ -710,10 +722,11 @@ export class Ignitor {
   async warmUp(): Promise<Ignitor> {
     this.#app.setMode('warmup')
     if (this.#phase !== 'created') {
-      throw new ReamError(
-        'E_IGNITOR_ALREADY_STARTED',
-        `warmUp() called while in phase '${this.#phase}' — an Ignitor boots once`,
-        { hint: 'Create a new Ignitor instance instead of re-warming this one.' },
+      throw Object.assign(
+        new E_IGNITOR_ALREADY_STARTED([
+          `warmUp() called while in phase '${this.#phase}' — an Ignitor boots once`,
+        ]),
+        { help: 'Create a new Ignitor instance instead of re-warming this one.' },
       )
     }
     await this.#loadEnvironmentFiles()
@@ -739,21 +752,16 @@ export class Ignitor {
     // Checked before the phase guard: "assembled for inspection" is a more
     // useful thing to be told than "already started", and it is the reason.
     if (this.#app.getMode() !== 'run') {
-      throw new ReamError(
-        'E_IGNITOR_WARMUP_ONLY',
-        `Cannot start an application assembled in '${this.#app.getMode()}' mode.`,
-        {
-          hint: 'warmUp() is for inspecting an application; build a fresh Ignitor to run one.',
-        },
-      )
+      throw new E_IGNITOR_WARMUP_ONLY([this.#app.getMode()])
     }
     // Double-start guard: a second start() would re-run phaseRegister and
     // instantiate + register every reamrc provider a second time.
     if (this.#phase !== 'created') {
-      throw new ReamError(
-        'E_IGNITOR_ALREADY_STARTED',
-        `start() called while in phase '${this.#phase}' — an Ignitor boots once`,
-        { hint: 'Create a new Ignitor instance instead of restarting this one.' },
+      throw Object.assign(
+        new E_IGNITOR_ALREADY_STARTED([
+          `start() called while in phase '${this.#phase}' — an Ignitor boots once`,
+        ]),
+        { help: 'Create a new Ignitor instance instead of restarting this one.' },
       )
     }
     await this.#loadEnvironmentFiles()
@@ -812,23 +820,26 @@ export class Ignitor {
     // Auto-load config/*.ts files into app.config
     await this.#autoloadConfig()
 
+    // Every rc entry is checked before any is loaded, as the rc file is
+    // parsed upstream: a mistyped entry fails the boot by name instead of
+    // as a TypeError halfway through it.
+    const providerEntries = (this.#reamrc?.providers ?? []).map((entry) =>
+      rcEntry(entry, 'provider'),
+    )
+    const preloadEntries = (this.#reamrc?.preloads ?? []).map((entry) => rcEntry(entry, 'preload'))
+
     // Load providers from reamrc
-    if (this.#reamrc?.providers) {
-      for (const providerEntry of this.#reamrc.providers) {
-        const providerImport =
-          typeof providerEntry === 'function' ? providerEntry : providerEntry.file
-        const env = typeof providerEntry === 'function' ? undefined : providerEntry.environment
+    for (const providerEntry of providerEntries) {
+      // Skip providers not matching current environment
+      const env = providerEntry.environment
+      if (env && !env.includes(this.#app.getEnvironment())) continue
 
-        // Skip providers not matching current environment
-        if (env && !env.includes(this.#app.getEnvironment())) continue
-
-        const mod = await providerImport()
-        const ProviderClass = mod.default
-        const instance = new ProviderClass(this.#app)
-        this.#providers.push(instance)
-        this.#app.register(instance)
-      }
+      const ProviderClass = providerClassOf(await providerEntry.file(), providerEntry.file)
+      const instance = new ProviderClass(this.#app)
+      this.#providers.push(instance)
+      this.#app.register(instance)
     }
+    this.#preloadEntries = preloadEntries
 
     // Register inline providers
     for (const factory of this.#inlineProviderFactories) {
@@ -884,18 +895,10 @@ export class Ignitor {
     // rely on the array's order to decide which of two overlapping routes
     // answers. Work that must be ordered belongs inside ONE preload, where the
     // order is the file's own — which is how upstream applications are written.
-    if (this.#reamrc?.preloads) {
-      const applicable = this.#reamrc.preloads.filter((preloadEntry) => {
-        if (typeof preloadEntry === 'function') return true
-        const env = (preloadEntry as { environment?: string[] }).environment
-        return !env || env.includes(this.#app.getEnvironment())
-      })
-      await Promise.all(
-        applicable.map((preloadEntry) =>
-          typeof preloadEntry === 'function' ? preloadEntry() : preloadEntry.file(),
-        ),
-      )
-    }
+    const applicable = this.#preloadEntries.filter(({ environment }) => {
+      return !environment || environment.includes(this.#app.getEnvironment())
+    })
+    await Promise.all(applicable.map((preloadEntry) => preloadEntry.file()))
 
     // Auto-load module files (routes.ts, etc.) from modules directory
     await this.#autoloadModules()
@@ -1003,11 +1006,7 @@ export class Ignitor {
       // included — saw 3007 and said so. Same lazy rule as `host` below.
       const desiredPort = this.#config.port ?? Number(process.env.PORT || 3000)
       if (!Number.isInteger(desiredPort) || desiredPort < 0 || desiredPort > 65535) {
-        throw new ReamError(
-          'E_IGNITOR_INVALID_PORT',
-          `PORT must be an integer between 0 and 65535, received '${process.env.PORT}'.`,
-          { hint: 'Set PORT in .env, or pass { port } to the Ignitor.' },
-        )
+        throw new E_IGNITOR_INVALID_PORT([String(process.env.PORT)])
       }
       // Port-scan fallback (+1..+19) is a DEV convenience only. In production
       // a silent drift to :3001 while the LB targets :3000 is an outage —
@@ -1034,11 +1033,7 @@ export class Ignitor {
       const grpc = this.#server.getGrpcHandler()
       if (grpc) {
         if (typeof this.#_httpServer.onGrpc !== 'function') {
-          throw new ReamError(
-            'E_IGNITOR_GRPC_UNSUPPORTED',
-            'A gRPC handler is registered, but this server cannot serve gRPC.',
-            { hint: 'Use the native HyperServer, or a test server that implements onGrpc().' },
-          )
+          throw new E_IGNITOR_GRPC_UNSUPPORTED()
         }
         const calls = cancellableGrpc(grpc)
         this.#_httpServer.onGrpcCancel?.(calls.onCancel)
@@ -1093,13 +1088,7 @@ export class Ignitor {
         })
       }
     } else if (this.#app.getEnvironment() === 'web' && !this.#config.serverFactory) {
-      throw new ReamError(
-        'E_IGNITOR_NO_SERVER_FACTORY',
-        'httpServer() requires a serverFactory in config',
-        {
-          hint: 'Example: new Ignitor({ serverFactory: (port, host) => new HyperServer(port, host) })',
-        },
-      )
+      throw new E_IGNITOR_NO_SERVER_FACTORY()
     }
 
     // Install error boundary
@@ -1409,7 +1398,7 @@ export class Ignitor {
     this.#phase = 'shutdown'
     if (errors.length === 1) throw errors[0]
     if (errors.length > 1) {
-      throw new AggregateError(errors, 'Ignitor.stop() completed with errors')
+      throw new E_APP_SHUTDOWN_FAILED(errors, 'Ignitor.stop() completed with errors')
     }
   }
 
@@ -1813,11 +1802,12 @@ export class ConsoleKernel {
 
       const command = commandOf(module)
       if (command === undefined) {
-        throw new ReamError(
-          'E_CONSOLE_INVALID_COMMAND',
-          'An entry of reamrc.ts `commands` is neither a command loader nor a default-exported command class.',
+        throw Object.assign(
+          new E_CONSOLE_INVALID_COMMAND([
+            'An entry of reamrc.ts `commands` is neither a command loader nor a default-exported command class.',
+          ]),
           {
-            hint: 'Ship `export function getMetaData()` + `export function getCommand(metadata)` for a package with several commands, or `export default class X { static commandName = "..."; static description = "..."; run() {} }` for one.',
+            help: 'Ship `export function getMetaData()` + `export function getCommand(metadata)` for a package with several commands, or `export default class X { static commandName = "..."; static description = "..."; run() {} }` for one.',
           },
         )
       }
@@ -1827,13 +1817,9 @@ export class ConsoleKernel {
       // leaving the user to guess which two registrations collided.
       const existing = found.get(command.commandName)
       if (existing !== undefined && existing !== command) {
-        throw new ReamError(
-          'E_CONSOLE_DUPLICATE_COMMAND',
-          `Two commands claim the name "${command.commandName}".`,
-          {
-            hint: 'Commands in commands/ are discovered automatically — remove this entry from reamrc.ts `commands`, which is only for commands shipped by packages.',
-          },
-        )
+        throw Object.assign(new E_CONSOLE_DUPLICATE_COMMAND([command.commandName]), {
+          help: 'Commands in commands/ are discovered automatically — remove this entry from reamrc.ts `commands`, which is only for commands shipped by packages.',
+        })
       }
       found.set(command.commandName, command)
     }
@@ -1886,4 +1872,68 @@ async function findAvailablePort(desired: number): Promise<number> {
     if (available) return port
   }
   return desired
+}
+
+/** An rc `providers` or `preloads` entry, normalised to its object form. */
+interface RcEntry {
+  file: () => unknown
+  environment?: string[]
+}
+
+function isThunk(value: unknown): value is () => unknown {
+  return typeof value === 'function'
+}
+
+/**
+ * Normalise an rc entry, or raise the error upstream raises for it: a bare
+ * function is the `file` of an entry for every environment.
+ */
+function rcEntry(entry: unknown, kind: 'provider' | 'preload'): RcEntry {
+  if (isThunk(entry)) return { file: entry }
+  const file: unknown =
+    typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'file') : undefined
+  if (!file) {
+    throw kind === 'provider'
+      ? new E_MISSING_PROVIDER_FILE([inspect(entry)])
+      : new E_MISSING_PRELOAD_FILE([inspect(entry)])
+  }
+  if (!isThunk(file)) {
+    throw kind === 'provider'
+      ? new E_INVALID_PROVIDER([inspect(entry)])
+      : new E_INVALID_PRELOAD_FILE([inspect(entry)])
+  }
+  const environment: unknown =
+    typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'environment') : undefined
+  return { file, environment: isStringList(environment) ? environment : undefined }
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+/** A provider class constructed with the application. */
+type ProviderClass = new (app: AppContext) => ProviderContract
+
+function isProviderClass(value: unknown): value is ProviderClass {
+  return typeof value === 'function' && value.toString().startsWith('class ')
+}
+
+/**
+ * The provider class a provider module exports by default, or the
+ * `RuntimeException` upstream raises when it has none, or it is not a class.
+ */
+function providerClassOf(providerExports: unknown, file: () => unknown): ProviderClass {
+  const ProviderClass: unknown =
+    typeof providerExports === 'object' && providerExports !== null
+      ? Reflect.get(providerExports, 'default')
+      : undefined
+  if (!ProviderClass) {
+    throw new RuntimeException(
+      `Invalid exports from "${file.toString()}" provider. It must have a default export`,
+    )
+  }
+  if (!isProviderClass(ProviderClass)) {
+    throw new RuntimeException(`Default export from module "${file.toString()}" is not a class`)
+  }
+  return ProviderClass
 }

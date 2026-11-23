@@ -17,7 +17,12 @@ describe('application > path helpers', () => {
 
   it('throws a helpful error when the app root is not set', () => {
     const app = new Application()
-    expect(() => app.makePath('x')).toThrow(/app root is not set/)
+    expect(() => app.makePath('x')).toThrow(
+      expect.objectContaining({
+        code: 'E_APP_ROOT_NOT_SET',
+        message: expect.stringMatching(/app root is not set/),
+      }),
+    )
   })
 
   it('resolves every conventional directory, AdonisJS layout for layout', () => {

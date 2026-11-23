@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import { createError, Exception } from '@c9up/flare'
 import { describe, expect, it } from 'vitest'
 import { getServiceRegistry } from '../../src/decorators/Service.js'
 import {
@@ -6,74 +7,8 @@ import {
   clearServiceRegistry,
   createHttpKernel,
   MiddlewareRegistry,
-  ReamError,
   Router,
 } from '../../src/index.js'
-
-describe('ReamError > construction', () => {
-  it('creates error with code and message', () => {
-    const err = new ReamError('MY_CODE', 'Something broke')
-    expect(err.code).toBe('MY_CODE')
-    expect(err.message).toBe('Something broke')
-    expect(err.name).toBe('ReamError')
-    expect(err).toBeInstanceOf(Error)
-  })
-
-  it('creates error with full options', () => {
-    const err = new ReamError('E_ATLAS_ERROR', 'Column not found', {
-      context: { entity: 'Order', column: 'statut' },
-      hint: 'Did you mean: status?',
-      sourceFile: 'crates/ream-query/src/compiler.rs',
-      sourceLine: 142,
-      docsUrl: 'https://reamjs.com/en/reference/errors#e-atlas-error',
-    })
-    expect(err.context.entity).toBe('Order')
-    expect(err.hint).toBe('Did you mean: status?')
-    expect(err.docsUrl).toContain('reamjs.com')
-  })
-})
-
-describe('ReamError > fromNapi', () => {
-  it('parses JSON error from Rust NAPI', () => {
-    const napiError = new Error(
-      JSON.stringify({
-        code: 'RUST_PANIC',
-        message: 'Panic caught',
-        hint: 'Report this bug',
-        sourceFile: 'lib.rs',
-        sourceLine: 42,
-      }),
-    )
-
-    const err = ReamError.fromNapi(napiError)
-    expect(err.code).toBe('RUST_PANIC')
-    expect(err.message).toBe('Panic caught')
-    expect(err.hint).toBe('Report this bug')
-    expect(err.sourceFile).toBe('lib.rs')
-  })
-
-  it('falls back to E_UNKNOWN for non-JSON errors', () => {
-    const err = ReamError.fromNapi(new Error('plain error'))
-    expect(err.code).toBe('E_UNKNOWN')
-    expect(err.message).toBe('plain error')
-  })
-})
-
-describe('ReamError > toDevString', () => {
-  it('formats for dev console', () => {
-    const err = new ReamError('TEST', 'Test error', {
-      hint: 'Fix this',
-      context: { key: 'value' },
-      sourceFile: 'test.ts',
-      sourceLine: 10,
-    })
-    const output = err.toDevString()
-    expect(output).toContain('[TEST]')
-    expect(output).toContain('test.ts:10')
-    expect(output).toContain('key: value')
-    expect(output).toContain('Hint: Fix this')
-  })
-})
 
 describe('HttpKernel > integration', () => {
   it('routes request through router and pipeline to handler', async () => {
@@ -185,13 +120,43 @@ describe('HttpKernel > integration', () => {
     expect(log).toEqual(['middleware', 'handler'])
   })
 
+  it('answers a generic message for a 500 Exception thrown from a route, outside debug mode', async () => {
+    const E_POOL_DOWN = createError<[string]>('pool exhausted on %s', 'E_POOL_DOWN')
+    const E_QUOTA = createError('Quota exceeded', 'E_QUOTA', 429)
+    const router = new Router()
+    router.get('/down', async () => {
+      throw new E_POOL_DOWN(['db-internal-3'])
+    })
+    router.get('/quota', async () => {
+      throw new E_QUOTA()
+    })
+    const kernel = createHttpKernel({ router, middleware: new MiddlewareRegistry() })
+    const call = (path: string) =>
+      kernel({ method: 'GET', path, query: '', headers: { accept: 'application/json' }, body: '' })
+
+    const down = await call('/down')
+    expect(down.status).toBe(500)
+    expect(JSON.parse(down.body).error).toMatchObject({
+      code: 'E_POOL_DOWN',
+      message: 'An internal error occurred',
+    })
+    expect(down.body).not.toContain('db-internal-3')
+
+    const quota = await call('/quota')
+    expect(quota.status).toBe(429)
+    expect(JSON.parse(quota.body).error).toMatchObject({
+      code: 'E_QUOTA',
+      message: 'Quota exceeded',
+    })
+  })
+
   it('catches handler errors and returns 500', async () => {
     const router = new Router()
     const middleware = new MiddlewareRegistry()
     const errors: unknown[] = []
 
     router.get('/error', async () => {
-      throw new ReamError('HANDLER_ERROR', 'Something broke')
+      throw new Exception('Something broke', { code: 'HANDLER_ERROR' })
     })
 
     const kernel = createHttpKernel({

@@ -22,7 +22,13 @@ import { ConfigStore } from './ConfigLoader.js'
 import { Container } from './container/Container.js'
 import { type DirectoriesNode, directories as defaultDirectories } from './directories.js'
 import { currentNodeEnv } from './env/nodeEnv.js'
-import { ReamError } from './errors/ReamError.js'
+import {
+  E_APP_ALREADY_BOOTED,
+  E_APP_MISSING_DEFAULT_EXPORT,
+  E_APP_MISSING_IMPORTER,
+  E_APP_ROOT_NOT_SET,
+  E_APP_SHUTDOWN_FAILED,
+} from './errors/codes.js'
 import type { AppContext, ProviderContract } from './Provider.js'
 import { callProviderPhase } from './Provider.js'
 
@@ -158,7 +164,9 @@ export class Application implements AppContext {
    */
   setMode(mode: ApplicationMode): this {
     if (this.#booted) {
-      throw new Error(`Cannot switch to '${mode}' mode: the application is already booted.`)
+      throw new E_APP_ALREADY_BOOTED([
+        `Cannot switch to '${mode}' mode: the application is already booted.`,
+      ])
     }
     this.#mode = mode
     return this
@@ -202,9 +210,7 @@ export class Application implements AppContext {
 
   #requireAppRoot(): URL {
     if (!this.#appRoot) {
-      throw new Error(
-        'Application.makePath: app root is not set — construct the Ignitor with `new Ignitor(new URL("../", import.meta.url))`.',
-      )
+      throw new E_APP_ROOT_NOT_SET()
     }
     return this.#appRoot
   }
@@ -529,9 +535,9 @@ export class Application implements AppContext {
    */
   setEnvironment(environment: AppEnvironment): this {
     if (this.#booted) {
-      throw new Error(
+      throw new E_APP_ALREADY_BOOTED([
         `Cannot switch to the '${environment}' environment: the application is already booted.`,
-      )
+      ])
     }
     this.#environment = environment
     return this
@@ -675,14 +681,7 @@ export class Application implements AppContext {
 
   #requireImporter(moduleIdentifier: string): ApplicationImporter {
     if (this.#importer === undefined) {
-      throw new ReamError(
-        'E_APP_MISSING_IMPORTER',
-        `Cannot import "${moduleIdentifier}". Register a module importer with the application first.`,
-        {
-          context: { moduleIdentifier },
-          hint: 'Pass `importer: (filePath) => import(filePath)` to the Ignitor, from a file of the application.',
-        },
-      )
+      throw new E_APP_MISSING_IMPORTER(moduleIdentifier)
     }
     return this.#importer
   }
@@ -768,7 +767,7 @@ export class Application implements AppContext {
     }
     if (errors.length === 1) throw errors[0]
     if (errors.length > 1) {
-      throw new AggregateError(errors, 'Application.terminate() completed with errors')
+      throw new E_APP_SHUTDOWN_FAILED(errors, 'Application.terminate() completed with errors')
     }
   }
 
@@ -865,7 +864,7 @@ export class Application implements AppContext {
     this.#state = 'terminated'
     if (errors.length === 1) throw errors[0]
     if (errors.length > 1) {
-      throw new AggregateError(errors, 'Application.shutdown() completed with errors')
+      throw new E_APP_SHUTDOWN_FAILED(errors, 'Application.shutdown() completed with errors')
     }
   }
 
@@ -899,10 +898,10 @@ export class Application implements AppContext {
 async function defaultExport<T>(importFn: () => Promise<unknown>, label?: string): Promise<T> {
   const module = await importFn()
   if (module === null || typeof module !== 'object' || !('default' in module)) {
-    throw new Error(
+    throw new E_APP_MISSING_DEFAULT_EXPORT([
       `Missing default export${label ? ` in "${label}"` : ''}. ` +
         'Export the value as `export default`, or import the named export directly.',
-    )
+    ])
   }
   // The caller declares what it expects to find, the same contract as
   // `container.make<T>()` over a dynamic import.

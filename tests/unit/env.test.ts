@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Env, EnvValidationException } from '../../src/env/Env.js'
+import { Env } from '../../src/env/Env.js'
+import { errors } from '../../src/index.js'
 
 /**
  * Env mirrors `@adonisjs/core/env`: load + validate + typed `get`. These tests
@@ -64,9 +65,16 @@ describe('ream > Env', () => {
     } catch (err) {
       thrown = err
     }
-    expect(thrown).toBeInstanceOf(EnvValidationException)
-    if (thrown instanceof EnvValidationException) {
+    expect(thrown).toBeInstanceOf(errors.E_INVALID_ENV_VARIABLES)
+    if (thrown instanceof errors.E_INVALID_ENV_VARIABLES) {
       expect(thrown.name).toBe('E_INVALID_ENV_VARIABLES')
+      expect(thrown.failures).toHaveLength(2)
+      expect(thrown.code).toBe('E_INVALID_ENV_VARIABLES')
+      expect(thrown.message).toBe('Validation failed for one or more environment variables')
+      // One `- ` line per variable, as upstream writes `help`.
+      const lines = thrown.help?.split('\n') ?? []
+      expect(lines).toHaveLength(2)
+      expect(lines.every((line) => line.startsWith('- '))).toBe(true)
       expect(thrown.help).toContain('HOST')
       expect(thrown.help).toContain('PORT')
     }
@@ -76,7 +84,7 @@ describe('ream > Env', () => {
     process.env.MAIL = 'not-an-email'
     await expect(
       Env.create(EMPTY_ROOT, { MAIL: Env.schema.string({ format: 'email' }) }),
-    ).rejects.toBeInstanceOf(EnvValidationException)
+    ).rejects.toBeInstanceOf(errors.E_INVALID_ENV_VARIABLES)
 
     process.env.MAIL = 'a@b.co'
     const env = await Env.create(EMPTY_ROOT, {
@@ -91,6 +99,6 @@ describe('ream > Env', () => {
       Env.create(EMPTY_ROOT, {
         MODE: Env.schema.enum(['development', 'production', 'test'] as const),
       }),
-    ).rejects.toBeInstanceOf(EnvValidationException)
+    ).rejects.toBeInstanceOf(errors.E_INVALID_ENV_VARIABLES)
   })
 })

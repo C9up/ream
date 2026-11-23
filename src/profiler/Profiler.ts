@@ -136,6 +136,15 @@ export class Profiler {
     return bag === undefined ? undefined : (bag as Bag)
   }
 
+  /**
+   * Record an error on the request being profiled right now: one the kernel
+   * answered before it could reach {@link profile}.
+   */
+  recordException(error: unknown): void {
+    const active = this.#storage.getStore()
+    if (active !== undefined) recordException(active, error)
+  }
+
   /** Whether a request is being profiled right now. */
   get active(): boolean {
     return this.#storage.getStore() !== undefined

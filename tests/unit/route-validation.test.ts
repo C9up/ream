@@ -105,7 +105,7 @@ describe('route .validate() — runtime validation', () => {
 
     expect(res.status).toBe(500)
     expect(errors.length).toBe(1)
-    expect(String(errors[0])).toContain('E_VALIDATOR_NOT_FOUND')
+    expect(errors[0]).toMatchObject({ code: 'E_VALIDATOR_NOT_FOUND' })
   })
 })
 

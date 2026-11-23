@@ -149,7 +149,12 @@ describe('router > find / findOrFail / has', () => {
     router.get('/x', async () => {}).as('x')
     expect(router.has('x')).toBe(true)
     expect(router.has('y')).toBe(false)
-    expect(() => router.findOrFail('y')).toThrow(/Cannot find route/)
+    expect(() => router.findOrFail('y')).toThrow(
+      expect.objectContaining({
+        code: 'E_CANNOT_LOOKUP_ROUTE',
+        message: 'Cannot lookup route "y"',
+      }),
+    )
   })
 })
 

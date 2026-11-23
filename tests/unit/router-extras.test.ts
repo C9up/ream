@@ -20,7 +20,7 @@ describe('group.as() throws on an unnamed child (AdonisJS parity)', () => {
           router.get('/a', async () => {})
         })
         .as('grp')
-    }).toThrow(/E_MISSING_ROUTE_NAME/)
+    }).toThrow(expect.objectContaining({ code: 'E_MISSING_ROUTE_NAME' }))
   })
 
   it('prefixes names when every route is named', () => {

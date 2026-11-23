@@ -2,8 +2,9 @@
  * Drive an RpcRouter through a real HttpContext and read back what the
  * caller would receive.
  */
+
+import { Exception } from '@c9up/flare'
 import { HttpContext } from '../../src/http/HttpContext.js'
-import { isReamError, type ReamError } from '../../src/index.js'
 import type { RpcRouter } from '../../src/rpc/RpcRouter.js'
 
 function makeCtx(body: string, contentType: string | null): HttpContext {
@@ -34,12 +35,12 @@ export function rpcCall(method: string, id: number | string = 1, params: unknown
   return JSON.stringify({ jsonrpc: '2.0', method, params, id })
 }
 
-export function thrownReamError(fn: () => void): ReamError {
+export function thrownException(fn: () => void): Exception {
   try {
     fn()
   } catch (error) {
-    if (isReamError(error)) return error
+    if (error instanceof Exception) return error
     throw error
   }
-  throw new Error('expected a ReamError')
+  throw new Error('expected an Exception')
 }

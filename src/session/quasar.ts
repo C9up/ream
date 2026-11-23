@@ -10,6 +10,7 @@
  * duck-types what it does not own.
  */
 
+import { E_SESSION_INCOMPLETE_CONNECTION, E_SESSION_QUASAR_MISSING } from '../errors/codes.js'
 import type { SessionRedisClient } from './drivers/RedisDriver.js'
 
 /** The slice of quasar's manager this needs: a connection, by name. */
@@ -55,23 +56,21 @@ export function quasarConnection(name?: string): () => Promise<SessionRedisClien
     try {
       loaded = await import(/* @vite-ignore */ specifier)
     } catch (cause) {
-      throw new Error(
-        `Ream: the '${name ?? 'default'}' session store asks for a quasar connection, but @c9up/quasar is not installed.\n` +
-          '  pnpm add @c9up/quasar',
-        { cause },
-      )
+      throw new E_SESSION_QUASAR_MISSING([name ?? 'default'], { cause: cause })
     }
 
     const manager = isConnectionSource(loaded) ? loaded : Reflect.get(Object(loaded), 'default')
     if (!isConnectionSource(manager)) {
-      throw new Error('Ream: @c9up/quasar/services/main did not expose a connection() manager')
+      throw new E_SESSION_INCOMPLETE_CONNECTION([
+        'Ream: @c9up/quasar/services/main did not expose a connection() manager',
+      ])
     }
 
     const connection = manager.connection(name)
     if (!isSessionRedisClient(connection)) {
-      throw new Error(
+      throw new E_SESSION_INCOMPLETE_CONNECTION([
         `Ream: quasar connection '${name ?? 'default'}' does not carry the commands a session needs`,
-      )
+      ])
     }
     return connection
   }

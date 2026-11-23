@@ -17,6 +17,12 @@
  *   await client.close()
  */
 
+import {
+  E_CANNOT_LOOKUP_ROUTE,
+  E_MISSING_ROUTE_PARAMS,
+  E_TEST_CLIENT_NO_ROUTE_MANIFEST,
+  E_TEST_CLIENT_TIMEOUT,
+} from '../errors/codes.js'
 import type { Dict } from '../types/helpers.js'
 import {
   type AuthStrategy,
@@ -26,7 +32,6 @@ import {
   type SessionSeeder,
   type TestResponse,
 } from './RequestBuilder.js'
-
 import { TestWebSocket, type TestWebSocketOptions } from './TestWebSocket.js'
 
 // The raw response shape + the rich response live in ApiResponse.ts and are
@@ -36,7 +41,6 @@ export {
   TestWebSocket,
   type TestWebSocketClose,
   type TestWebSocketOptions,
-  WebSocketRefused,
 } from './TestWebSocket.js'
 
 /**
@@ -218,9 +222,7 @@ export class TestClient {
    */
   visit(name: string, params?: Record<string, string>): RequestBuilder {
     if (!this.#routes) {
-      throw new Error(
-        'TestClient: visit() needs a named-route manifest. Pass `routes: router.namedManifest()` in the client options.',
-      )
+      throw new E_TEST_CLIENT_NO_ROUTE_MANIFEST()
     }
     const entry = this.#routes[name]
     // Method comes from the registry when the entry carries one (helix parity),
@@ -232,7 +234,7 @@ export class TestClient {
   /**
    * Open a WebSocket to `path` on the booted application, with the client's
    * default headers and `options.headers` on the handshake. A refusal
-   * (a guard's 401, a 426 for a plain route) rejects with `WebSocketRefused`.
+   * (a guard's 401, a 426 for a plain route) rejects with `E_TEST_CLIENT_WEBSOCKET_REFUSED`.
    *
    *   const socket = await client.ws('/chat', { headers: { cookie } })
    *   socket.send('hi')
@@ -290,7 +292,9 @@ export function resolveNamedRoute(
   const entry = manifest[name]
   if (entry === undefined) {
     const available = Object.keys(manifest).join(', ') || '(none)'
-    throw new Error(`Route '${name}' not found. Available: ${available}`)
+    throw Object.assign(new E_CANNOT_LOOKUP_ROUTE([name]), {
+      help: `The route manifest names: ${available}`,
+    })
   }
   let url = typeof entry === 'string' ? entry : entry.path
   if (params) {
@@ -302,7 +306,7 @@ export function resolveNamedRoute(
   url = url.replace(/\/:[A-Za-z_][\w]*\?/g, '')
   const missing = url.match(/:[A-Za-z_][\w]*/g)
   if (missing && missing.length > 0) {
-    throw new Error(`Cannot generate URL for route '${name}': missing params ${missing.join(', ')}`)
+    throw new E_MISSING_ROUTE_PARAMS([name, missing.join(', ')])
   }
   return url
 }
@@ -367,7 +371,7 @@ async function sendRequest(
     // per-request `.timeout(ms)` (helix) overrides the default.
     socket.setTimeout(timeoutMs && timeoutMs > 0 ? timeoutMs : 30_000, () => {
       socket.destroy()
-      reject(new Error('TestClient request timed out'))
+      reject(new E_TEST_CLIENT_TIMEOUT(['TestClient request timed out']))
     })
   })
 }

@@ -1,3 +1,5 @@
+import { E_BASE64_MALFORMED } from '../errors/codes.js'
+
 const STANDARD_B64_RE = /^[A-Za-z0-9+/]*={0,2}$/
 const URL_B64_RE = /^[A-Za-z0-9_-]*$/
 
@@ -22,13 +24,13 @@ function encode(value: string | Buffer): string {
  */
 function decode(value: string, encoding: BufferEncoding = 'utf-8', strict = false): string | null {
   if (!STANDARD_B64_RE.test(value)) {
-    if (strict) throw new Error(`Invalid base64 string: ${value}`)
+    if (strict) throw new E_BASE64_MALFORMED([`Invalid base64 string: ${value}`])
     return null
   }
   try {
     return Buffer.from(value, 'base64').toString(encoding)
   } catch {
-    if (strict) throw new Error(`Failed to decode base64 string: ${value}`)
+    if (strict) throw new E_BASE64_MALFORMED([`Failed to decode base64 string: ${value}`])
     return null
   }
 }
@@ -58,13 +60,13 @@ function urlDecode(
   strict = false,
 ): string | null {
   if (!URL_B64_RE.test(value)) {
-    if (strict) throw new Error(`Invalid base64url string: ${value}`)
+    if (strict) throw new E_BASE64_MALFORMED([`Invalid base64url string: ${value}`])
     return null
   }
   try {
     return Buffer.from(value, 'base64url').toString(encoding)
   } catch {
-    if (strict) throw new Error(`Failed to decode base64url string: ${value}`)
+    if (strict) throw new E_BASE64_MALFORMED([`Failed to decode base64url string: ${value}`])
     return null
   }
 }

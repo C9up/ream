@@ -9,13 +9,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { isReamError } from '../../src/errors/ReamError.js'
-import {
-  fakeHttp,
-  HttpClient,
-  HttpClientError,
-  isPublicAddress,
-} from '../../src/http-client/index.js'
+import { type HttpClientException, isHttpClientError } from '../../src/http-client/errors.js'
+import { fakeHttp, HttpClient, isPublicAddress } from '../../src/http-client/index.js'
+import { errors } from '../../src/index.js'
 
 type Handler = (req: IncomingMessage, res: ServerResponse, body: string) => void
 
@@ -58,11 +54,11 @@ function localClient(options: ConstructorParameters<typeof HttpClient>[0] = {}):
   return new HttpClient({ allowHosts: [`127.0.0.1:${port}`, `localhost:${port}`], ...options })
 }
 
-async function failure(promise: Promise<unknown>): Promise<HttpClientError> {
+async function failure(promise: Promise<unknown>): Promise<HttpClientException> {
   try {
     await promise
   } catch (error) {
-    if (error instanceof HttpClientError) return error
+    if (isHttpClientError(error)) return error
     throw error
   }
   throw new Error('expected the request to fail')
@@ -114,13 +110,15 @@ describe('isPublicAddress', () => {
 describe('HttpClient > the public-address rule', () => {
   it('refuses an address literal in the URL before connecting', async () => {
     const error = await failure(new HttpClient().get(`http://127.0.0.1:${port}/ok`))
-    expect(error.reason).toBe('privateAddress')
+    expect(error.code).toBe('E_HTTP_CLIENT_PRIVATE_ADDRESS')
     expect(error.code).toBe('E_HTTP_CLIENT_PRIVATE_ADDRESS')
   })
 
   it('refuses the IPv4 spellings a URL normalises to a private address', async () => {
     for (const url of ['http://0x7f.1/', 'http://2130706433/', 'http://[::ffff:127.0.0.1]/']) {
-      expect((await failure(new HttpClient().get(url))).reason, url).toBe('privateAddress')
+      expect((await failure(new HttpClient().get(url))).code, url).toBe(
+        'E_HTTP_CLIENT_PRIVATE_ADDRESS',
+      )
     }
   })
 
@@ -128,7 +126,7 @@ describe('HttpClient > the public-address rule', () => {
     routes.set('/ok', (_req, res) => res.end('reached'))
     const before = seen.length
     const error = await failure(new HttpClient().get(`http://localhost:${port}/ok`))
-    expect(error.reason).toBe('privateAddress')
+    expect(error.code).toBe('E_HTTP_CLIENT_PRIVATE_ADDRESS')
     expect(error.message).toMatch(/not a public address/)
     expect(seen.length).toBe(before)
   })
@@ -142,27 +140,37 @@ describe('HttpClient > the public-address rule', () => {
 
   it('matches allowHosts on host AND port', async () => {
     const client = new HttpClient({ allowHosts: ['localhost:1'] })
-    expect((await failure(client.get(`http://localhost:${port}/ok`))).reason).toBe('privateAddress')
+    expect((await failure(client.get(`http://localhost:${port}/ok`))).code).toBe(
+      'E_HTTP_CLIENT_PRIVATE_ADDRESS',
+    )
   })
 
   it('refuses a scheme other than http and https, and credentials in the URL', async () => {
-    expect((await failure(new HttpClient().get('file:///etc/passwd'))).reason).toBe('invalidUrl')
-    expect((await failure(new HttpClient().get('gopher://example.com/'))).reason).toBe('invalidUrl')
-    expect((await failure(new HttpClient().get('https://u:p@example.com/'))).reason).toBe(
-      'invalidUrl',
+    expect((await failure(new HttpClient().get('file:///etc/passwd'))).code).toBe(
+      'E_HTTP_CLIENT_INVALID_URL',
     )
-    expect((await failure(new HttpClient().get('not a url'))).reason).toBe('invalidUrl')
+    expect((await failure(new HttpClient().get('gopher://example.com/'))).code).toBe(
+      'E_HTTP_CLIENT_INVALID_URL',
+    )
+    expect((await failure(new HttpClient().get('https://u:p@example.com/'))).code).toBe(
+      'E_HTTP_CLIENT_INVALID_URL',
+    )
+    expect((await failure(new HttpClient().get('not a url'))).code).toBe(
+      'E_HTTP_CLIENT_INVALID_URL',
+    )
   })
 
-  it('is a ReamError, matched by code', async () => {
+  it('is an errors.E_HTTP_CLIENT_* class, matched by code', async () => {
     const error = await failure(new HttpClient().get('http://10.0.0.5/'))
-    expect(isReamError(error, 'E_HTTP_CLIENT_PRIVATE_ADDRESS')).toBe(true)
+    expect(error).toBeInstanceOf(errors.E_HTTP_CLIENT_PRIVATE_ADDRESS)
+    expect(error.code).toBe('E_HTTP_CLIENT_PRIVATE_ADDRESS')
+    expect(error.status).toBe(500)
   })
 
   it('keeps the query string, which may carry a token, out of the error', async () => {
     const error = await failure(new HttpClient().get('http://10.0.0.5/api?token=secret'))
     expect(error.url).toBe('http://10.0.0.5/api')
-    expect(JSON.stringify(error.context)).not.toContain('secret')
+    expect(error.message).not.toContain('secret')
   })
 })
 
@@ -196,7 +204,7 @@ describe('HttpClient > requests and responses', () => {
     await new Promise<void>((resolve) => closed.close(() => resolve()))
     const client = new HttpClient({ allowHosts: [`127.0.0.1:${address.port}`] })
     const error = await failure(client.get(`http://127.0.0.1:${address.port}/`))
-    expect(error.reason).toBe('unreachable')
+    expect(error.code).toBe('E_HTTP_CLIENT_UNREACHABLE')
   })
 })
 
@@ -205,7 +213,7 @@ describe('HttpClient > bounds', () => {
     routes.set('/hang', () => {})
     const started = Date.now()
     const error = await failure(localClient({ timeout: 100 }).get(`http://127.0.0.1:${port}/hang`))
-    expect(error.reason).toBe('timedOut')
+    expect(error.code).toBe('E_HTTP_CLIENT_TIMED_OUT')
     expect(Date.now() - started).toBeLessThan(2000)
   })
 
@@ -217,7 +225,7 @@ describe('HttpClient > bounds', () => {
     const error = await failure(
       localClient({ timeout: 150 }).get(`http://127.0.0.1:${port}/trickle`),
     )
-    expect(error.reason).toBe('timedOut')
+    expect(error.code).toBe('E_HTTP_CLIENT_TIMED_OUT')
   })
 
   it('refuses a body larger than maxResponseBytes, declared up front', async () => {
@@ -228,7 +236,7 @@ describe('HttpClient > bounds', () => {
     const error = await failure(
       localClient({ maxResponseBytes: 1000 }).get(`http://127.0.0.1:${port}/big`),
     )
-    expect(error.reason).toBe('tooLarge')
+    expect(error.code).toBe('E_HTTP_CLIENT_TOO_LARGE')
   })
 
   it('refuses a chunked body once it grows past maxResponseBytes', async () => {
@@ -240,7 +248,7 @@ describe('HttpClient > bounds', () => {
     const error = await failure(
       localClient().get(`http://127.0.0.1:${port}/stream`, { maxResponseBytes: 1000 }),
     )
-    expect(error.reason).toBe('tooLarge')
+    expect(error.code).toBe('E_HTTP_CLIENT_TOO_LARGE')
   })
 
   it('lets the caller abort', async () => {
@@ -268,7 +276,7 @@ describe('HttpClient > redirects', () => {
       res.writeHead(302, { location: `http://localhost:${port}/new` }).end(),
     )
     const error = await failure(localClient().get(`http://127.0.0.1:${port}/away`))
-    expect(error.reason).toBe('redirect')
+    expect(error.code).toBe('E_HTTP_CLIENT_REDIRECT_REFUSED')
   })
 
   it('applies the address rule to every hop of an allowed cross-host redirect', async () => {
@@ -277,7 +285,7 @@ describe('HttpClient > redirects', () => {
     )
     const client = localClient({ crossHostRedirects: true })
     const error = await failure(client.get(`http://127.0.0.1:${port}/to-metadata`))
-    expect(error.reason).toBe('privateAddress')
+    expect(error.code).toBe('E_HTTP_CLIENT_PRIVATE_ADDRESS')
   })
 
   it('drops credentials on an allowed cross-host redirect', async () => {
@@ -298,7 +306,7 @@ describe('HttpClient > redirects', () => {
     const error = await failure(
       localClient({ maxRedirects: 2 }).get(`http://127.0.0.1:${port}/loop`),
     )
-    expect(error.reason).toBe('redirect')
+    expect(error.code).toBe('E_HTTP_CLIENT_REDIRECT_REFUSED')
   })
 
   it('hands back the 3xx itself when maxRedirects is 0', async () => {
@@ -357,14 +365,14 @@ describe('fakeHttp', () => {
 
   it('fails unmatched requests as unreachable', async () => {
     const error = await failure(fakeHttp().get('https://example.com/nothing'))
-    expect(error.reason).toBe('unreachable')
+    expect(error.code).toBe('E_HTTP_CLIENT_UNREACHABLE')
   })
 
   it('still refuses a private address literal', async () => {
     const http = fakeHttp()
     http.onAny(() => true, { body: 'should not be reached' })
     const error = await failure(http.get('http://169.254.169.254/latest/meta-data/'))
-    expect(error.reason).toBe('privateAddress')
+    expect(error.code).toBe('E_HTTP_CLIENT_PRIVATE_ADDRESS')
     expect(http.requests).toHaveLength(0)
   })
 
@@ -379,9 +387,15 @@ describe('fakeHttp', () => {
       status: 301,
       headers: { location: 'http://a.example.com/' },
     })
-    expect((await failure(http.get('https://a.example.com/'))).reason).toBe('redirect')
-    expect((await failure(http.get('https://a.example.com/big'))).reason).toBe('tooLarge')
-    expect((await failure(http.get('https://a.example.com/down'))).reason).toBe('redirect')
+    expect((await failure(http.get('https://a.example.com/'))).code).toBe(
+      'E_HTTP_CLIENT_REDIRECT_REFUSED',
+    )
+    expect((await failure(http.get('https://a.example.com/big'))).code).toBe(
+      'E_HTTP_CLIENT_TOO_LARGE',
+    )
+    expect((await failure(http.get('https://a.example.com/down'))).code).toBe(
+      'E_HTTP_CLIENT_REDIRECT_REFUSED',
+    )
   })
 
   it('resets', async () => {
@@ -390,6 +404,6 @@ describe('fakeHttp', () => {
     await http.get('https://example.com/')
     http.reset()
     expect(http.requests).toHaveLength(0)
-    expect((await failure(http.get('https://example.com/'))).reason).toBe('unreachable')
+    expect((await failure(http.get('https://example.com/'))).code).toBe('E_HTTP_CLIENT_UNREACHABLE')
   })
 })

@@ -32,16 +32,15 @@ export type {
   ServiceToken,
 } from './container/types.js'
 export { type DirectoriesNode, directories } from './directories.js'
-export { Env, EnvValidationException } from './env/Env.js'
+export { Env } from './env/Env.js'
 export { loadEnvFiles } from './env/loadEnvFiles.js'
 export { Secret } from './env/Secret.js'
-export {
-  EnvVarError,
-  type OptionalCondition,
-  type RequiredNode,
-  type SchemaFnOptions,
-  type SchemaNode,
-  type StringOptions,
+export type {
+  OptionalCondition,
+  RequiredNode,
+  SchemaFnOptions,
+  SchemaNode,
+  StringOptions,
 } from './env/schema.js'
 export { MigrationRegistry } from './migrations/MigrationRegistry.js'
 export type {
@@ -55,16 +54,9 @@ export type {
 
 export {
   createError,
-  E_FORBIDDEN,
-  E_HTTP_EXCEPTION,
-  E_HTTP_REQUEST_ABORTED,
-  E_ROUTE_NOT_FOUND,
-  E_ROW_NOT_FOUND,
-  E_UNAUTHORIZED,
-  E_VALIDATION_ERROR,
+  type ErrorClass,
   Exception,
   type ExceptionClass,
-  type ExceptionConstructor,
   ExceptionHandler,
   type HttpError,
   InvalidArgumentsException,
@@ -95,8 +87,6 @@ export type {
   WebSocketState,
 } from './http/WebSocket.js'
 export {
-  E_WEBSOCKET_UNSUPPORTED,
-  E_WEBSOCKET_UPGRADE_REQUIRED,
   isWebSocketContext,
   ServerWebSocket,
   WebSocketHub,
@@ -120,11 +110,6 @@ export type {
   SessionRedisClientSource,
 } from './session/drivers/RedisDriver.js'
 export { RedisDriver as SessionRedisDriver } from './session/drivers/RedisDriver.js'
-export {
-  E_SESSION_NOT_READY,
-  E_SESSION_STORE_NOT_CONDITIONAL,
-  E_SESSION_TAGGING_NOT_SUPPORTED,
-} from './session/errors.js'
 export type { ValuePath } from './session/ReadOnlyValuesStore.js'
 export { ReadOnlyValuesStore } from './session/ReadOnlyValuesStore.js'
 export type {
@@ -189,11 +174,7 @@ export { StaticProvider } from './storage/StaticProvider.js'
 
 // Request-filter security (CSRF, XSS, rate-limit, CORS, headers, path/param)
 // lives in @c9up/blackhole. ream core keeps only the crypto primitives.
-export {
-  CookieSigner,
-  E_INSECURE_APP_KEY,
-  E_MISSING_APP_KEY,
-} from './security/CookieSigner.js'
+export { CookieSigner } from './security/CookieSigner.js'
 export {
   constantTimeEq,
   hasNativeCrypto,
@@ -334,7 +315,6 @@ export {
   render as renderStub,
   type StubBlock,
   type StubFunction,
-  StubSyntaxError,
   type StubValue,
   type TemplateOptions,
 } from './stubs/template.js'
@@ -343,24 +323,14 @@ export {
 
 export type { ErrorEmitter, ErrorEvent, ErrorSeverity } from './ErrorBoundary.js'
 export { ErrorBoundary } from './ErrorBoundary.js'
+export { DOCS_BASE_URL, errorDocsUrl } from './errors/docsUrl.js'
 export { didYouMean, findClosestMatches, levenshtein } from './errors/FuzzyMatcher.js'
-export {
-  AtlasError,
-  ContainerError,
-  EventsError,
-  ForgeError,
-  PipelineError,
-  RouterError,
-  RuneError,
-  WardenError,
-} from './errors/ModuleErrors.js'
 export type { PipelineStageName } from './errors/PipelineStageError.js'
 export {
   createPipelineError,
   PIPELINE_STAGES,
   validatePipelineConfig,
 } from './errors/PipelineStageError.js'
-export { DOCS_BASE_URL, errorDocsUrl, isReamError, ReamError } from './errors/ReamError.js'
 
 // ─── Utilities ──────────────────────────────────────────────
 

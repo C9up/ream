@@ -52,7 +52,10 @@ describe('MigrationRegistry', () => {
     // Replacing silently would leave one provider's store un-migrated while
     // `ream migrate` still exited 0 — the worst possible outcome.
     expect(() => registry.register({ name: 'atlas', runner: stubRunner() })).toThrow(
-      /already registered/,
+      expect.objectContaining({
+        code: 'E_MIGRATION_SOURCE_CONFLICT',
+        message: expect.stringMatching(/already registered/),
+      }),
     )
     expect(registry.all()).toHaveLength(1)
   })

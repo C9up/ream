@@ -37,7 +37,6 @@ interface EventsNative {
 const native = loadNapi<EventsNative>({
   binaryName: 'events',
   callerMetaUrl: import.meta.url,
-  errorCodePrefix: 'EVENTS',
 })
 
 export const EventBus = native.EventBus

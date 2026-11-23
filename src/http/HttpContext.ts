@@ -9,6 +9,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ServiceToken } from '../container/types.js'
+import { E_HTTP_CONTEXT_NOT_FOUND } from '../errors/codes.js'
 import type { Emitter } from '../events/Emitter.js'
 import type { MatchedParams } from '../router/Router.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
@@ -280,15 +281,15 @@ export class HttpContext extends Macroable {
   /** The ambient HttpContext, or throw outside a request (AdonisJS `HttpContext.getOrFail()`). */
   static getOrFail(): HttpContext {
     if (!asyncLocalStorageEnabled) {
-      throw new Error(
-        '[E_HTTP_CONTEXT_NOT_FOUND] HttpContext.getOrFail() called while ambient-context tracking is off. Re-enable it with HttpContext.useAsyncLocalStorage(true), or pass ctx explicitly.',
-      )
+      throw new E_HTTP_CONTEXT_NOT_FOUND([
+        'HttpContext.getOrFail() called while ambient-context tracking is off. Re-enable it with HttpContext.useAsyncLocalStorage(true), or pass ctx explicitly.',
+      ])
     }
     const ctx = httpContextStorage.getStore()
     if (!ctx) {
-      throw new Error(
-        '[E_HTTP_CONTEXT_NOT_FOUND] HttpContext.getOrFail() called outside an HTTP request — no ambient context. Pass ctx explicitly, or only call this within the request lifecycle.',
-      )
+      throw new E_HTTP_CONTEXT_NOT_FOUND([
+        'HttpContext.getOrFail() called outside an HTTP request — no ambient context. Pass ctx explicitly, or only call this within the request lifecycle.',
+      ])
     }
     return ctx
   }

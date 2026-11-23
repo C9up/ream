@@ -160,7 +160,7 @@ describe('Scheduler.runTaskNow', () => {
     })
     const result = await scheduler.runTaskNow('slow', { timeoutMs: 30 })
     expect(result.outcome).toBe('failed')
-    expect(result.error?.name).toBe('ReamError')
+    expect(result.error?.name).toBe('Exception')
     expect(result.error?.message).toContain('did not complete within 30')
   })
 

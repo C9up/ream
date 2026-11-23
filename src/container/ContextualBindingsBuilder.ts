@@ -8,6 +8,7 @@
  * one call.
  */
 
+import { E_CONTAINER_MISSING_ASKS_FOR } from '../errors/codes.js'
 import type { Container } from './Container.js'
 import type { ServiceFactory, ServiceToken } from './types.js'
 
@@ -32,9 +33,7 @@ export class ContextualBindingsBuilder {
   /** What it gets instead. */
   provide(factory: ServiceFactory): void {
     if (this.#binding === undefined) {
-      throw new Error(
-        'Container.when(): call asksFor(binding) before provide() — a contextual binding needs to know which dependency it replaces.',
-      )
+      throw new E_CONTAINER_MISSING_ASKS_FOR()
     }
     this.#container.contextualBinding(this.#parent, this.#binding, factory)
   }

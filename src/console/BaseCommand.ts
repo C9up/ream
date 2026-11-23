@@ -25,6 +25,7 @@
  */
 
 import type { Application } from '../Application.js'
+import { E_CONSOLE_INVALID_COMMAND } from '../errors/codes.js'
 import { createAssertions } from './assertions.js'
 import type { Colors, Logger, Ui } from './cliui.js'
 import { assertArgumentOrder, buildArgument, buildFlag } from './decorators.js'
@@ -318,7 +319,9 @@ export abstract class BaseCommand {
     if (this.hydrated) return
     const commandClass = Object.getPrototypeOf(this).constructor
     if (!isDeclaring(commandClass)) {
-      throw new Error('hydrate() requires a command class carrying the static contract')
+      throw new E_CONSOLE_INVALID_COMMAND([
+        'hydrate() requires a command class carrying the static contract',
+      ])
     }
 
     // One hydration path, shared with the kernel — see `assignParsedValues`.
@@ -382,7 +385,9 @@ export abstract class BaseCommand {
     // Not named `constructor`: that shadows the global and biome rejects it.
     const commandClass = Object.getPrototypeOf(this).constructor
     if (!isSerializable(commandClass)) {
-      throw new Error('toJSON() requires a command class carrying the static contract')
+      throw new E_CONSOLE_INVALID_COMMAND([
+        'toJSON() requires a command class carrying the static contract',
+      ])
     }
     const meta = commandClass.serialize()
 

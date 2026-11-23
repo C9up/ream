@@ -10,6 +10,7 @@
  */
 
 import type { CookieSigner } from '../security/CookieSigner.js'
+import { E_MISSING_ENCRYPTER_KEY } from '../security/CookieSigner.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
 let instance: CookieSigner | undefined
@@ -44,9 +45,13 @@ export function getEncryption(): CookieSigner | undefined {
 
 const encryption: CookieSigner = createServiceProxy<CookieSigner>(
   () => instance,
-  '[E_MISSING_APP_KEY] Encryption accessed before it was registered. ' +
-    'It exists only when APP_KEY is set (>= 16 characters) — check the ' +
-    'environment before reaching for it, or you are reading it before boot.',
+  () =>
+    Object.assign(new E_MISSING_ENCRYPTER_KEY(), {
+      help:
+        'Encryption accessed before it was registered. ' +
+        'It exists only when APP_KEY is set (>= 16 characters) — check the ' +
+        'environment before reaching for it, or you are reading it before boot.',
+    }),
 )
 
 export default encryption

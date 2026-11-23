@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { GraphQLEngine } from '../../src/graphql/GraphQLEngine.js'
-import { E_UNAUTHORIZED } from '../../src/http/Exception.js'
+import { E_UNAUTHORIZED_ACCESS } from '../../src/http/Exception.js'
 import { type AuthState, HttpContext } from '../../src/http/HttpContext.js'
 import { authenticatedByGuards } from '../../src/http/permissions.js'
 import { MiddlewareRegistry } from '../../src/middleware/Pipeline.js'
@@ -127,11 +127,18 @@ describe('route .guard() gate', () => {
     expect(ctx.auth.authenticatedViaGuard).toBe('api')
   })
 
-  it('refuses with E_UNAUTHORIZED when no authenticator is there to ask', async () => {
+  it('refuses with E_UNAUTHORIZED_ACCESS when no authenticator is there to ask', async () => {
     const chain = new MiddlewareRegistry().buildChain([], [], async () => {}, { guards: ['jwt'] })
     const ctx = makeCtx()
     ctx.auth = authFor({ via: 'web' })
-    await expect(chain(ctx, async () => {})).rejects.toBeInstanceOf(E_UNAUTHORIZED)
+    const refusal = chain(ctx, async () => {})
+    await expect(refusal).rejects.toBeInstanceOf(E_UNAUTHORIZED_ACCESS)
+    // The code, status and message @c9up/warden raises for the same refusal.
+    await expect(refusal).rejects.toMatchObject({
+      code: 'E_UNAUTHORIZED_ACCESS',
+      status: 401,
+      message: 'Unauthorized access',
+    })
   })
 })
 

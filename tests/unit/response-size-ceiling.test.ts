@@ -7,8 +7,8 @@
  * doors people actually use.
  */
 import { describe, expect, it } from 'vitest'
-import { isReamError } from '../../src/errors/ReamError.js'
 import { Response } from '../../src/http/Response.js'
+import { errors } from '../../src/index.js'
 
 /** A response that refuses anything over 1 KB. */
 const capped = () => {
@@ -47,14 +47,14 @@ describe('Response > the ceiling covers every body path', () => {
     } catch (error) {
       // A code, not a string to match on: an application deciding what to do
       // with this cannot be asked to parse the message.
-      if (!isReamError(error, 'E_RESPONSE_TOO_LARGE')) {
+      if (!(error instanceof errors.E_RESPONSE_TOO_LARGE)) {
         expect.unreachable('the ceiling has to throw a coded error')
       }
       // And a ceiling that fires without saying which knob raises it just
       // moves the mystery.
-      expect(error.hint).toMatch(/maxResponseBytes/)
-      expect(error.hint).toMatch(/archive/)
-      expect(error.context.ceiling).toBe('1024')
+      expect(error.help).toMatch(/maxResponseBytes/)
+      expect(error.help).toMatch(/archive/)
+      expect(error.ceiling).toBe(1024)
     }
   })
 })

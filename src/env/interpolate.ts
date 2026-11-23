@@ -15,7 +15,7 @@
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { ReamError } from '../errors/ReamError.js'
+import { E_ENV_FILE_NOT_FOUND, E_IDENTIFIER_ALREADY_DEFINED } from '../errors/codes.js'
 
 /**
  * Turn the remainder of an `identifier:rest` value into its final form.
@@ -40,14 +40,7 @@ function readFileIdentifier(value: string, key: string, appRoot: URL): string {
     return readFileSync(fileUrl, 'utf8')
   } catch (error) {
     if (isMissingFile(error)) {
-      throw new ReamError(
-        'E_ENV_FILE_NOT_FOUND',
-        `Cannot process "${key}" env variable. Unable to locate file "${fileURLToPath(fileUrl)}"`,
-        {
-          context: { key, path: fileURLToPath(fileUrl) },
-          hint: 'A `file:` value is read relative to the application root; an absolute path is allowed.',
-        },
-      )
+      throw new E_ENV_FILE_NOT_FOUND(key, fileURLToPath(fileUrl))
     }
     throw error
   }
@@ -66,14 +59,7 @@ const identifiers = new Map<string, IdentifierResolver>([['file', readFileIdenti
  */
 export function defineIdentifier(name: string, resolver: IdentifierResolver): void {
   if (identifiers.has(name)) {
-    throw new ReamError(
-      'E_IDENTIFIER_ALREADY_DEFINED',
-      `The identifier "${name}" is already defined`,
-      {
-        context: { identifier: name },
-        hint: 'Use defineIdentifierIfMissing() to register only when the name is free, or removeIdentifier() first.',
-      },
-    )
+    throw new E_IDENTIFIER_ALREADY_DEFINED([name])
   }
   identifiers.set(name, resolver)
 }

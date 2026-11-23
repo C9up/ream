@@ -417,8 +417,18 @@ describe('Command — test assertions', () => {
     // The failure message has to show the real output, or a failing test says
     // nothing about why.
     expect(() => command.assertLog('nope')).toThrow(/Hello world from "Report"/)
-    expect(() => command.assertLog('[ yellow(warn) ] careful', 'stdout')).toThrow(/on stdout/)
-    expect(() => command.assertFailed()).toThrow(/Expected the command to fail/)
+    expect(() => command.assertLog('[ yellow(warn) ] careful', 'stdout')).toThrow(
+      expect.objectContaining({
+        code: 'E_CONSOLE_ASSERTION_FAILED',
+        message: expect.stringMatching(/on stdout/),
+      }),
+    )
+    expect(() => command.assertFailed()).toThrow(
+      expect.objectContaining({
+        code: 'E_CONSOLE_ASSERTION_FAILED',
+        message: expect.stringMatching(/Expected the command to fail/),
+      }),
+    )
   })
 })
 

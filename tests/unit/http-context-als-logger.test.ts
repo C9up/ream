@@ -10,7 +10,9 @@ function makeCtx(): HttpContext {
 describe('ream > HttpContext > ALS get/getOrFail (AdonisJS parity)', () => {
   it('get() is null and getOrFail() throws outside a request', () => {
     expect(HttpContext.get()).toBe(null)
-    expect(() => HttpContext.getOrFail()).toThrow(/E_HTTP_CONTEXT_NOT_FOUND/)
+    expect(() => HttpContext.getOrFail()).toThrow(
+      expect.objectContaining({ code: 'E_HTTP_CONTEXT_NOT_FOUND' }),
+    )
   })
 
   it('run() makes the ctx the ambient context reachable down the stack', () => {

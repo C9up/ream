@@ -21,7 +21,14 @@ import {
   buildError as rpcError,
 } from '@c9up/comet'
 import { currentNodeEnv } from '../env/nodeEnv.js'
-import { isReamError, ReamError } from '../errors/ReamError.js'
+import {
+  E_MIDDLEWARE_NOT_FOUND,
+  E_RPC_INVALID_METHOD_NAME,
+  E_RPC_RESERVED_METHOD_NAME,
+  E_RPC_UNKNOWN_CONTROLLER_METHOD,
+  E_VALIDATOR_NOT_FOUND,
+  E_VALIDATOR_UNUSABLE,
+} from '../errors/codes.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import {
   authenticatedByGuards,
@@ -323,15 +330,10 @@ export class RpcRouter {
    */
   method(name: string, handler: RpcHandler): RpcMethodBuilder {
     if (typeof name !== 'string' || name === '') {
-      throw new ReamError(
-        'E_RPC_INVALID_METHOD_NAME',
-        'An RPC method name must be a non-empty string',
-      )
+      throw new E_RPC_INVALID_METHOD_NAME()
     }
     if (name.startsWith('rpc.')) {
-      throw new ReamError('E_RPC_RESERVED_METHOD_NAME', `'${name}' is a reserved RPC method name`, {
-        hint: 'JSON-RPC 2.0 reserves names starting with "rpc." for rpc-internal methods; pick another prefix.',
-      })
+      throw new E_RPC_RESERVED_METHOD_NAME([name])
     }
     const def: RpcMethodDefinition = {
       name,
@@ -362,10 +364,9 @@ export class RpcRouter {
   ): void {
     for (const methodName of methods) {
       if (!isControllerMethod(controller.prototype, methodName)) {
-        throw new ReamError(
-          'E_RPC_UNKNOWN_CONTROLLER_METHOD',
+        throw new E_RPC_UNKNOWN_CONTROLLER_METHOD([
           `${controller.name} has no method '${String(methodName)}' to expose as an RPC method`,
-        )
+        ])
       }
     }
     for (const methodName of methods) {
@@ -379,9 +380,9 @@ export class RpcRouter {
           : Reflect.construct(controller, [])
         const handler = Reflect.get(instance, methodName)
         if (typeof handler !== 'function') {
-          throw new Error(
+          throw new E_RPC_UNKNOWN_CONTROLLER_METHOD([
             `RPC method '${prefix}.${methodName}' is not a function on ${controller.name}`,
-          )
+          ])
         }
         return handler.call(instance, ctx, params)
       })
@@ -559,14 +560,14 @@ export class RpcRouter {
       ? await this.#container.resolve<MiddlewareRegistry>('middleware')
       : undefined
     if (!registry) {
-      throw new Error(
-        `[E_MIDDLEWARE_NOT_FOUND] RPC middleware [${names.join(', ')}] is declared but no middleware registry is wired into the RpcRouter.`,
-      )
+      throw new E_MIDDLEWARE_NOT_FOUND([
+        `RPC middleware [${names.join(', ')}] is declared but no middleware registry is wired into the RpcRouter.`,
+      ])
     }
     const fns = names.map((name) => {
       const mw = registry.get(name)
       if (!mw) {
-        throw new Error(`[E_MIDDLEWARE_NOT_FOUND] Named middleware '${name}' is not registered.`)
+        throw new E_MIDDLEWARE_NOT_FOUND([`Named middleware '${name}' is not registered.`])
       }
       return mw
     })
@@ -598,7 +599,7 @@ export class RpcRouter {
         const token = `validator:${def.validator}`
         if (!this.#container?.has(token)) {
           const detail = `Validator '${def.validator}' is not registered (bind container.singleton('${token}', () => schema)).`
-          reportFailure(ctx, new Error(detail), method, id, detail)
+          reportFailure(ctx, new E_VALIDATOR_NOT_FOUND([detail]), method, id, detail)
           return internalError(detail, id)
         }
         const validator = await this.#container.resolve<RuntimeValidator>(token)
@@ -612,9 +613,10 @@ export class RpcRouter {
           // Caught here rather than below so a validator's error is never
           // honoured as a domain error: a rule hitting the database throws
           // whatever the driver throws.
-          const detail = isReamError(err, 'E_VALIDATOR_UNUSABLE')
-            ? `Validator '${def.validator}' exposes no usable validate method.`
-            : `Validator '${def.validator}' failed: ${err instanceof Error ? err.message : String(err)}`
+          const detail =
+            err instanceof E_VALIDATOR_UNUSABLE
+              ? `Validator '${def.validator}' exposes no usable validate method.`
+              : `Validator '${def.validator}' failed: ${err instanceof Error ? err.message : String(err)}`
           reportFailure(ctx, err, method, id, detail)
           return internalError(detail, id)
         }

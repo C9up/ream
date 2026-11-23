@@ -1,4 +1,5 @@
-import { ReamError } from '../errors/ReamError.js'
+import type { Exception } from '@c9up/flare'
+import { E_SESSION_TEMPLATE_ENGINE_UNUSABLE } from '../errors/codes.js'
 
 /**
  * The flash-message tags AdonisJS's session publishes to templates.
@@ -137,14 +138,8 @@ const loadInker: EnginePackageLoader = () => {
   return import(/* @vite-ignore */ specifier)
 }
 
-function unusable(detail: string): ReamError {
-  return new ReamError(
-    'E_SESSION_TEMPLATE_ENGINE_UNUSABLE',
-    `The template engine is installed but the session tags cannot be registered: ${detail}`,
-    {
-      hint: '`@c9up/inker` must default-export its plugin registrar (`inker.use(plugin)`), whose plugins receive an engine with `registerTag()`.',
-    },
-  )
+function unusable(detail: string): Exception {
+  return new E_SESSION_TEMPLATE_ENGINE_UNUSABLE([detail])
 }
 
 /**

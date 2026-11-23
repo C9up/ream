@@ -26,13 +26,25 @@ describe('router > controller registry + string handler reference', () => {
   it('throws at index build when the referenced controller is unregistered', () => {
     const router = new Router()
     router.get('/users', 'GhostController.index')
-    expect(() => router.match('GET', '/users')).toThrow(/E_UNREGISTERED_CONTROLLER/)
+    expect(() => router.match('GET', '/users')).toThrow(
+      expect.objectContaining({ code: 'E_UNREGISTERED_CONTROLLER' }),
+    )
   })
 
   it('rejects a malformed reference (no method) at registration', () => {
     const router = new Router()
-    expect(() => router.get('/x', 'NoMethod')).toThrow(/Invalid controller reference/)
-    expect(() => router.get('/y', 'Trailing.')).toThrow(/Invalid controller reference/)
+    expect(() => router.get('/x', 'NoMethod')).toThrow(
+      expect.objectContaining({
+        code: 'E_INVALID_CONTROLLER_REFERENCE',
+        message: expect.stringMatching(/Invalid controller reference/),
+      }),
+    )
+    expect(() => router.get('/y', 'Trailing.')).toThrow(
+      expect.objectContaining({
+        code: 'E_INVALID_CONTROLLER_REFERENCE',
+        message: expect.stringMatching(/Invalid controller reference/),
+      }),
+    )
   })
 })
 

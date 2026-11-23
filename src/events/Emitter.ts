@@ -18,6 +18,11 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
+import {
+  E_APP_MISSING_DEFAULT_EXPORT,
+  E_EVENTS_INVALID_ARGUMENT,
+  E_EVENTS_MISSING_LISTENER_METHOD,
+} from '../errors/codes.js'
 import { safeJsonParse } from '../utils/safeJsonParse.js'
 import { type BufferedEventName, EventsBuffer } from './EventsBuffer.js'
 import type { EventBus } from './native.js'
@@ -375,9 +380,7 @@ export class Emitter {
       : Reflect.construct(target, [])
     const handler: unknown = Reflect.get(instance, method)
     if (typeof handler !== 'function') {
-      throw new Error(
-        `Missing method "${method}" on listener ${String(Reflect.get(target, 'name'))}`,
-      )
+      throw new E_EVENTS_MISSING_LISTENER_METHOD([method, String(Reflect.get(target, 'name'))])
     }
     return Reflect.apply(handler, instance, [data])
   }
@@ -617,7 +620,7 @@ export class Emitter {
     const pattern = typeof patternOrListener === 'string' ? patternOrListener : '**'
     const listener = typeof patternOrListener === 'string' ? maybeListener : patternOrListener
     if (listener === undefined) {
-      throw new TypeError('onAny() requires a listener')
+      throw new E_EVENTS_INVALID_ARGUMENT(['onAny() requires a listener'])
     }
     const id = await this.#subscribeAny(pattern, listener)
 
@@ -882,9 +885,9 @@ async function importDefault(importer: LazyListenerImport): Promise<AnyListenerC
   const exported: unknown =
     module !== null && typeof module === 'object' ? Reflect.get(module, 'default') : undefined
   if (!isConstructor(exported)) {
-    throw new Error(
+    throw new E_APP_MISSING_DEFAULT_EXPORT([
       `Missing "export default" of a listener class in the module imported by ${importer.name || 'a lazy listener'}`,
-    )
+    ])
   }
   return exported
 }

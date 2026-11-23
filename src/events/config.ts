@@ -1,4 +1,4 @@
-import { EventsError } from '../errors/ModuleErrors.js'
+import { E_EVENTS_UNSUPPORTED_OPTION, E_EVENTS_UNSUPPORTED_STORE } from '../errors/codes.js'
 
 /**
  * `config/events.ts`.
@@ -29,17 +29,17 @@ export function defineConfig(config: EventsConfig): EventsConfig {
 export function checkEventsConfig(config: unknown): EventsConfig {
   if (config === undefined || config === null) return { store: 'memory' }
   if (typeof config !== 'object' || Array.isArray(config)) {
-    throw new EventsError('E_EVENTS_UNSUPPORTED_OPTION', 'config/events.ts must export an object', {
-      hint: "export default defineConfig({ store: 'memory' })",
-    })
+    throw Object.assign(
+      new E_EVENTS_UNSUPPORTED_OPTION(['config/events.ts must export an object']),
+      { help: "export default defineConfig({ store: 'memory' })" },
+    )
   }
   for (const key of Object.keys(config)) {
     if (key !== 'store') {
-      throw new EventsError(
-        'E_EVENTS_UNSUPPORTED_OPTION',
-        `config/events.ts: '${key}' is not an events option`,
+      throw Object.assign(
+        new E_EVENTS_UNSUPPORTED_OPTION([`config/events.ts: '${key}' is not an events option`]),
         {
-          hint:
+          help:
             key === 'retries'
               ? 'Delivery retries are not available from JavaScript yet; remove the option.'
               : "The only option is store: 'memory'.",
@@ -49,13 +49,7 @@ export function checkEventsConfig(config: unknown): EventsConfig {
   }
   const store: unknown = Reflect.get(config, 'store')
   if (store !== undefined && store !== 'memory') {
-    throw new EventsError(
-      'E_EVENTS_UNSUPPORTED_STORE',
-      `config/events.ts: store '${String(store)}' is not available`,
-      {
-        hint: "Only the in-memory store exists in this build; use store: 'memory'.",
-      },
-    )
+    throw new E_EVENTS_UNSUPPORTED_STORE([String(store)])
   }
   return { store: 'memory' }
 }

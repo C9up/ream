@@ -21,6 +21,7 @@
  */
 
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto'
+import { Exception } from '@c9up/flare'
 import { hmacSign, hmacVerify } from './crypto.js'
 
 /** The 96-bit nonce GCM is specified for. */
@@ -28,22 +29,27 @@ const GCM_IV_BYTES = 12
 /** The full 128-bit authentication tag — never a truncated one. */
 const GCM_TAG_BYTES = 16
 
-/** Raised when no APP_KEY is configured (AdonisJS `E_MISSING_APP_KEY`). */
-export class E_MISSING_APP_KEY extends Error {
-  readonly code = 'E_MISSING_APP_KEY' as const
-  constructor() {
-    super('Missing APP_KEY. Set it in your environment before encrypting anything.')
-    this.name = 'E_MISSING_APP_KEY'
-  }
+/**
+ * Raised when no key (`APP_KEY`) is configured. The feature that needed it,
+ * when the caller knows, is named on `help`.
+ */
+export class E_MISSING_ENCRYPTER_KEY extends Exception {
+  static override code = 'E_MISSING_ENCRYPTER_KEY'
+  static override message = 'Missing key. The key is required to encrypt values'
+  static override help = 'Set APP_KEY in the environment (`ream generate:key` makes one).'
 }
 
-/** Raised when the APP_KEY is too short, or is a value everyone already has. */
-export class E_INSECURE_APP_KEY extends Error {
-  readonly code = 'E_INSECURE_APP_KEY' as const
-  constructor(reason = 'it must be at least 16 characters') {
-    super(`APP_KEY is not usable — ${reason}.`)
-    this.name = 'E_INSECURE_APP_KEY'
-  }
+/**
+ * Raised when the key (`APP_KEY`) is shorter than 16 characters.
+ *
+ * DEVIATION (named): ream also refuses a key published in scaffolding and
+ * tutorials, with its own message, because anyone can read it.
+ */
+export class E_INSECURE_ENCRYPTER_KEY extends Exception {
+  static override code = 'E_INSECURE_ENCRYPTER_KEY'
+  static override message = 'The value of your key should be at least 16 characters long'
+  static override help =
+    'Use a random key of at least 16 characters, ideally 32 bytes (`ream generate:key`).'
 }
 
 /**
@@ -81,11 +87,11 @@ export class CookieSigner {
   constructor(secret: string) {
     // Validated as AdonisJS does: an absent or trivially short key is a
     // configuration error, not something to discover at decrypt time.
-    if (typeof secret !== 'string' || secret.length === 0) throw new E_MISSING_APP_KEY()
-    if (secret.length < 16) throw new E_INSECURE_APP_KEY()
+    if (typeof secret !== 'string' || secret.length === 0) throw new E_MISSING_ENCRYPTER_KEY()
+    if (secret.length < 16) throw new E_INSECURE_ENCRYPTER_KEY()
     if (PUBLICLY_KNOWN_KEYS.has(secret.trim().toLowerCase())) {
-      throw new E_INSECURE_APP_KEY(
-        'it is a placeholder from the scaffolding, which everyone can read. Run `ream generate:key`',
+      throw new E_INSECURE_ENCRYPTER_KEY(
+        'The key is a placeholder from the scaffolding, which everyone can read. Run `ream generate:key`',
       )
     }
     this.#secret = secret

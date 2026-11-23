@@ -5,7 +5,7 @@
  * (Story 28.1). This class:
  *   - Lazily loads the NAPI `.node` binary on first instantiation.
  *   - Adapts the native surface to a typed TS API.
- *   - Translates `napi::Error` JSON payloads into `ReamError`.
+ *   - Translates `napi::Error` JSON payloads into the `E_SCHEDULER_*` errors.
  *   - Tracks registered cron expressions locally so `listTasks()` can
  *     return them (the Rust side does not expose task metadata today).
  *
@@ -13,7 +13,21 @@
  */
 
 import { performance } from 'node:perf_hooks'
-import { ReamError } from '../errors/ReamError.js'
+import type { Exception } from '@c9up/flare'
+import {
+  E_SCHEDULE_INVALID_CALLBACK,
+  E_SCHEDULE_INVALID_ERROR_REPORTER,
+  E_SCHEDULE_INVALID_EVENT_SINK,
+  E_SCHEDULE_INVALID_LOCK_BACKEND,
+  E_SCHEDULE_INVALID_LOCK_TTL,
+  E_SCHEDULE_INVALID_TASK_NAME,
+  E_SCHEDULE_TASK_TIMEOUT,
+  E_SCHEDULE_TASK_UNKNOWN,
+  E_SCHEDULER_CRON_NO_FIRE,
+  E_SCHEDULER_DUPLICATE_TASK,
+  E_SCHEDULER_INVALID_CRON,
+  E_SCHEDULER_NATIVE_ERROR,
+} from '../errors/codes.js'
 import { loadNapi } from '../helpers/napi-loader.js'
 import type { LockBackend } from './locks/LockBackend.js'
 import type { ErrorReporter } from './observability/ErrorReporter.js'
@@ -132,33 +146,57 @@ function loadNative(): NativeModule {
   native = loadNapi<NativeModule>({
     binaryName: 'scheduler',
     callerMetaUrl: import.meta.url,
-    errorCodePrefix: 'SCHEDULER',
   })
   return native
 }
 
-/**
- * Convert a thrown native error into a `ReamError`. Prefers parsing the
- * JSON payload shipped by Rust (`ream_napi_core::ReamError::into()`);
- * falls back to wrapping opaque errors under `E_SCHEDULER_NATIVE_ERROR`
- * so scheduler context is never lost.
- */
-function translateNativeError(e: unknown): ReamError {
-  const asError = e instanceof Error ? e : new Error(String(e))
-  const parsed = ReamError.fromNapi(asError)
-  // `fromNapi` returns an `E_UNKNOWN`-coded error when the message is not
-  // a JSON payload. Preserve that context under a scheduler-specific
-  // code so callers can trace the failure back to this layer.
-  if (parsed.code === 'E_UNKNOWN') {
-    return new ReamError(
-      'E_SCHEDULER_NATIVE_ERROR',
-      `ream-scheduler NAPI call failed: ${asError.message}`,
-      {
-        hint: 'This is likely a bug in the scheduler. Please file an issue with the stack trace.',
-      },
-    )
+/** The errors the native scheduler raises with a code of its own, by that code. */
+const NATIVE_ERRORS = {
+  INVALID_CRON: E_SCHEDULER_INVALID_CRON,
+  CRON_NO_FIRE: E_SCHEDULER_CRON_NO_FIRE,
+  DUPLICATE_TASK: E_SCHEDULER_DUPLICATE_TASK,
+} as const
+
+function isNativeErrorCode(code: unknown): code is keyof typeof NATIVE_ERRORS {
+  return typeof code === 'string' && Object.hasOwn(NATIVE_ERRORS, code)
+}
+
+/** The fields of the JSON payload `ream_napi_core::ReamError` ships in a message. */
+function readNativePayload(message: string): { code: unknown; message: unknown; hint: unknown } {
+  try {
+    const parsed: unknown = JSON.parse(message)
+    if (typeof parsed !== 'object' || parsed === null)
+      return { code: undefined, message, hint: undefined }
+    return {
+      code: Reflect.get(parsed, 'code'),
+      message: Reflect.get(parsed, 'message'),
+      hint: Reflect.get(parsed, 'hint'),
+    }
+  } catch {
+    return { code: undefined, message, hint: undefined }
   }
-  return parsed
+}
+
+/**
+ * Rethrow a native error as the scheduler error it means. The Rust side
+ * ships `{ code, message, hint }` as JSON in the message; a refused cron
+ * expression, one that never fires and a duplicate task name each have their
+ * own code, and anything else (a poisoned lock, a caught panic, a message that
+ * is not that JSON) is `E_SCHEDULER_NATIVE_ERROR`. The native error is the
+ * `cause`.
+ */
+function translateNativeError(e: unknown): Exception {
+  const raw = e instanceof Error ? e.message : String(e)
+  const payload = readNativePayload(raw)
+  const text = typeof payload.message === 'string' ? payload.message : raw
+  const error = isNativeErrorCode(payload.code)
+    ? new NATIVE_ERRORS[payload.code]([text], { cause: e })
+    : new E_SCHEDULER_NATIVE_ERROR(
+        [typeof payload.code === 'string' ? `[${payload.code}] ${text}` : text],
+        { cause: e },
+      )
+  if (typeof payload.hint === 'string') error.help = payload.hint
+  return error
 }
 
 /**
@@ -203,37 +241,27 @@ export class Scheduler {
     if (options.lockBackend !== undefined) {
       const be = options.lockBackend as Partial<LockBackend>
       if (typeof be.acquire !== 'function' || typeof be.release !== 'function') {
-        throw new ReamError(
-          'E_SCHEDULE_INVALID_LOCK_BACKEND',
-          'Scheduler options.lockBackend must implement acquire(name, ttlMs) and release(name)',
-        )
+        throw new E_SCHEDULE_INVALID_LOCK_BACKEND()
       }
     }
     if (options.defaultLockTtlMs !== undefined) {
       if (!Number.isFinite(options.defaultLockTtlMs) || options.defaultLockTtlMs <= 0) {
-        throw new ReamError(
-          'E_SCHEDULE_INVALID_LOCK_TTL',
-          `Scheduler options.defaultLockTtlMs must be a finite positive number, got ${options.defaultLockTtlMs}`,
-          {
-            hint: 'Use a millisecond value greater than zero (typical range 1_000 – 600_000).',
-          },
+        throw Object.assign(
+          new E_SCHEDULE_INVALID_LOCK_TTL([
+            `Scheduler options.defaultLockTtlMs must be a finite positive number, got ${options.defaultLockTtlMs}`,
+          ]),
+          { help: 'Use a millisecond value greater than zero (typical range 1_000 – 600_000).' },
         )
       }
     }
     if (options.eventSink !== undefined) {
       const sink = options.eventSink as Partial<ScheduleEventSink>
       if (typeof sink.emit !== 'function') {
-        throw new ReamError(
-          'E_SCHEDULE_INVALID_EVENT_SINK',
-          'Scheduler options.eventSink must implement emit(event)',
-        )
+        throw new E_SCHEDULE_INVALID_EVENT_SINK()
       }
     }
     if (options.errorReporter !== undefined && typeof options.errorReporter !== 'function') {
-      throw new ReamError(
-        'E_SCHEDULE_INVALID_ERROR_REPORTER',
-        'Scheduler options.errorReporter must be a function',
-      )
+      throw new E_SCHEDULE_INVALID_ERROR_REPORTER()
     }
     const mod = options.nativeModule ?? loadNative()
     this.#inner = new mod.RustScheduler()
@@ -375,16 +403,10 @@ export class Scheduler {
     callback: (payload: ScheduleInvocation) => void | Promise<void>,
   ): void {
     if (typeof callback !== 'function') {
-      throw new ReamError(
-        'E_SCHEDULE_INVALID_CALLBACK',
-        `Scheduler.register expected a function callback for task '${name}', got ${typeof callback}`,
-      )
+      throw new E_SCHEDULE_INVALID_CALLBACK([name, typeof callback])
     }
     if (name === '') {
-      throw new ReamError(
-        'E_SCHEDULE_INVALID_TASK_NAME',
-        'Scheduler.register requires a non-empty task name',
-      )
+      throw new E_SCHEDULE_INVALID_TASK_NAME()
     }
     // Capture-at-register: the active lock backend is frozen per-task
     // at registration time (observability sinks are read live via
@@ -536,13 +558,7 @@ export class Scheduler {
       // Notify the observability boundary so operator typos leave a
       // trace. No event is emitted — events are reserved for
       // real task invocations.
-      this.#report(
-        new ReamError(
-          'E_SCHEDULE_TASK_UNKNOWN',
-          `runTaskNow called with unknown task name: '${name}'`,
-        ),
-        name,
-      )
+      this.#report(new E_SCHEDULE_TASK_UNKNOWN([name]), name)
       return { outcome: 'unknown', durationMs: 0 }
     }
 
@@ -559,10 +575,7 @@ export class Scheduler {
                 resolve({
                   outcome: 'failed',
                   durationMs: options.timeoutMs ?? 0,
-                  error: new ReamError(
-                    'E_SCHEDULE_TASK_TIMEOUT',
-                    `Task '${name}' did not complete within ${options.timeoutMs} ms (background execution continues)`,
-                  ),
+                  error: new E_SCHEDULE_TASK_TIMEOUT([name, String(options.timeoutMs)]),
                 })
               }, options.timeoutMs)
             }),

@@ -14,6 +14,11 @@ import { parseQueryString } from './bodyparser/qsParse.js'
 import type { Container } from './container/Container.js'
 import { debugHttp } from './debug.js'
 import { hotReloadCount } from './dev/hmr.js'
+import {
+  E_CONTROLLER_METHOD_NOT_FOUND,
+  E_REAM_INTERNAL,
+  E_VALIDATOR_NOT_FOUND,
+} from './errors/codes.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
@@ -24,6 +29,7 @@ import type {
   RuntimeValidator,
 } from './middleware/Pipeline.js'
 import { composeMiddleware } from './middleware/Pipeline.js'
+import { noteHandledError } from './profiler/handledError.js'
 import type { AnyConstructor, RouteDefinition, Router } from './router/Router.js'
 import type { CookieSigner } from './security/CookieSigner.js'
 import type { SignedUrl } from './security/SignedUrl.js'
@@ -179,6 +185,53 @@ export function createHttpKernel(
     if (c.has('logger')) baseLogger = await c.resolve<ChildLoggerSource>('logger')
   }
 
+  /**
+   * Turn an error into the response, where it was thrown: the middleware
+   * chain calls this at the layer an error leaves, as upstream's runner calls
+   * its error handler, so every outer layer sees its `next()` resolve and runs
+   * the code after it. Never throws: a failing handler answers 500.
+   */
+  const respondToError = async (error: unknown, ctx: HttpContext): Promise<void> => {
+    // The profiler, when one wraps this request, records what broke.
+    noteHandledError(error)
+    // If the handler opened an SSE stream via `response.sse()` and
+    // THEN threw, the reserved stream id is still on the response.
+    // Tear it down before building the error response — otherwise
+    // serializeResponse emits `streamId` next to an error body and
+    // the HyperServer keeps feeding a dead stream slot forever.
+    await ctx.response.abortStream()
+    // A socket registered for a handshake that ends in an error never opens.
+    ctx.response.abortWebSocket()
+    try {
+      // REPORT first, then handle — the AdonisJS order
+      // (`#requestErrorResponder`: `await report(error, ctx)` before
+      // `handle`). Handling first meant a throwing `handle()` fell into the
+      // catch below and the error was never reported: it vanished from the
+      // logs and the operator saw only "ExceptionHandler failed".
+      await handler.report(error, ctx)
+      await handler.handle(error, ctx)
+    } catch (handlerError) {
+      console.error('ExceptionHandler failed:', handlerError)
+      ctx.response
+        .status(500)
+        .json({ error: { code: 'E_HANDLER_FAILURE', message: 'An internal error occurred' } })
+    }
+
+    if (config.onError) {
+      config.onError(error, ctx)
+    }
+
+    // Core domain event: a request raised an exception. Fire-and-forget
+    // through the bus when events are wired (error path only — zero cost on
+    // the happy path). Emitter isolates listener failures from the response.
+    ctx.events?.emit('exception', {
+      id: ctx.id,
+      method: ctx.request.method(),
+      path: ctx.request.url(),
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+
   return async (reqData: HttpKernelRequest): Promise<HttpKernelResponse> => {
     // The Rust HyperServer hands the request as a typed JS object via napi
     // `to_js_value` (no JSON intermediate). Serverless adapters that pass a
@@ -280,7 +333,7 @@ export function createHttpKernel(
       //    Server MW → [route match check] → Router MW → Route named MW → Route inline MW → Guards → Handler
       const coreHandler: MiddlewareFunction = async (innerCtx) => {
         if (!match) {
-          throw new E_ROUTE_NOT_FOUND(method, reqData.path)
+          throw new E_ROUTE_NOT_FOUND([method, reqData.path])
         }
 
         const hotAt = hotReloadCount()
@@ -315,9 +368,9 @@ export function createHttpKernel(
           } else if (match.route.handler) {
             routeHandler = match.route.handler
           } else {
-            throw new Error(
+            throw new E_REAM_INTERNAL([
               `Route ${match.route.method} ${match.route.path} has neither controller nor handler`,
-            )
+            ])
           }
 
           // Merge route-level guards with controller method decorator metadata (once)
@@ -343,10 +396,10 @@ export function createHttpKernel(
             match.route.validators.map((name) => {
               const token = `validator:${name}`
               if (!config.container?.has(token)) {
-                throw new Error(
-                  `[E_VALIDATOR_NOT_FOUND] Route validator '${name}' is not registered. ` +
+                throw new E_VALIDATOR_NOT_FOUND([
+                  `Route validator '${name}' is not registered. ` +
                     `Bind it with container.singleton('${token}', () => schema({ ... })).`,
-                )
+                ])
               }
               return config.container.resolve<RuntimeValidator>(token)
             }),
@@ -365,7 +418,7 @@ export function createHttpKernel(
               : async (c) => {
                   await routeHandler(c)
                 },
-            { guards, roles, permissions, validators },
+            { guards, roles, permissions, validators, onError: respondToError },
           )
 
           cached = { chain, hotAt }
@@ -391,7 +444,7 @@ export function createHttpKernel(
       // HttpContext ALS so HttpContext.get()/getOrFail() reach this request
       // anywhere down the call stack (AdonisJS parity) — transparent to the
       // pipeline itself.
-      const fullPipeline = composeMiddleware([...serverMw, coreHandler])
+      const fullPipeline = composeMiddleware([...serverMw, coreHandler], respondToError)
       await HttpContext.run(ctx, () => fullPipeline(ctx, async () => {}))
 
       ctx.events?.emit('http:response', {
@@ -415,42 +468,9 @@ export function createHttpKernel(
       ctx.response.runFinishCallbacks()
       return serialized
     } catch (error) {
-      // If the handler opened an SSE stream via `response.sse()` and
-      // THEN threw, the reserved stream id is still on the response.
-      // Tear it down before building the error response — otherwise
-      // serializeResponse emits `streamId` next to an error body and
-      // the HyperServer keeps feeding a dead stream slot forever.
-      await ctx.response.abortStream()
-      // A socket registered for a handshake that ends in an error never opens.
-      ctx.response.abortWebSocket()
-      try {
-        // REPORT first, then handle — the AdonisJS order
-        // (`#requestErrorResponder`: `await report(error, ctx)` before
-        // `handle`). Handling first meant a throwing `handle()` fell into the
-        // catch below and the error was never reported: it vanished from the
-        // logs and the operator saw only "ExceptionHandler failed".
-        await handler.report(error, ctx)
-        await handler.handle(error, ctx)
-      } catch (handlerError) {
-        console.error('ExceptionHandler failed:', handlerError)
-        ctx.response
-          .status(500)
-          .json({ error: { code: 'E_HANDLER_FAILURE', message: 'An internal error occurred' } })
-      }
-
-      if (config.onError) {
-        config.onError(error, ctx)
-      }
-
-      // Core domain event: a request raised an exception. Fire-and-forget
-      // through the bus when events are wired (error path only — zero cost on
-      // the happy path). Emitter isolates listener failures from the response.
-      ctx.events?.emit('exception', {
-        id: ctx.id,
-        method: reqData.method,
-        path: reqData.path,
-        error: error instanceof Error ? error.message : String(error),
-      })
+      // Only what fails outside the chain lands here (the chain answers its
+      // own errors); it is answered the same way.
+      await respondToError(error, ctx)
 
       ctx.events?.emit('http:response', {
         id: correlationId,
@@ -490,9 +510,7 @@ function createControllerHandler(
         ? Reflect.get(instance, controller.method)
         : undefined
     if (typeof method !== 'function') {
-      throw new Error(
-        `Controller method '${controller.method}' not found on ${controller.target.name}`,
-      )
+      throw new E_CONTROLLER_METHOD_NOT_FOUND([controller.method, controller.target.name])
     }
     await Reflect.apply(method, instance, [ctx])
   }

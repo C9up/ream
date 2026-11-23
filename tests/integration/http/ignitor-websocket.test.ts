@@ -5,9 +5,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createHyperServerFactory } from '../../../src/bootstrap/hyper-server.js'
 import type { ServerWebSocket } from '../../../src/http/WebSocket.js'
-import { Ignitor } from '../../../src/index.js'
+import { errors, Ignitor } from '../../../src/index.js'
 import type { MiddlewareFunction } from '../../../src/middleware/Pipeline.js'
-import { TestClient, WebSocketRefused } from '../../../src/testing/TestClient.js'
+import { TestClient } from '../../../src/testing/TestClient.js'
 
 const networkAllowed = process.env.REAM_SKIP_NETWORK_TESTS !== '1'
 const describeIfNetwork = networkAllowed ? describe : describe.skip
@@ -86,8 +86,9 @@ describeIfNetwork('Ignitor > WebSocket routes', () => {
 
   it('runs the route middleware on the handshake: refused before any socket exists', async () => {
     const refused = await client.ws('/private').catch((error: unknown) => error)
-    expect(refused).toBeInstanceOf(WebSocketRefused)
-    expect(refused instanceof WebSocketRefused && refused.status).toBe(401)
+    expect(refused).toBeInstanceOf(errors.E_TEST_CLIENT_WEBSOCKET_REFUSED)
+    expect(refused instanceof errors.E_TEST_CLIENT_WEBSOCKET_REFUSED && refused.status).toBe(401)
+    expect(refused).toMatchObject({ code: 'E_TEST_CLIENT_WEBSOCKET_REFUSED' })
     expect(guardedHandlerRuns).toBe(0)
 
     const socket = await client.ws('/private', { headers: { authorization: 'Bearer ok' } })
@@ -109,7 +110,7 @@ describeIfNetwork('Ignitor > WebSocket routes', () => {
     socket.close()
     // Not offered: the handler's acceptProtocol throws, the handshake fails.
     const refused = await client.ws('/chat', { protocols: ['chat.v1'] }).catch((e: unknown) => e)
-    expect(refused instanceof WebSocketRefused && refused.status).toBe(500)
+    expect(refused instanceof errors.E_TEST_CLIENT_WEBSOCKET_REFUSED && refused.status).toBe(500)
   })
 
   it('lets the server close with its own code once queued messages are out', async () => {
@@ -120,7 +121,7 @@ describeIfNetwork('Ignitor > WebSocket routes', () => {
 
   it('turns a handler that throws into a plain error response', async () => {
     const refused = await client.ws('/broken').catch((error: unknown) => error)
-    expect(refused instanceof WebSocketRefused && refused.status).toBe(500)
+    expect(refused instanceof errors.E_TEST_CLIENT_WEBSOCKET_REFUSED && refused.status).toBe(500)
   })
 
   it('closes a message over http.webSocket.maxMessageSize with 1009', async () => {
@@ -137,7 +138,7 @@ describeIfNetwork('Ignitor > WebSocket routes', () => {
     const refused = await client
       .ws('/echo', { headers: { origin: 'https://evil.test' } })
       .catch((error: unknown) => error)
-    expect(refused instanceof WebSocketRefused && refused.status).toBe(403)
+    expect(refused instanceof errors.E_TEST_CLIENT_WEBSOCKET_REFUSED && refused.status).toBe(403)
   })
 })
 

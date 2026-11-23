@@ -3,6 +3,7 @@
  * Uses Rust NAPI via crypto facade when available.
  */
 
+import { E_INVALID_DURATION } from '../errors/codes.js'
 import { durationToSeconds } from '../helpers/duration.js'
 import { constantTimeEq, hmacSign } from './crypto.js'
 
@@ -65,9 +66,9 @@ export class SignedUrl {
  */
 function parseExpiry(value: string | number): number {
   if (typeof value === 'number' && !Number.isFinite(value)) {
-    throw new Error(
+    throw new E_INVALID_DURATION([
       `Cannot read ${value} as a signed URL expiry: it must be a finite number of seconds.`,
-    )
+    ])
   }
   return durationToSeconds(value, 'a signed URL expiry')
 }

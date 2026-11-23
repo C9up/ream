@@ -6,8 +6,14 @@
  * Configured via config/bodyparser.ts.
  */
 
+import type { Exception } from '@c9up/flare'
 import { readModuleConfig } from '../config/moduleConfig.js'
-import { Exception } from '../http/Exception.js'
+import {
+  E_BODYPARSER_CONFIG,
+  E_BODYPARSER_INVALID_JSON,
+  E_ENCODING_UNSUPPORTED,
+  E_REQUEST_ENTITY_TOO_LARGE,
+} from '../errors/codes.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { safeJsonParse } from '../utils/safeJsonParse.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
@@ -171,6 +177,18 @@ export default class BodyParserMiddleware {
     }
 
     const contentType = ctx.request.header('content-type') ?? ''
+
+    // A compressed body is refused rather than parsed as text: the native
+    // server hands the bytes over as they came, and nothing here inflates
+    // them. DEVIATION (named): gzip and deflate are refused too, where the
+    // upstream body parser inflates them; any other encoding is refused there
+    // as well, with this code and status. Multipart bodies are parsed natively
+    // and are not concerned.
+    const encoding = (ctx.request.header('content-encoding') ?? 'identity').trim().toLowerCase()
+    if (encoding !== 'identity' && this.#readsAsText(contentType)) {
+      throw new E_ENCODING_UNSUPPORTED([encoding])
+    }
+
     // A body over its native limit (`bodyTooLarge`) was never kept: `raw()`
     // throws the same 413 below instead of handing back an empty string. The
     // route is already matched here, so an unknown URL answered 404 first.
@@ -228,6 +246,15 @@ export default class BodyParserMiddleware {
     }
 
     await next()
+  }
+
+  /** Whether the body is one of the text sections (json, form, raw) this parser reads. */
+  #readsAsText(contentType: string): boolean {
+    return (
+      matchesType(contentType, this.#config.json.types) ||
+      matchesType(contentType, this.#config.form.types) ||
+      matchesType(contentType, this.#config.raw.types)
+    )
   }
 
   #getLimit(contentType: string): number {
@@ -290,19 +317,13 @@ function parseJsonBody(
 ): Record<string, unknown> {
   if (raw.length === 0) return {}
   if (options.strict && !STRICT_JSON.test(raw)) {
-    throw new Exception('Invalid JSON, only supports object and array', {
-      status: 422,
-      code: 'E_BODYPARSER_INVALID_JSON',
-    })
+    throw new E_BODYPARSER_INVALID_JSON('Invalid JSON, only supports object and array', 422)
   }
   let parsed: unknown
   try {
     parsed = safeJsonParse(raw)
   } catch (error) {
-    throw new Exception(error instanceof Error ? error.message : 'Invalid JSON', {
-      status: 400,
-      code: 'E_BODYPARSER_INVALID_JSON',
-    })
+    throw new E_BODYPARSER_INVALID_JSON(error instanceof Error ? error.message : 'Invalid JSON')
   }
   const normalize = stringNormalizer(options)
   if (normalize) normalizeStringLeaves(parsed, normalize)
@@ -354,7 +375,7 @@ function normalizeStringLeaves(value: unknown, normalize: (value: string) => str
 
 /** The one exception every body-size limit raises (AdonisJS parity). */
 function entityTooLarge(message: string): Exception {
-  return new Exception(message, { status: 413, code: 'E_REQUEST_ENTITY_TOO_LARGE' })
+  return new E_REQUEST_ENTITY_TOO_LARGE([message])
 }
 
 /**
@@ -390,10 +411,10 @@ function assertNoEnabledFlag(config?: BodyParserConfig): void {
   for (const section of ['json', 'form', 'raw', 'multipart'] as const) {
     const value: unknown = config[section]
     if (value !== null && typeof value === 'object' && 'enabled' in value) {
-      throw new Error(
-        `[E_BODYPARSER_CONFIG] \`${section}.enabled\` is no longer supported — AdonisJS has no such option. ` +
+      throw new E_BODYPARSER_CONFIG([
+        `\`${section}.enabled\` is no longer supported — AdonisJS has no such option. ` +
           `To disable this parser, give it no types: \`${section}: { types: [] }\`.`,
-      )
+      ])
     }
   }
 
@@ -403,10 +424,10 @@ function assertNoEnabledFlag(config?: BodyParserConfig): void {
   // getting nothing. Saying so beats letting it keep believing.
   const multipart: unknown = config.multipart
   if (multipart !== null && typeof multipart === 'object' && 'tmpDir' in multipart) {
-    throw new Error(
-      '[E_BODYPARSER_CONFIG] `multipart.tmpDir` is not supported — uploaded files are held in ' +
+    throw new E_BODYPARSER_CONFIG([
+      '`multipart.tmpDir` is not supported — uploaded files are held in ' +
         'memory and never written to a temporary directory. Choose the destination when you ' +
         'store the file: `await file.move(directory)`.',
-    )
+    ])
   }
 }

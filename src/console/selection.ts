@@ -18,7 +18,7 @@
 
 import { stdin, stdout } from 'node:process'
 import { clearLine, cursorTo, moveCursor } from 'node:readline'
-import { ReamError } from '../errors/ReamError.js'
+import { E_CONSOLE_EMPTY_CHOICES, E_CONSOLE_NOT_INTERACTIVE } from '../errors/codes.js'
 import { colourise } from './ui.js'
 
 /** One line of the list, as the renderer needs it. */
@@ -66,9 +66,7 @@ const BACKSPACE = ['\u0008', '\u007F']
  */
 export function runSelection(options: SelectionOptions): Promise<SelectionResult> {
   if (options.items.length === 0) {
-    return Promise.reject(
-      new ReamError('E_CONSOLE_EMPTY_CHOICES', `"${options.title}" was asked with no options.`),
-    )
+    return Promise.reject(new E_CONSOLE_EMPTY_CHOICES([options.title]))
   }
 
   const input = options.input ?? stdin
@@ -187,11 +185,9 @@ export function runSelection(options: SelectionOptions): Promise<SelectionResult
 
     try {
       if (!input.isTTY) {
-        throw new ReamError(
-          'E_CONSOLE_NOT_INTERACTIVE',
-          `Cannot prompt for "${options.title}" — stdin is not interactive.`,
-          { hint: 'Pass the value as a flag, or script the answer with prompt.trap(name).' },
-        )
+        throw Object.assign(new E_CONSOLE_NOT_INTERACTIVE([options.title]), {
+          help: 'Pass the value as a flag, or script the answer with prompt.trap(name).',
+        })
       }
       input.setRawMode(true)
       input.resume()

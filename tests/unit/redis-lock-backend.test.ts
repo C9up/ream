@@ -3,8 +3,9 @@
  * scheduled task on every tick.
  */
 import { createHash } from 'node:crypto'
+import type { Exception } from '@c9up/flare'
 import { describe, expect, it, vi } from 'vitest'
-import type { LockRedisClient, ReamError } from '../../src/index.js'
+import type { LockRedisClient } from '../../src/index.js'
 import { locks, RedisLockBackend } from '../../src/index.js'
 
 /** A Redis double honouring the commands the backend issues. */
@@ -155,7 +156,7 @@ describe('RedisLockBackend', () => {
     // acquire the same lock — the outcome locking exists to prevent.
     await expect(backend.acquire('invoices', 0)).rejects.toMatchObject({
       code: 'E_SCHEDULE_INVALID_LOCK_TTL',
-    } satisfies Partial<ReamError>)
+    } satisfies Partial<Exception>)
   })
 
   it('honours a key prefix', async () => {

@@ -75,7 +75,9 @@ describe('events > helix > assertEmitted', () => {
   })
 
   it('throws when no event with that name was emitted', () => {
-    expect(() => assertEmitted([ev('other')], 'order.created')).toThrow(/HELIX_ASSERT_EMITTED/)
+    expect(() => assertEmitted([ev('other')], 'order.created')).toThrow(
+      expect.objectContaining({ code: 'E_EVENTS_ASSERTION_FAILED' }),
+    )
   })
 
   it("throws with '(none)' marker when no events at all were collected", () => {
@@ -141,10 +143,10 @@ describe('events > helix > waitForEvent', () => {
     await expect(promise).resolves.toMatchObject({ name: 'later' })
   })
 
-  it('rejects with HELIX_TIMEOUT when the event never appears', async () => {
-    await expect(waitForEvent([], 'nope', { interval: 5, timeout: 30 })).rejects.toThrow(
-      /HELIX_TIMEOUT/,
-    )
+  it('rejects with E_EVENTS_TIMEOUT when the event never appears', async () => {
+    await expect(waitForEvent([], 'nope', { interval: 5, timeout: 30 })).rejects.toMatchObject({
+      code: 'E_EVENTS_TIMEOUT',
+    })
   })
 
   it('honours a partial payload predicate on the matching event', async () => {
@@ -171,13 +173,16 @@ describe('events > helix > waitForChain', () => {
   })
 
   it('rejects when expectedNames is empty', async () => {
-    await expect(waitForChain([], 'c1', [])).rejects.toThrow(/non-empty/)
+    await expect(waitForChain([], 'c1', [])).rejects.toMatchObject({
+      code: 'E_EVENTS_INVALID_ARGUMENT',
+      message: expect.stringMatching(/non-empty/),
+    })
   })
 
-  it('rejects with HELIX_CHAIN_TIMEOUT when the chain is incomplete', async () => {
+  it('rejects with E_EVENTS_TIMEOUT when the chain is incomplete', async () => {
     const events: CollectedEvent[] = [{ name: 'a', correlationId: 'c1', data: undefined }]
     await expect(
       waitForChain(events, 'c1', ['a', 'b'], { interval: 5, timeout: 30 }),
-    ).rejects.toThrow(/HELIX_CHAIN_TIMEOUT/)
+    ).rejects.toMatchObject({ code: 'E_EVENTS_TIMEOUT', message: expect.stringMatching(/chain/) })
   })
 })

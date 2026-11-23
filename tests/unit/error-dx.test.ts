@@ -1,165 +1,44 @@
+import { Exception } from '@c9up/flare'
 import { describe, expect, it } from 'vitest'
+import { describeFrameworkError } from '../../src/errors/prettyPrintError.js'
 import {
-  AtlasError,
-  ContainerError,
   createPipelineError,
   didYouMean,
-  EventsError,
-  ForgeError,
+  errorDocsUrl,
+  errors,
   findClosestMatches,
   levenshtein,
-  PipelineError,
-  ReamError,
-  RouterError,
-  RuneError,
   validatePipelineConfig,
-  WardenError,
 } from '../../src/index.js'
 import { defined } from '../__helpers__/defined.js'
 
-// === Story 12.1: ReamError structured errors ===
-
-describe('error-dx > ReamError', () => {
-  it('includes all required fields', () => {
-    const err = new ReamError('TEST_ERROR', 'Something went wrong', {
-      context: { key: 'value' },
-      hint: 'Try fixing this',
-      sourceFile: 'app/Order.ts',
-      sourceLine: 42,
-    })
-
-    expect(err.code).toBe('TEST_ERROR')
-    expect(err.message).toBe('Something went wrong')
-    expect(err.context.key).toBe('value')
-    expect(err.hint).toBe('Try fixing this')
-    expect(err.sourceFile).toBe('app/Order.ts')
-    expect(err.sourceLine).toBe(42)
-    expect(err.docsUrl).toBe('https://reamjs.com/en/reference/errors#test-error')
+describe('error-dx > framework errors', () => {
+  it('links a code to its row in the error index', () => {
+    expect(errorDocsUrl('E_CONTAINER_NOT_FOUND')).toBe(
+      'https://reamjs.com/en/reference/errors#e-container-not-found',
+    )
   })
 
-  it('auto-generates docsUrl from code', () => {
-    const err = new ReamError('E_CONTAINER_NOT_FOUND', 'Not found')
-    expect(err.docsUrl).toBe('https://reamjs.com/en/reference/errors#e-container-not-found')
-  })
-
-  it('allows custom docsUrl', () => {
-    const err = new ReamError('CUSTOM', 'msg', { docsUrl: 'https://custom.dev/err' })
-    expect(err.docsUrl).toBe('https://custom.dev/err')
-  })
-
-  it('toDevString shows full box format', () => {
-    const err = new ReamError('E_ATLAS_QUERY_ERROR', 'Invalid query', {
-      context: { table: 'orders', column: 'statsu' },
-      hint: "Column 'statsu' does not exist. Did you mean 'status'?",
-      sourceFile: 'app/modules/order/services/OrderService.ts',
-      sourceLine: 15,
-    })
-
-    const output = err.toDevString()
+  it('renders code, message, advice and docs link in a box', () => {
+    const error = new errors.E_CONTAINER_NOT_FOUND(['mailer', ''])
+    error.help = 'Register it in a provider'
+    const output = describeFrameworkError(error)
     expect(output).toContain('┌')
     expect(output).toContain('└')
-    expect(output).toContain('[E_ATLAS_QUERY_ERROR]')
-    expect(output).toContain('Invalid query')
-    expect(output).toContain('table: orders')
-    expect(output).toContain('column: statsu')
-    expect(output).toContain('Hint:')
-    expect(output).toContain('Docs:')
-    expect(output).toContain('OrderService.ts:15')
+    expect(output).toContain('[E_CONTAINER_NOT_FOUND]')
+    expect(output).toContain("No binding found for 'mailer'.")
+    expect(output).toContain('Hint: Register it in a provider')
+    expect(output).toContain('Docs: https://reamjs.com/en/reference/errors#e-container-not-found')
   })
 
-  it('toProdString shows code + message only', () => {
-    const err = new ReamError('E_ATLAS_QUERY_ERROR', 'Invalid query', {
-      hint: 'secret hint',
-      context: { secret: 'data' },
-    })
-
-    const output = err.toProdString()
-    expect(output).toBe('[E_ATLAS_QUERY_ERROR] Invalid query')
-    expect(output).not.toContain('hint')
-    expect(output).not.toContain('secret')
-  })
-
-  it('includes pipeline stage in dev output', () => {
-    const err = new ReamError('GUARD_FAILED', 'Unauthorized', {
-      pipelineStage: '5/10 (Guard)',
-    })
-
-    const output = err.toDevString()
-    expect(output).toContain('Pipeline: 5/10 (Guard)')
-  })
-
-  it('fromNapi parses JSON error', () => {
-    const napiErr = new Error(
-      JSON.stringify({
-        code: 'NAPI_ERROR',
-        message: 'Rust error',
-        hint: 'Check Rust logs',
-      }),
-    )
-
-    const err = ReamError.fromNapi(napiErr)
-    expect(err.code).toBe('NAPI_ERROR')
-    expect(err.message).toBe('Rust error')
-    expect(err.hint).toBe('Check Rust logs')
-  })
-
-  it('fromNapi wraps non-JSON error', () => {
-    const napiErr = new Error('plain error')
-    const err = ReamError.fromNapi(napiErr)
-    expect(err.code).toBe('E_UNKNOWN')
-    expect(err.message).toBe('plain error')
-  })
-})
-
-// === Module-specific errors ===
-
-describe('error-dx > Module error subclasses', () => {
-  it('ContainerError prefixes code', () => {
-    const err = new ContainerError('NOT_FOUND', 'Binding missing')
-    expect(err.code).toBe('E_CONTAINER_NOT_FOUND')
-    expect(err.name).toBe('ContainerError')
-    expect(err instanceof ReamError).toBe(true)
-  })
-
-  it('AtlasError prefixes code', () => {
-    const err = new AtlasError('QUERY_ERROR', 'Bad query')
-    expect(err.code).toBe('E_ATLAS_QUERY_ERROR')
-    expect(err.name).toBe('AtlasError')
-  })
-
-  it('RouterError prefixes code', () => {
-    const err = new RouterError('NOT_FOUND', 'Route missing')
-    expect(err.code).toBe('E_ROUTER_NOT_FOUND')
-  })
-
-  it('PipelineError prefixes code', () => {
-    const err = new PipelineError('STAGE_FAILED', 'Guard rejected')
-    expect(err.code).toBe('E_PIPELINE_STAGE_FAILED')
-  })
-
-  it('RuneError prefixes code', () => {
-    const err = new RuneError('VALIDATION_FAILED', 'Invalid input')
-    expect(err.code).toBe('E_RUNE_VALIDATION_FAILED')
-  })
-
-  it('WardenError prefixes code', () => {
-    const err = new WardenError('STRATEGY_NOT_FOUND', 'No strategy')
-    expect(err.code).toBe('E_WARDEN_STRATEGY_NOT_FOUND')
-  })
-
-  it('EventsError prefixes code', () => {
-    const err = new EventsError('TIMEOUT', 'Request timed out')
-    expect(err.code).toBe('E_EVENTS_TIMEOUT')
-  })
-
-  it('ForgeError prefixes code', () => {
-    const err = new ForgeError('UNKNOWN_TYPE', 'Bad type')
-    expect(err.code).toBe('E_FORGE_UNKNOWN_TYPE')
-  })
-
-  it('all subclasses inherit docsUrl', () => {
-    const err = new AtlasError('QUERY_ERROR', 'Bad query')
-    expect(err.docsUrl).toBe('https://reamjs.com/en/reference/errors#e-atlas-query-error')
+  it('every error of the bag is a flare Exception named by its code', () => {
+    for (const [code, ErrorClass] of Object.entries(errors)) {
+      expect(ErrorClass.prototype).toBeInstanceOf(Exception)
+      // The one exception, as upstream: the abort error is an
+      // `E_HTTP_EXCEPTION` built by `invoke()`, and carries that code.
+      const expected = code === 'E_HTTP_REQUEST_ABORTED' ? 'E_HTTP_EXCEPTION' : code
+      expect(Reflect.get(ErrorClass, 'code') ?? code).toBe(expected)
+    }
   })
 })
 
@@ -253,21 +132,23 @@ describe('error-dx > Pipeline stage errors', () => {
     expect(err.context.stage).toBe('Guard')
     expect(err.context.position).toBe('5/10')
     expect(err.context.nextStage).toBe('Validate')
-    expect(err.hint).toContain('5/10')
-    expect(err.hint).toContain('Guard')
-    expect(err.hint).toContain('Validate')
+    expect(err.help).toContain('5/10')
+    expect(err.help).toContain('Guard')
+    expect(err.help).toContain('Validate')
+    expect(err.code).toBe('E_PIPELINE_ERROR')
+    expect(err.cause).toBe(original)
   })
 
-  it('createPipelineError preserves ReamError fields', () => {
-    const original = new ReamError('E_WARDEN_UNAUTHORIZED', 'Not authenticated', {
-      sourceFile: 'Guard.ts',
-      sourceLine: 10,
+  it('createPipelineError keeps the code of a coded error', () => {
+    const original = new Exception('Not authenticated', {
+      code: 'E_UNAUTHORIZED_ACCESS',
+      status: 401,
     })
     const err = createPipelineError(4, original)
 
-    expect(err.code).toBe('E_WARDEN_UNAUTHORIZED')
-    expect(err.sourceFile).toBe('Guard.ts')
-    expect(err.sourceLine).toBe(10)
+    expect(err.code).toBe('E_UNAUTHORIZED_ACCESS')
+    expect(err.message).toBe('Not authenticated')
+    expect(err.cause).toBe(original)
   })
 
   it('last stage shows (end) as next', () => {
@@ -291,26 +172,26 @@ describe('error-dx > Pipeline stage errors', () => {
 
 describe('error-dx > validatePipelineConfig', () => {
   it('returns empty for valid config', () => {
-    const errors = validatePipelineConfig({
+    const found = validatePipelineConfig({
       namedMiddleware: { auth: () => {}, throttle: () => {} },
       routes: [{ middleware: ['auth'] }],
     })
-    expect(errors).toEqual([])
+    expect(found).toEqual([])
   })
 
   it('detects unknown middleware on routes', () => {
-    const errors = validatePipelineConfig({
+    const found = validatePipelineConfig({
       namedMiddleware: { auth: () => {} },
       routes: [{ middleware: ['auth', 'nonexistent'] }],
     })
-    expect(errors).toHaveLength(1)
-    expect(defined(errors[0]).code).toBe('E_PIPELINE_UNKNOWN_MIDDLEWARE')
-    expect(defined(errors[0]).message).toContain('nonexistent')
-    expect(defined(errors[0]).context.registered).toContain('auth')
+    expect(found).toHaveLength(1)
+    expect(defined(found[0]).code).toBe('E_PIPELINE_UNKNOWN_MIDDLEWARE')
+    expect(defined(found[0]).message).toContain('nonexistent')
+    expect(defined(found[0]).registered).toContain('auth')
   })
 
   it('returns empty when no routes', () => {
-    const errors = validatePipelineConfig({})
-    expect(errors).toEqual([])
+    const found = validatePipelineConfig({})
+    expect(found).toEqual([])
   })
 })

@@ -97,6 +97,9 @@ describe('ream > ApiResponse accessors (helix method form)', () => {
 describe('ream > ApiResponse assertions', () => {
   it('status shortcuts pass on the matching code and throw otherwise', () => {
     expect(() => new ApiResponse(raw({ status: 200 })).assertOk()).not.toThrow()
+    expect(() => new ApiResponse(raw({ status: 500 })).assertOk()).toThrow(
+      expect.objectContaining({ code: 'E_TEST_CLIENT_ASSERTION_FAILED' }),
+    )
     expect(() => new ApiResponse(raw({ status: 409 })).assertConflict()).not.toThrow()
     expect(() => new ApiResponse(raw({ status: 410 })).assertGone()).not.toThrow()
     expect(() => new ApiResponse(raw({ status: 418 })).assertImATeapot()).not.toThrow()

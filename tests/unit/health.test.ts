@@ -261,9 +261,24 @@ describe('memory checks', () => {
   })
 
   it('rejects a percentage outside 0-100 and an unreadable size', () => {
-    expect(() => new MemoryRSSCheck().warnWhenExceedsPercentage(101)).toThrow(/between 0 and 100/)
-    expect(() => new MemoryHeapCheck().failWhenExceedsPercentage(-1)).toThrow(/between 0 and 100/)
-    expect(() => new MemoryRSSCheck().warnWhenExceeds('plenty')).toThrow(/Invalid byte value/)
+    expect(() => new MemoryRSSCheck().warnWhenExceedsPercentage(101)).toThrow(
+      expect.objectContaining({
+        code: 'E_HEALTH_INVALID_THRESHOLD',
+        message: expect.stringMatching(/between 0 and 100/),
+      }),
+    )
+    expect(() => new MemoryHeapCheck().failWhenExceedsPercentage(-1)).toThrow(
+      expect.objectContaining({
+        code: 'E_HEALTH_INVALID_THRESHOLD',
+        message: expect.stringMatching(/between 0 and 100/),
+      }),
+    )
+    expect(() => new MemoryRSSCheck().warnWhenExceeds('plenty')).toThrow(
+      expect.objectContaining({
+        code: 'E_HEALTH_INVALID_THRESHOLD',
+        message: expect.stringMatching(/Invalid byte value/),
+      }),
+    )
   })
 })
 

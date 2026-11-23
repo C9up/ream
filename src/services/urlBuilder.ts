@@ -14,6 +14,7 @@
  * `signedUrlFor` needs an APP_KEY-backed signer and says so if there is none.
  */
 
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import type { SignedUrlOptions } from '../router/Router.js'
 import { getRouter } from './router.js'
 
@@ -25,7 +26,7 @@ const NOT_READY =
 /** Generate a URL from a named route, filling `:param` placeholders. */
 export function urlFor(name: string, params?: Record<string, string>): string {
   const router = getRouter()
-  if (!router) throw new Error(NOT_READY)
+  if (!router) throw new E_SERVICE_NOT_BOOTED([NOT_READY])
   return router.urlFor(name, params)
 }
 
@@ -36,6 +37,6 @@ export function signedUrlFor(
   options?: SignedUrlOptions,
 ): string {
   const router = getRouter()
-  if (!router) throw new Error(NOT_READY)
+  if (!router) throw new E_SERVICE_NOT_BOOTED([NOT_READY])
   return router.makeSignedUrl(name, params, options)
 }

@@ -1,10 +1,11 @@
+import { Exception } from '@c9up/flare'
 import 'reflect-metadata'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AppContext } from '../../src/index.js'
-import { Container, GraphQLEngine, GraphQLProvider, ReamError } from '../../src/index.js'
+import { Container, GraphQLEngine, GraphQLProvider } from '../../src/index.js'
 
 function buildApp(container: Container): AppContext {
   const config = { get: () => undefined, set: () => {} }
@@ -81,8 +82,8 @@ describe('GraphQLProvider > wired', () => {
       other.register()
       expect.fail('expected register() to throw on a duplicate graphql binding')
     } catch (error) {
-      expect(error).toBeInstanceOf(ReamError)
-      if (error instanceof ReamError) {
+      expect(error).toBeInstanceOf(Exception)
+      if (error instanceof Exception) {
         expect(error.code).toBe('E_GRAPHQL_PROVIDER_ALREADY_REGISTERED')
       }
     }

@@ -5,7 +5,7 @@
  * module exported, and reporting a name that resolved to nothing.
  */
 
-import { ReamError } from '../errors/ReamError.js'
+import { E_CONSOLE_INVALID_COMMAND, E_CONSOLE_INVALID_COMMAND_METADATA } from '../errors/codes.js'
 import type { Logger } from './cliui.js'
 import { type CommandClass, isCommandClass, type SerializedCommand } from './types.js'
 
@@ -41,9 +41,12 @@ export function validateCommand(
   exportPath: string,
 ): asserts command is CommandClass {
   if (isCommandClass(command)) return
-  throw new ReamError('E_CONSOLE_INVALID_COMMAND', `Invalid command exported from ${exportPath}.`, {
-    hint: 'Expected a class with a static commandName, a static description and a run() method.',
-  })
+  throw Object.assign(
+    new E_CONSOLE_INVALID_COMMAND([`Invalid command exported from ${exportPath}.`]),
+    {
+      help: 'Expected a class with a static commandName, a static description and a run() method.',
+    },
+  )
 }
 
 /** The same, for a metadata object a loader published. */
@@ -52,10 +55,7 @@ export function validateCommandMetaData(
   exportPath: string,
 ): asserts metadata is SerializedCommand {
   const invalid = (reason: string): never => {
-    throw new ReamError(
-      'E_CONSOLE_INVALID_COMMAND_METADATA',
-      `Invalid command metadata exported from ${exportPath}: ${reason}.`,
-    )
+    throw new E_CONSOLE_INVALID_COMMAND_METADATA([exportPath, reason])
   }
 
   if (typeof metadata !== 'object' || metadata === null) invalid('expected an object')

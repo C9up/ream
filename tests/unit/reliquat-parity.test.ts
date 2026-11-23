@@ -57,8 +57,9 @@ describe('RuntimeException / InvalidArgumentsException', () => {
     expect(runtime.status).toBe(500)
 
     const invalid = new InvalidArgumentsException('bad arg')
-    expect(invalid).toBeInstanceOf(RuntimeException)
-    expect(invalid.code).toBe('E_INVALID_ARGUMENTS')
+    expect(invalid).toBeInstanceOf(Exception)
+    expect(invalid.code).toBe('E_INVALID_ARGUMENTS_EXCEPTION')
+    expect(invalid.status).toBe(500)
   })
 })
 

@@ -181,7 +181,12 @@ describe('Response > cookie attributes', () => {
   })
 
   it('refuses Partitioned without Secure, which browsers would drop', () => {
-    expect(() => cookieHeader('d', '1', { partitioned: true })).toThrow(/requires Secure/)
+    expect(() => cookieHeader('d', '1', { partitioned: true })).toThrow(
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_COOKIE',
+        message: expect.stringMatching(/requires Secure/),
+      }),
+    )
   })
 
   it('omits SameSite on the boolean false form', () => {
@@ -189,7 +194,12 @@ describe('Response > cookie attributes', () => {
   })
 
   it('refuses sameSite: true, which is not an attribute value', () => {
-    expect(() => cookieHeader('f', '1', { sameSite: true })).toThrow(/not an attribute value/)
+    expect(() => cookieHeader('f', '1', { sameSite: true })).toThrow(
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_COOKIE',
+        message: expect.stringMatching(/not an attribute value/),
+      }),
+    )
   })
 
   it('refuses a CRLF in Domain, as it does in Path', () => {

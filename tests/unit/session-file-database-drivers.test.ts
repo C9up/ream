@@ -159,7 +159,12 @@ describe('ream > database session driver', () => {
     // The table is concatenated into the SQL — it cannot be a bind parameter.
     expect(
       () => new DatabaseDriver({ connection: fakeDb(), tableName: 's; DROP TABLE users' }),
-    ).toThrow(/not a plain identifier/)
+    ).toThrow(
+      expect.objectContaining({
+        code: 'E_SESSION_INVALID_TABLE_NAME',
+        message: expect.stringMatching(/not a plain identifier/),
+      }),
+    )
   })
 
   it('updates a live row and leaves a missing one missing', async () => {

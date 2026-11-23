@@ -18,9 +18,15 @@ import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { Readable } from 'node:stream'
 import {
+  E_TEST_CLIENT_ASSERTION_FAILED,
+  E_TEST_CLIENT_MISSING_CSRF_TOKEN,
+  E_TEST_CLIENT_NO_AUTH_STRATEGY,
+  E_TEST_CLIENT_NO_SESSION_SEEDER,
+  E_TEST_CLIENT_UNKNOWN_SERIALIZER,
+} from '../errors/codes.js'
+import {
   ApiResponse,
   capBody,
-  ExpectationError,
   partialMatch,
   STATUS_ASSERTIONS,
   type StatusAssertions,
@@ -428,10 +434,7 @@ export class RequestBuilder {
     if (token !== undefined) this.#cookies[CSRF_COOKIE_NAME] = token
     const value = this.#cookies[CSRF_COOKIE_NAME]
     if (value === undefined) {
-      throw new Error(
-        `RequestBuilder: withCsrf() found no '${CSRF_COOKIE_NAME}' cookie. Set it first via ` +
-          `.cookie('${CSRF_COOKIE_NAME}', token) (extracted from a prior safe GET) or pass the token: withCsrf(token).`,
-      )
+      throw new E_TEST_CLIENT_MISSING_CSRF_TOKEN([CSRF_COOKIE_NAME, CSRF_COOKIE_NAME])
     }
     this.#headers[CSRF_HEADER_NAME] = value
     return this
@@ -522,9 +525,9 @@ export class RequestBuilder {
     // `assertBodyContains` is the helix-named equivalent).
     return this.#assert((res) => {
       if (!partialMatch(res.json(), expected)) {
-        throw new ExpectationError(
+        throw new E_TEST_CLIENT_ASSERTION_FAILED([
           `JSON partial match failed.\nExpected (partial): ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(res.json()))}`,
-        )
+        ])
       }
     })
   }
@@ -594,9 +597,7 @@ export class RequestBuilder {
     // Resolve auth before sending.
     if (this.#pendingAuth !== null) {
       if (!this.#authStrategy) {
-        throw new Error(
-          'RequestBuilder: `withAuth()` / `asUser()` called but no AuthStrategy was provided via the client `auth` option.',
-        )
+        throw new E_TEST_CLIENT_NO_AUTH_STRATEGY()
       }
       const authHeaders = await this.#authStrategy.headersFor(this.#pendingAuth)
       for (const [k, v] of Object.entries(authHeaders)) {
@@ -626,10 +627,7 @@ export class RequestBuilder {
       // the cause — so say it here instead.
       if (answer.session && Object.keys(answer.session).length > 0) {
         if (!this.#sessionSeeder) {
-          throw new Error(
-            'RequestBuilder: `loginAs()` was given a session-based guard, which needs a session to be written before the request. ' +
-              'Pass `sessionSeeder` in the client options (it receives the values and returns the session cookie).',
-          )
+          throw new E_TEST_CLIENT_NO_SESSION_SEEDER()
         }
         const cookie = await this.#sessionSeeder(answer.session)
         Object.assign(this.#cookies, cookie)
@@ -720,9 +718,7 @@ export class RequestBuilder {
   serialize(name: string, data: unknown): this {
     const serializer = requestSerializers.get(name)
     if (!serializer) {
-      throw new Error(
-        `RequestBuilder: no serializer registered for "${name}" (see RequestBuilder.addSerializer).`,
-      )
+      throw new E_TEST_CLIENT_UNKNOWN_SERIALIZER([name])
     }
     const { body, contentType } = serializer(data)
     this.#body = body

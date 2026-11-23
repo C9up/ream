@@ -1,9 +1,9 @@
+import { Exception } from '@c9up/flare'
 import { describe, expect, it } from 'vitest'
 import { BaseCommand } from '../../src/console/BaseCommand.js'
 import { args, flags } from '../../src/console/decorators.js'
 import { parseArgv } from '../../src/console/parser.js'
 import type { ArgumentMetaData, FlagMetaData } from '../../src/console/types.js'
-import { ReamError } from '../../src/errors/ReamError.js'
 
 function flag(overrides: Partial<FlagMetaData> & Pick<FlagMetaData, 'propertyName'>): FlagMetaData {
   return {
@@ -153,9 +153,9 @@ describe('parseArgv', () => {
       parseArgv(['nope'], {})
       expect.unreachable('an undeclared positional must be reported')
     } catch (err) {
-      expect(err).toBeInstanceOf(ReamError)
-      expect((err as ReamError).message).toContain('Unexpected argument "nope"')
-      expect((err as ReamError).hint).toContain('takes no positional arguments')
+      expect(err).toBeInstanceOf(Exception)
+      expect((err as Exception).message).toContain('Unexpected argument "nope"')
+      expect((err as Exception).help).toContain('takes no positional arguments')
     }
 
     // A spread argument consumes the tail, so nothing is left over.

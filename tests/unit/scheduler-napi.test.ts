@@ -7,19 +7,20 @@
  * @implements Story 28.2 Task 7.3
  */
 
+import { Exception } from '@c9up/flare'
 import { describe, expect, it } from 'vitest'
-import { type ReamError, Scheduler } from '../../src/index.js'
+import { Scheduler } from '../../src/index.js'
 
 /** Attempt to construct a real `Scheduler`; return null if the binary is unavailable. */
 function tryBuildRealScheduler(): Scheduler | null {
   try {
     return new Scheduler()
   } catch (e) {
-    const err = e as ReamError
     if (
-      err.code === 'SCHEDULER_NAPI_NOT_FOUND' ||
-      err.code === 'SCHEDULER_UNSUPPORTED_PLATFORM' ||
-      err.code === 'SCHEDULER_NAPI_LOAD_FAILED'
+      e instanceof Exception &&
+      (e.code === 'E_REAM_NAPI_NOT_FOUND' ||
+        e.code === 'E_REAM_NAPI_UNSUPPORTED_PLATFORM' ||
+        e.code === 'E_REAM_NAPI_LOAD_FAILED')
     ) {
       return null
     }
@@ -40,19 +41,19 @@ describeIfAvailable('Scheduler (NAPI integration)', () => {
     s.unregister('napi-test-next')
   })
 
-  it('registering the same name twice surfaces DUPLICATE_TASK', () => {
+  it('registering the same name twice surfaces E_SCHEDULER_DUPLICATE_TASK', () => {
     const s = tryBuildRealScheduler() as Scheduler
     s.register('napi-test-dup', '*/1 * * * *', () => {})
     expect(() => s.register('napi-test-dup', '*/1 * * * *', () => {})).toThrow(
-      expect.objectContaining({ code: 'DUPLICATE_TASK' }),
+      expect.objectContaining({ code: 'E_SCHEDULER_DUPLICATE_TASK' }),
     )
     s.unregister('napi-test-dup')
   })
 
-  it('malformed cron expression surfaces INVALID_CRON from Rust', () => {
+  it('malformed cron expression surfaces E_SCHEDULER_INVALID_CRON from Rust', () => {
     const s = tryBuildRealScheduler() as Scheduler
     expect(() => s.register('napi-test-bad', 'not a real cron', () => {})).toThrow(
-      expect.objectContaining({ code: 'INVALID_CRON' }),
+      expect.objectContaining({ code: 'E_SCHEDULER_INVALID_CRON' }),
     )
   })
 

@@ -47,10 +47,10 @@ export class DumpDieException extends Exception {
   }
 
   /** Never reported: a dump is a developer's deliberate stop, not a failure. */
-  override report(): void {}
+  report(): void {}
 
   /** Answer the current request with the dump, as a 500 HTML page. */
-  override async handle(error: this, ctx: HttpContext): Promise<void> {
+  async handle(error: this, ctx: HttpContext): Promise<void> {
     const cspNonce = ctx.response.nonce
     const dump = this.#dumper.dumpToHtml(error.value, {
       cspNonce,

@@ -7,8 +7,8 @@
  * ship it somewhere too".
  */
 
+import { E_CONSOLE_COMMAND_NOT_FOUND } from '../errors/codes.js'
 import { prettyPrintError } from '../errors/prettyPrintError.js'
-import { isReamError } from '../errors/ReamError.js'
 import type { Kernel } from './Kernel.js'
 
 /** Errors the console raises when a command is called wrongly. */
@@ -60,7 +60,7 @@ export class ExceptionHandler {
 
     // An unknown command is a typo: the suggestion is the useful part, the
     // stack is noise.
-    if (isReamError(error, 'E_CONSOLE_COMMAND_NOT_FOUND')) {
+    if (error instanceof E_CONSOLE_COMMAND_NOT_FOUND) {
       this.logError(String(error.message), kernel)
       return
     }

@@ -9,6 +9,7 @@
  *   response.redirect().toRoute('posts.show', { id: '42' })
  */
 
+import { E_REDIRECT_NO_ROUTER } from '../errors/codes.js'
 import type { Response } from './Response.js'
 
 export type RouteUrlResolver = (name: string, params?: Record<string, string>) => string
@@ -235,7 +236,7 @@ export class RedirectBuilder {
   /** Redirect to a named route. */
   toRoute(name: string, params?: Record<string, string>): void {
     if (!this.#routeUrlResolver) {
-      throw new Error('Route URL resolver not configured. Cannot redirect to named route.')
+      throw new E_REDIRECT_NO_ROUTER()
     }
     const path = this.#routeUrlResolver(name, params)
     this.toPath(path)

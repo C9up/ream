@@ -8,6 +8,8 @@
  * carries these four commands.
  */
 
+import { E_REAM_INTERNAL } from '../../errors/codes.js'
+import { E_SESSION_TAGGING_NOT_SUPPORTED } from '../errors.js'
 import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
 
 /** The commands a session needs. Compatible with ioredis and node-redis. */
@@ -105,14 +107,12 @@ export class RedisDriver implements SessionDriverWithTagging {
     const client = await this.#client()
     const missing = SET_COMMANDS.find((command) => typeof client[command] !== 'function')
     if (missing !== undefined) {
-      throw new Error(
-        `session.${method}() needs the Redis \`${missing.toUpperCase()}\` command, which the configured client does not expose.`,
-      )
+      throw new E_SESSION_TAGGING_NOT_SUPPORTED(method, missing.toUpperCase())
     }
     if (!hasSetCommands(client)) {
       // Unreachable: `missing` already proved every command is there. The guard
       // is what tells the type system so, without asserting it.
-      throw new Error(`session.${method}() could not narrow the Redis client.`)
+      throw new E_REAM_INTERNAL([`session.${method}() could not narrow the Redis client.`])
     }
     return client
   }

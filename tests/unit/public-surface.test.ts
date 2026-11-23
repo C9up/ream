@@ -14,12 +14,8 @@ describe('public surface', () => {
     // HTTP — the stream `response.sse()` returns, and the abort exception a
     // client disconnect raises.
     'SseStream',
-    'E_HTTP_REQUEST_ABORTED',
     // Session — the shape flash messages and template helpers read.
     'ReadOnlyValuesStore',
-    // Security — what a missing or too-short APP_KEY raises.
-    'E_MISSING_APP_KEY',
-    'E_INSECURE_APP_KEY',
     // The aggregate bag, so `errors.E_ROUTE_NOT_FOUND` works.
     'errors',
   ] as const
@@ -30,17 +26,26 @@ describe('public surface', () => {
     })
   }
 
-  it('the errors bag holds the same classes as the flat exports', () => {
-    // Two ways to reach one class: they must not drift into two classes, or
-    // `instanceof` silently stops matching.
-    expect(ream.errors.E_ROUTE_NOT_FOUND).toBe(ream.E_ROUTE_NOT_FOUND)
-    expect(ream.errors.E_VALIDATION_ERROR).toBe(ream.E_VALIDATION_ERROR)
-    expect(ream.errors.E_MISSING_APP_KEY).toBe(ream.E_MISSING_APP_KEY)
-    expect(ream.errors.E_HTTP_REQUEST_ABORTED).toBe(ream.E_HTTP_REQUEST_ABORTED)
+  it('reaches every error class through the errors bag, none one by one', () => {
+    // One way to reach a class: a second path could drift into a second
+    // class, and `instanceof` would silently stop matching.
+    for (const code of [
+      'E_ROUTE_NOT_FOUND',
+      'E_VALIDATION_ERROR',
+      'E_MISSING_ENCRYPTER_KEY',
+      'E_INSECURE_ENCRYPTER_KEY',
+      'E_HTTP_REQUEST_ABORTED',
+      'E_UNAUTHORIZED_ACCESS',
+      'E_AUTHORIZATION_FAILURE',
+      'E_CANNOT_LOOKUP_ROUTE',
+    ]) {
+      expect(Reflect.get(ream.errors, code)).toBeDefined()
+      expect(Reflect.get(ream, code)).toBeUndefined()
+    }
   })
 
   it('raises no duplicate spelling of the missing-app-key error', async () => {
-    // `E_NO_APP_KEY` and `E_MISSING_APP_KEY` both existed for the same
+    // `E_NO_APP_KEY` and the missing-key error both existed for the same
     // condition, so catching one silently missed the other.
     const { readFileSync, readdirSync, statSync } = await import('node:fs')
     const { join } = await import('node:path')

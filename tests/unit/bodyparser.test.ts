@@ -157,6 +157,27 @@ describe('BodyParserMiddleware — body size', () => {
   })
 })
 
+describe('BodyParserMiddleware — content encoding', () => {
+  it('refuses a compressed body with 415 E_ENCODING_UNSUPPORTED instead of parsing the bytes', async () => {
+    const ctx = makeCtxWith('{"a":1}', 'application/json', {
+      headers: { 'content-encoding': 'br' },
+    })
+    await expect(new BodyParserMiddleware().handle(ctx, noop)).rejects.toMatchObject({
+      status: 415,
+      code: 'E_ENCODING_UNSUPPORTED',
+      message: 'Unsupported Content-Encoding: br',
+    })
+  })
+
+  it('reads an identity body as before', async () => {
+    const ctx = makeCtxWith('{"a":1}', 'application/json', {
+      headers: { 'content-encoding': 'identity' },
+    })
+    await new BodyParserMiddleware().handle(ctx, noop)
+    expect(ctx.request.input('a')).toBe(1)
+  })
+})
+
 describe('BodyParserMiddleware — form-urlencoded', () => {
   it('decodes `+` as space (RFC 1866 / WHATWG URL form spec)', async () => {
     const ctx = makeCtx('name=Jean+Luc', 'application/x-www-form-urlencoded')
@@ -434,14 +455,17 @@ describe('BodyParserMiddleware — disabling a parser', () => {
   it('rejects `multipart.tmpDir`, which never wrote a file anywhere', async () => {
     // Accepting it silently let an app believe uploads landed on a volume.
     expect(() => new BodyParserMiddleware({ multipart: { tmpDir: '/mnt/up' } } as never)).toThrow(
-      /E_BODYPARSER_CONFIG.*tmpDir/s,
+      expect.objectContaining({
+        code: 'E_BODYPARSER_CONFIG',
+        message: expect.stringMatching(/tmpDir/),
+      }),
     )
   })
 
   it('rejects the removed `enabled` flag instead of ignoring it', async () => {
     // Silently dropping it would re-enable a parser an app switched off.
     expect(() => new BodyParserMiddleware({ json: { enabled: false } } as never)).toThrow(
-      /E_BODYPARSER_CONFIG/,
+      expect.objectContaining({ code: 'E_BODYPARSER_CONFIG' }),
     )
   })
 })

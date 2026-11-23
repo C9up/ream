@@ -12,8 +12,6 @@ export {
 } from './fake.js'
 export {
   HttpClient,
-  HttpClientError,
-  type HttpClientFailure,
   type HttpClientOptions,
   type HttpRequestOptions,
   HttpResponse,

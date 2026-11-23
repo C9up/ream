@@ -9,6 +9,7 @@
  * Same bridge the session store uses, for the same reason.
  */
 
+import { E_SCHEDULE_INCOMPLETE_CONNECTION, E_SCHEDULE_QUASAR_MISSING } from '../../errors/codes.js'
 import type { LockRedisClient } from './RedisLockBackend.js'
 
 /** The slice of quasar's manager this needs: a connection, by name. */
@@ -46,23 +47,21 @@ export function quasarConnection(name?: string): () => Promise<LockRedisClient> 
     try {
       loaded = await import(/* @vite-ignore */ specifier)
     } catch (cause) {
-      throw new Error(
-        `Ream: the scheduler lock asks for the '${name ?? 'default'}' quasar connection, but @c9up/quasar is not installed.\n` +
-          '  pnpm add @c9up/quasar',
-        { cause },
-      )
+      throw new E_SCHEDULE_QUASAR_MISSING([name ?? 'default'], { cause: cause })
     }
 
     const manager = isConnectionSource(loaded) ? loaded : Reflect.get(Object(loaded), 'default')
     if (!isConnectionSource(manager)) {
-      throw new Error('Ream: @c9up/quasar/services/main did not expose a connection() manager')
+      throw new E_SCHEDULE_INCOMPLETE_CONNECTION([
+        'Ream: @c9up/quasar/services/main did not expose a connection() manager',
+      ])
     }
 
     const connection = manager.connection(name)
     if (!isLockRedisClient(connection)) {
-      throw new Error(
+      throw new E_SCHEDULE_INCOMPLETE_CONNECTION([
         `Ream: quasar connection '${name ?? 'default'}' does not carry the commands a scheduler lock needs`,
-      )
+      ])
     }
     return connection
   }

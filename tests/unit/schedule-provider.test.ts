@@ -1,11 +1,12 @@
 import 'reflect-metadata'
+import type { Exception } from '@c9up/flare'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppContext, ScheduleInvocation, Scheduler, TaskInfo } from '../../src/index.js'
 import {
   Container,
   clearServiceRegistry,
+  errors,
   Scheduler as RealScheduler,
-  ReamError,
   Schedule,
   ScheduleProvider,
   Service,
@@ -26,7 +27,7 @@ class MockScheduler {
   started = 0
   stopped = 0
   /** When set, `register` throws this instead of recording. */
-  registerError: ReamError | null = null
+  registerError: Exception | null = null
   /** When set, register throws *only* at this index (0-based). */
   registerErrorAtIndex: number | null = null
 
@@ -135,7 +136,7 @@ describe('ScheduleProvider > discovery + registration', () => {
     expect(makeSpy).toHaveBeenCalledWith(Job)
   })
 
-  it('wraps INVALID_CRON failures from Scheduler.register into E_SCHEDULE_INVALID_CRON', async () => {
+  it('wraps E_SCHEDULER_INVALID_CRON failures from Scheduler.register into E_SCHEDULE_INVALID_CRON', async () => {
     @Service()
     class Broken {
       @Schedule('not a real cron')
@@ -145,20 +146,17 @@ describe('ScheduleProvider > discovery + registration', () => {
 
     const container = new Container()
     const scheduler = new MockScheduler()
-    scheduler.registerError = new ReamError('INVALID_CRON', 'Expected 5 fields, got 4', {
-      hint: 'Standard cron format has 5 fields',
-      context: { expression: 'not a real cron' },
-    })
+    scheduler.registerError = new errors.E_SCHEDULER_INVALID_CRON(['Expected 5 fields, got 4'])
+    scheduler.registerError.help = 'Standard cron format has 5 fields'
     const provider = new ScheduleProvider(buildApp(container), {
       scheduler: scheduler as unknown as Scheduler,
     })
 
     await expect(provider.boot()).rejects.toMatchObject({
       code: 'E_SCHEDULE_INVALID_CRON',
-      context: expect.objectContaining({
-        task: 'Broken.run',
-        cronExpr: 'not a real cron',
-      }),
+      task: 'Broken.run',
+      cronExpr: 'not a real cron',
+      help: 'Standard cron format has 5 fields',
     })
   })
 
@@ -290,7 +288,7 @@ describe('ScheduleProvider > discovery + registration', () => {
 
     const scheduler = new MockScheduler()
     // Fail only on the third register call.
-    scheduler.registerError = new ReamError('INVALID_CRON', 'Expected 5 fields, got 2')
+    scheduler.registerError = new errors.E_SCHEDULER_INVALID_CRON(['Expected 5 fields, got 2'])
     scheduler.registerErrorAtIndex = 2
 
     const provider = new ScheduleProvider(buildApp(new Container()), {

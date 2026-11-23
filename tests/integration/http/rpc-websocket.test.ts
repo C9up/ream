@@ -2,8 +2,8 @@
  * The JSON-RPC methods of a booted application over a WebSocket route, driven
  * by comet's own client and WebSocket transport against the native server.
  */
-import { createRpcClient } from '@c9up/comet'
-import { createWebSocketTransport, RpcTransportError } from '@c9up/comet/websocket'
+import { errors as cometErrors, createRpcClient } from '@c9up/comet'
+import { createWebSocketTransport } from '@c9up/comet/websocket'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createHyperServerFactory } from '../../../src/bootstrap/hyper-server.js'
 import { Ignitor } from '../../../src/index.js'
@@ -114,8 +114,7 @@ describeIfNetwork('RpcRouter over router.ws() with comet', () => {
     const transport = createWebSocketTransport()
     const rpc = createRpcClient({ url: `${base}/private/rpc`, transport })
     const error = await rpc.call('whoami').catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(RpcTransportError)
-    expect(error instanceof RpcTransportError && error.code).toBe('E_COMET_CONNECTION_FAILED')
+    expect(error).toBeInstanceOf(cometErrors.E_COMET_CONNECTION_FAILED)
     transport.close()
   })
 
@@ -127,8 +126,7 @@ describeIfNetwork('RpcRouter over router.ws() with comet', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     await ignitor.stop()
     const error = await waiting
-    expect(error).toBeInstanceOf(RpcTransportError)
-    expect(error instanceof RpcTransportError && error.code).toBe('E_COMET_CONNECTION_CLOSED')
+    expect(error).toBeInstanceOf(cometErrors.E_COMET_CONNECTION_CLOSED)
     expect(error instanceof Error && error.message).toContain('1001')
     transport.close()
   })

@@ -11,7 +11,11 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { arch, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { ReamError } from '../errors/ReamError.js'
+import {
+  E_REAM_NAPI_LOAD_FAILED,
+  E_REAM_NAPI_NOT_FOUND,
+  E_REAM_NAPI_UNSUPPORTED_PLATFORM,
+} from '../errors/codes.js'
 import { errorCode } from './errors.js'
 
 /**
@@ -44,19 +48,14 @@ export interface LoadNapiOptions {
    * relative to the caller's module location.
    */
   callerMetaUrl: string
-  /**
-   * Error-code prefix used to build `<PREFIX>_NAPI_NOT_FOUND`,
-   * `<PREFIX>_NAPI_LOAD_FAILED`, and `<PREFIX>_UNSUPPORTED_PLATFORM`
-   * codes when loading fails. E.g. `"SCHEDULER"`.
-   */
-  errorCodePrefix: string
   /** Hint appended to the "not found" error (typically a build command). */
   notFoundHint?: string
 }
 
 /**
  * Resolve and `require` a Ream NAPI binary, returning the native
- * module export. Throws a typed `ReamError` on any failure.
+ * module export. Throws `E_REAM_NAPI_UNSUPPORTED_PLATFORM`,
+ * `E_REAM_NAPI_LOAD_FAILED` or `E_REAM_NAPI_NOT_FOUND` on a failure.
  *
  * Search order (first hit wins):
  *   1. `<caller>/../../<binaryName>.<suffix>.node`
@@ -68,13 +67,10 @@ export interface LoadNapiOptions {
  * the calling module.
  */
 export function loadNapi<T>(options: LoadNapiOptions): T {
-  const { binaryName, callerMetaUrl, errorCodePrefix } = options
+  const { binaryName, callerMetaUrl } = options
   const suffix = NAPI_PLATFORM_MAP[`${platform}-${arch}`]
   if (!suffix) {
-    throw new ReamError(
-      `${errorCodePrefix}_UNSUPPORTED_PLATFORM`,
-      `Unsupported platform: ${platform}-${arch}`,
-    )
+    throw new E_REAM_NAPI_UNSUPPORTED_PLATFORM([`${platform}-${arch}`])
   }
 
   const req = createRequire(callerMetaUrl)
@@ -94,11 +90,10 @@ export function loadNapi<T>(options: LoadNapiOptions): T {
       // Any other error (SyntaxError, ABI mismatch, permissions,
       // corrupt binary) means the file exists but cannot load. Surface
       // the real cause rather than a generic "not found".
-      throw new ReamError(
-        `${errorCodePrefix}_NAPI_LOAD_FAILED`,
-        `${binaryName} NAPI binary exists at '${path}' but failed to load: ${e instanceof Error ? e.message : String(e)}`,
+      throw new E_REAM_NAPI_LOAD_FAILED(
+        [binaryName, path, e instanceof Error ? e.message : String(e)],
         {
-          hint: 'Check that the binary was built for the current platform and Node ABI. Rebuild with `pnpm --filter @c9up/ream build:rust`.',
+          cause: e,
         },
       )
     }
@@ -110,14 +105,10 @@ export function loadNapi<T>(options: LoadNapiOptions): T {
   const muslHint = suffix.endsWith('-gnu')
     ? ' If you are on Alpine/musl, note the prebuilt Linux binaries target glibc — musl is not a supported target.'
     : ''
-  throw new ReamError(
-    `${errorCodePrefix}_NAPI_NOT_FOUND`,
-    `${binaryName} NAPI binary not found. Expected ${binaryName}.${suffix}.node`,
-    {
-      hint: `${
-        options.notFoundHint ??
-        "Run 'pnpm --filter @c9up/ream build:rust' to build the native module."
-      }${muslHint}`,
-    },
-  )
+  throw Object.assign(new E_REAM_NAPI_NOT_FOUND([binaryName, `${binaryName}.${suffix}.node`]), {
+    help: `${
+      options.notFoundHint ??
+      "Run 'pnpm --filter @c9up/ream build:rust' to build the native module."
+    }${muslHint}`,
+  })
 }

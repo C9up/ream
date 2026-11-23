@@ -1,5 +1,5 @@
+import { Exception } from '@c9up/flare'
 import { describe, expect, it } from 'vitest'
-import { ReamError } from '../../src/errors/ReamError.js'
 import { defineConfig } from '../../src/Ignitor.js'
 
 /**
@@ -19,13 +19,13 @@ describe('defineConfig > unknown tests options', () => {
     } catch (err) {
       thrown = err
     }
-    expect(thrown).toBeInstanceOf(ReamError)
+    expect(thrown).toBeInstanceOf(Exception)
     // The code is what a caller matches on; the message names the key…
-    expect((thrown as ReamError).code).toBe('E_REAMRC_UNKNOWN_OPTION')
-    expect((thrown as ReamError).message).toContain('`runnerPlugins`')
+    expect((thrown as Exception).code).toBe('E_REAMRC_UNKNOWN_OPTION')
+    expect((thrown as Exception).message).toContain('`runnerPlugins`')
     // …and the hint answers "then what IS accepted", which is also the answer
     // to "where did my option go".
-    expect((thrown as ReamError).hint).toContain('bootstrap, forceExit, suites, timeout')
+    expect((thrown as Exception).help).toContain('bootstrap, forceExit, suites, timeout')
   })
 
   it('says so even when the value is falsy — the key is what is wrong', () => {

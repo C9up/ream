@@ -8,6 +8,12 @@
 import { randomBytes } from 'node:crypto'
 import { readModuleConfig } from '../config/moduleConfig.js'
 import { currentNodeEnv } from '../env/nodeEnv.js'
+import {
+  E_SESSION_INVALID_CONNECTION,
+  E_SESSION_MISSING_LOCATION,
+  E_SESSION_MISSING_SECRET,
+  E_SESSION_UNKNOWN_DRIVER,
+} from '../errors/codes.js'
 import { durationToSeconds } from '../helpers/duration.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { CookieOptions } from '../http/Response.js'
@@ -86,9 +92,9 @@ export default class SessionMiddleware {
 
     if (this.#config.driver === 'cookie') {
       if (!config?.secret) {
-        throw new Error(
+        throw new E_SESSION_MISSING_SECRET([
           'Cookie session driver requires a secret. Set session.secret in your config.',
-        )
+        ])
       }
       this.#cookieDriver = new CookieDriver(config.secret, this.#config.cookieName)
       this.#driver = this.#cookieDriver
@@ -97,17 +103,13 @@ export default class SessionMiddleware {
     } else if (this.#config.driver === 'file') {
       const location = config?.location ?? named?.location
       if (typeof location !== 'string') {
-        throw new Error(
-          'File session driver requires a `location`. Set session.location (or stores.<name>.location) to a writable directory.',
-        )
+        throw new E_SESSION_MISSING_LOCATION()
       }
       this.#driver = new FileDriver({ location })
     } else if (this.#config.driver === 'database') {
       const connection = config?.dbConnection ?? named?.connection
       if (!isSessionDbConnection(connection)) {
-        throw new Error(
-          'Database session driver requires a `connection` exposing query() and execute().',
-        )
+        throw new E_SESSION_INVALID_CONNECTION()
       }
       this.#driver = new DatabaseDriver({
         connection,
@@ -121,7 +123,7 @@ export default class SessionMiddleware {
       const source = config?.client ?? quasarConnection(config?.connection)
       this.#driver = new RedisDriver(source, { prefix: config?.prefix })
     } else {
-      throw new Error(`Unknown session driver: ${this.#config.driver}`)
+      throw new E_SESSION_UNKNOWN_DRIVER([this.#config.driver])
     }
   }
 

@@ -75,8 +75,12 @@ describe('CookieSigner > a key anyone can read is not a key', () => {
   })
 
   it('still refuses an absent or too-short key', async () => {
-    expect(() => new CookieSigner('')).toThrow(/Missing APP_KEY/)
-    expect(() => new CookieSigner('short')).toThrow(/at least 16/)
+    expect(() => new CookieSigner('')).toThrow(
+      expect.objectContaining({ code: 'E_MISSING_ENCRYPTER_KEY' }),
+    )
+    expect(() => new CookieSigner('short')).toThrow(
+      expect.objectContaining({ code: 'E_INSECURE_ENCRYPTER_KEY' }),
+    )
   })
 
   it('accepts a real one', async () => {

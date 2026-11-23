@@ -48,7 +48,10 @@ describe('ream > session config', () => {
     // A lifetime silently read as NaN would expire every session at once.
     expect(() => new SessionMiddleware({ store: 'memory', age: '30m' })).not.toThrow()
     expect(() => new SessionMiddleware({ store: 'memory', age: 'soon' })).toThrow(
-      /Cannot read "soon" as a session age/,
+      expect.objectContaining({
+        code: 'E_INVALID_DURATION',
+        message: expect.stringMatching(/Cannot read "soon" as a session age/),
+      }),
     )
   })
 

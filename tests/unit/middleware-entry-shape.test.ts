@@ -72,7 +72,9 @@ describe('ream > middleware entry shape', () => {
     const handler = new Handler()
     const mw = resolveMiddlewareEntry(handler.handle.bind(handler))
 
-    await expect(mw(makeCtx(), async () => {})).rejects.toThrow(/E_MIDDLEWARE_ENTRY/)
+    await expect(mw(makeCtx(), async () => {})).rejects.toMatchObject({
+      code: 'E_MIDDLEWARE_ENTRY',
+    })
   })
 
   it('the error says how to fix it', async () => {

@@ -1,3 +1,4 @@
+import { E_MIGRATION_SOURCE_CONFLICT } from '../errors/codes.js'
 import type { RegisteredMigrationSource } from './types.js'
 
 /**
@@ -19,9 +20,7 @@ export class MigrationRegistry {
    */
   register(source: RegisteredMigrationSource): this {
     if (this.#sources.has(source.name)) {
-      throw new Error(
-        `A migration source named '${source.name}' is already registered. Two providers cannot claim one name — one of them would migrate nothing while the run still reported success.`,
-      )
+      throw new E_MIGRATION_SOURCE_CONFLICT([source.name])
     }
     this.#sources.set(source.name, source)
     return this

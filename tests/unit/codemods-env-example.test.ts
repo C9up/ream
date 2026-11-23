@@ -79,9 +79,18 @@ describe('Codemods > addEnvVars and .env.example', () => {
   it('refuses a value or a key that would inject another line', async () => {
     fs.writeFileSync(path.join(root, '.env'), '')
     const codemods = createCodemods({ cwd: root })
-    await expect(codemods.addEnvVars({ A: 'x\nAPP_KEY=attacker' })).rejects.toThrow(/line break/)
-    await expect(codemods.addEnvVars({ A: 'x\rB=y' })).rejects.toThrow(/line break/)
-    await expect(codemods.addEnvVars({ 'A=1\nB': 'x' })).rejects.toThrow(/not a valid/)
+    await expect(codemods.addEnvVars({ A: 'x\nAPP_KEY=attacker' })).rejects.toMatchObject({
+      code: 'E_CODEMODS_INVALID_ENV_VARIABLE',
+      message: expect.stringMatching(/line break/),
+    })
+    await expect(codemods.addEnvVars({ A: 'x\rB=y' })).rejects.toMatchObject({
+      code: 'E_CODEMODS_INVALID_ENV_VARIABLE',
+      message: expect.stringMatching(/line break/),
+    })
+    await expect(codemods.addEnvVars({ 'A=1\nB': 'x' })).rejects.toMatchObject({
+      code: 'E_CODEMODS_INVALID_ENV_VARIABLE',
+      message: expect.stringMatching(/not a valid/),
+    })
     expect(read('.env')).toBe('')
   })
 })

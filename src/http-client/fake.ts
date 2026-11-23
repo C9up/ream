@@ -12,9 +12,9 @@
  *   expect(http.requests).toHaveLength(1)
  */
 
+import { E_HTTP_CLIENT_UNREACHABLE } from './errors.js'
 import {
   HttpClient,
-  HttpClientError,
   type HttpClientOptions,
   HttpResponse,
   type OutgoingRequest,
@@ -91,8 +91,7 @@ export class FakeHttpClient extends HttpClient {
 
     const route = this.#latestRoute(recorded, request.url)
     if (route === undefined) {
-      throw new HttpClientError(
-        'unreachable',
+      throw new E_HTTP_CLIENT_UNREACHABLE(
         request.url,
         `No fake response for ${recorded.method} ${recorded.url}.`,
       )

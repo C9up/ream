@@ -10,6 +10,12 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import {
+  E_REAM_STUB_NO_DESTINATION,
+  E_REAM_STUB_NOT_FOUND,
+  E_REAM_STUB_SYNTAX,
+  E_REAM_STUB_UNSAFE_PATH,
+} from '../../errors/codes.js'
 import { render, type StubState } from '../../stubs/template.js'
 
 /** Where an application keeps its own copies — Adonis' `stubs/` root. */
@@ -57,11 +63,11 @@ export function readStub(
     return { source: fs.readFileSync(published, 'utf8'), published: true }
   }
   if (!isSafeStubPath(stubPath)) {
-    throw new Error(`[make] unusable stub path: ${stubPath}`)
+    throw new E_REAM_STUB_UNSAFE_PATH([`[make] unusable stub path: ${stubPath}`])
   }
   const shipped = path.join(stubsRoot, stubPath)
   if (!fs.existsSync(shipped)) {
-    throw new Error(`[make] no stub at "${stubPath}" (looked in ${stubsRoot})`)
+    throw new E_REAM_STUB_NOT_FOUND([`[make] no stub at "${stubPath}" (looked in ${stubsRoot})`])
   }
   return { source: fs.readFileSync(shipped, 'utf8'), published: false }
 }
@@ -73,7 +79,9 @@ export function splitFrontMatter(template: string): { to?: string; body: string 
   const after = trimmed.slice(3).replace(/^\r?\n/, '')
   const end = after.indexOf('\n---')
   if (end === -1) {
-    throw new Error('[make] a stub opened its front matter with `---` and never closed it')
+    throw new E_REAM_STUB_SYNTAX([
+      '[make] a stub opened its front matter with `---` and never closed it',
+    ])
   }
   const block = after.slice(0, end)
   const body = after.slice(end + 4).replace(/^\r?\n/, '')
@@ -82,7 +90,8 @@ export function splitFrontMatter(template: string): { to?: string; body: string 
     const line = rawLine.trim()
     if (line === '' || line.startsWith('#')) continue
     const at = line.indexOf(':')
-    if (at === -1) throw new Error(`[make] unreadable stub front-matter line: \`${line}\``)
+    if (at === -1)
+      throw new E_REAM_STUB_SYNTAX([`[make] unreadable stub front-matter line: \`${line}\``])
     if (line.slice(0, at).trim() === 'to') to = line.slice(at + 1).trim()
   }
   return to === undefined ? { body } : { to, body }
@@ -95,12 +104,17 @@ export function splitFrontMatter(template: string): { to?: string; body: string 
  * is a file in the project, and a generator is not a way to write outside it.
  */
 function assertInsideProject(destination: string): void {
-  if (destination === '') throw new Error('[make] the stub declares an empty destination')
+  if (destination === '')
+    throw new E_REAM_STUB_NO_DESTINATION(['[make] the stub declares an empty destination'])
   if (path.isAbsolute(destination)) {
-    throw new Error(`[make] a stub may not write to an absolute path: ${destination}`)
+    throw new E_REAM_STUB_UNSAFE_PATH([
+      `[make] a stub may not write to an absolute path: ${destination}`,
+    ])
   }
   if (destination.split(/[/\\]/).includes('..')) {
-    throw new Error(`[make] a stub may not write outside the project: ${destination}`)
+    throw new E_REAM_STUB_UNSAFE_PATH([
+      `[make] a stub may not write outside the project: ${destination}`,
+    ])
   }
 }
 
@@ -115,9 +129,9 @@ export function renderStub(
   const { to, body } = splitFrontMatter(source)
   const destination = to === undefined ? fallbackPath : render(to, state)
   if (destination === undefined) {
-    throw new Error(
+    throw new E_REAM_STUB_NO_DESTINATION([
       `[make] the stub at "${stubPath}" declares no destination — add a \`to:\` front-matter line.`,
-    )
+    ])
   }
   assertInsideProject(destination)
   return { path: destination, contents: render(body, state), published }

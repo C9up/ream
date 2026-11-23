@@ -17,6 +17,8 @@
  *    intuitive reading — would silently stretch every such value by 1000.
  */
 
+import { E_INVALID_DURATION } from '../errors/codes.js'
+
 /**
  * The unit vocabulary of `@lukeed/ms`, in the order its regex tests them.
  * Written out rather than reusing its regex so the accepted spellings are
@@ -63,9 +65,9 @@ export function durationToSeconds(value: number | string, label: string): number
   if (typeof value === 'number') return Math.trunc(value)
   const milliseconds = parseDurationMs(value)
   if (milliseconds === undefined) {
-    throw new Error(
+    throw new E_INVALID_DURATION([
       `Cannot read "${value}" as ${label}. Use a number of seconds, or a duration such as '30m', '2 hours' or '7 days'.`,
-    )
+    ])
   }
   return Math.floor(milliseconds / SECOND)
 }
@@ -107,9 +109,9 @@ function parseOrThrow(duration: string | number, unitLabel: string): number {
   if (typeof duration === 'number') return duration
   const parsed = parseDurationMs(duration)
   if (parsed === undefined) {
-    throw new Error(
+    throw new E_INVALID_DURATION([
       `Cannot read "${duration}" as ${unitLabel}. Use a number, or a duration such as '30m', '2 hours' or '7 days'.`,
-    )
+    ])
   }
   return parsed
 }

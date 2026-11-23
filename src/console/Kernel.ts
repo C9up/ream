@@ -11,7 +11,6 @@
  */
 
 import type { Application } from '../Application.js'
-import { isReamError, ReamError } from '../errors/ReamError.js'
 import { createAssertions, createSnapshot } from './assertions.js'
 import { type Logger, Ui } from './cliui.js'
 import { buildFlag } from './decorators.js'
@@ -86,6 +85,17 @@ export type GlobalFlagListener = (
   // biome-ignore lint/suspicious/noConfusingVoidType: Console contract — returning `true` ends the dispatch, returning nothing is the normal case
 ) => boolean | void | Promise<boolean | void>
 
+import {
+  E_CONSOLE_APP_NOT_STARTED,
+  E_CONSOLE_COMMAND_NOT_FOUND,
+  E_CONSOLE_DUPLICATE_COMMAND,
+  E_CONSOLE_INVALID_ALIAS,
+  E_CONSOLE_KERNEL_COMPLETED,
+  E_CONSOLE_KERNEL_RUNNING,
+  E_CONSOLE_LATE_GLOBAL_FLAG,
+  E_CONSOLE_LATE_LOADER,
+  E_CONSOLE_NO_APP,
+} from '../errors/codes.js'
 import { colourise } from './ui.js'
 
 export interface KernelOptions {
@@ -305,11 +315,7 @@ export class Kernel {
    */
   defineFlag(name: string, options: Partial<FlagMetaData> = {}): this {
     if (this.#state !== 'idle') {
-      throw new ReamError(
-        'E_CONSOLE_LATE_GLOBAL_FLAG',
-        `Global flag "--${name}" was declared while the kernel was "${this.#state}".`,
-        { hint: 'Declare global flags while wiring the kernel, before booting it.' },
-      )
+      throw new E_CONSOLE_LATE_GLOBAL_FLAG([name, this.#state])
     }
     this.#globalFlags.push(buildFlag(name, options))
     return this
@@ -340,11 +346,9 @@ export class Kernel {
       // APPLICATION commands claiming one name stays an error: there is
       // nothing to arbitrate between them.
       if (!this.#defaults.has(command.commandName)) {
-        throw new ReamError(
-          'E_CONSOLE_DUPLICATE_COMMAND',
-          `Two commands claim the name "${command.commandName}".`,
-          { hint: 'Rename one of them, or namespace it (e.g. "app:provision").' },
-        )
+        throw Object.assign(new E_CONSOLE_DUPLICATE_COMMAND([command.commandName]), {
+          help: 'Rename one of them, or namespace it (e.g. "app:provision").',
+        })
       }
       this.#defaults.delete(command.commandName)
     }
@@ -384,9 +388,7 @@ export class Kernel {
   addAlias(alias: string, expansion: string): this {
     const tokens = tokeniseExpansion(expansion)
     if (tokens.length === 0) {
-      throw new ReamError('E_CONSOLE_INVALID_ALIAS', `Alias "${alias}" expands to nothing.`, {
-        hint: 'Expected a command name, e.g. "make:controller --resource".',
-      })
+      throw new E_CONSOLE_INVALID_ALIAS([alias])
     }
     this.#aliases.set(alias, tokens)
     return this
@@ -414,8 +416,8 @@ export class Kernel {
 
     const pending = this.#pending.get(commandName)
     if (pending === undefined) {
-      throw new ReamError('E_CONSOLE_COMMAND_NOT_FOUND', `Unknown command "${name}".`, {
-        hint: 'Check the name with hasCommand() first, or list them with getCommands().',
+      throw Object.assign(new E_CONSOLE_COMMAND_NOT_FOUND([`Unknown command "${name}".`]), {
+        help: 'Check the name with hasCommand() first, or list them with getCommands().',
       })
     }
 
@@ -425,10 +427,11 @@ export class Kernel {
     // actually asked for, and once.
     const command = await pending.loader.getCommand(pending.metadata)
     if (command === null) {
-      throw new ReamError(
-        'E_CONSOLE_COMMAND_NOT_FOUND',
-        `The loader announced "${commandName}" but did not provide it.`,
-        { hint: 'A loader must return the command it listed in its metadata.' },
+      throw Object.assign(
+        new E_CONSOLE_COMMAND_NOT_FOUND([
+          `The loader announced "${commandName}" but did not provide it.`,
+        ]),
+        { help: 'A loader must return the command it listed in its metadata.' },
       )
     }
 
@@ -446,11 +449,7 @@ export class Kernel {
    */
   addLoader(loader: CommandLoader | (() => Promise<CommandLoader>)): this {
     if (this.#state !== 'idle') {
-      throw new ReamError(
-        'E_CONSOLE_LATE_LOADER',
-        `A command loader was added while the kernel was "${this.#state}".`,
-        { hint: 'Add loaders before booting the kernel.' },
-      )
+      throw new E_CONSOLE_LATE_LOADER([this.#state])
     }
     this.#loaders.push(loader)
     return this
@@ -620,17 +619,14 @@ export class Kernel {
     nodeArgs: readonly string[] = [],
   ): Promise<HandleResult> {
     if (this.#state === 'running') {
-      throw new ReamError(
-        'E_CONSOLE_KERNEL_RUNNING',
-        'A command is already running through this kernel.',
-        { hint: 'One kernel drives one command line. Use exec() to call another command.' },
-      )
+      throw new E_CONSOLE_KERNEL_RUNNING()
     }
     if (this.#state === 'completed') {
-      throw new ReamError(
-        'E_CONSOLE_KERNEL_COMPLETED',
-        'The kernel has finished; it cannot run another command line.',
-        { hint: 'Create a fresh kernel.' },
+      throw Object.assign(
+        new E_CONSOLE_KERNEL_COMPLETED([
+          'The kernel has finished; it cannot run another command line.',
+        ]),
+        { help: 'Create a fresh kernel.' },
       )
     }
 
@@ -672,7 +668,7 @@ export class Kernel {
     } catch (error) {
       // An unknown name gets the listing's help, not a stack trace: a typo is
       // the most common way to reach this.
-      if (isReamError(error, 'E_CONSOLE_COMMAND_NOT_FOUND')) {
+      if (error instanceof E_CONSOLE_COMMAND_NOT_FOUND) {
         this.#reportUnknown(target)
         return { staysAlive: false }
       }
@@ -943,10 +939,11 @@ export class Kernel {
   ): Promise<ExecutedCommand> {
     if (this.#state === 'idle') await this.boot()
     if (this.#state === 'completed') {
-      throw new ReamError(
-        'E_CONSOLE_KERNEL_COMPLETED',
-        `The kernel has finished; "${commandName}" cannot be run through it.`,
-        { hint: 'Create a fresh kernel to execute more commands.' },
+      throw Object.assign(
+        new E_CONSOLE_KERNEL_COMPLETED([
+          `The kernel has finished; "${commandName}" cannot be run through it.`,
+        ]),
+        { help: 'Create a fresh kernel to execute more commands.' },
       )
     }
 
@@ -1012,11 +1009,7 @@ export class Kernel {
     if (Command.options?.startApp !== true) return undefined
 
     if (this.#startApp === undefined) {
-      throw new ReamError(
-        'E_CONSOLE_NO_APP',
-        `"${Command.commandName}" requires a booted application, but this kernel was created without one.`,
-        { hint: 'Dispatch through the Ignitor console kernel rather than a bare Kernel instance.' },
-      )
+      throw new E_CONSOLE_NO_APP([Command.commandName])
     }
 
     // Before the boot, not after: a data package that migrates on boot for the
@@ -1035,11 +1028,9 @@ export class Kernel {
       Object.defineProperty(instance, 'app', {
         configurable: true,
         get: () => {
-          throw new ReamError(
-            'E_CONSOLE_APP_NOT_STARTED',
-            `"${Command.commandName}" accessed this.app without booting the application.`,
-            { hint: `Add: static options: CommandOptions = { startApp: true }` },
-          )
+          throw Object.assign(new E_CONSOLE_APP_NOT_STARTED([Command.commandName]), {
+            help: `Add: static options: CommandOptions = { startApp: true }`,
+          })
         },
       })
       return

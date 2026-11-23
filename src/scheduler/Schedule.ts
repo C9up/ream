@@ -10,7 +10,7 @@
  */
 
 import 'reflect-metadata'
-import { ReamError } from '../errors/ReamError.js'
+import { E_SCHEDULE_INVALID_TARGET } from '../errors/codes.js'
 import type { Constructor } from '../helpers/types.js'
 
 export const SCHEDULE_METADATA_KEY = Symbol('ream:schedule')
@@ -36,7 +36,7 @@ export interface ScheduleMetadata {
  * base class's array).
  *
  * Getters, setters, and static methods are rejected at decoration time
- * with a clear `ReamError` so that misuse surfaces early rather than at
+ * with a clear coded error so that misuse surfaces early rather than at
  * first fire.
  *
  * Usage:
@@ -54,11 +54,12 @@ export function Schedule(cronExpr: string): MethodDecorator {
     // (callable function); for an instance method, `target` is the
     // prototype. We need the real class either way.
     if (typeof target === 'function') {
-      throw new ReamError(
-        'E_SCHEDULE_INVALID_TARGET',
-        `@Schedule cannot be applied to static method '${String(propertyKey)}'`,
+      throw Object.assign(
+        new E_SCHEDULE_INVALID_TARGET([
+          `@Schedule cannot be applied to static method '${String(propertyKey)}'`,
+        ]),
         {
-          hint: 'Move the scheduled logic to an instance method, or register the task manually via Scheduler.register().',
+          help: 'Move the scheduled logic to an instance method, or register the task manually via Scheduler.register().',
         },
       )
     }
@@ -66,12 +67,11 @@ export function Schedule(cronExpr: string): MethodDecorator {
     // Reject getters/setters — `descriptor.value` is `undefined` for
     // accessors, and the ticker needs a callable method.
     if (descriptor && typeof descriptor.value !== 'function') {
-      throw new ReamError(
-        'E_SCHEDULE_INVALID_TARGET',
-        `@Schedule cannot be applied to non-method '${String(propertyKey)}' (getters and setters are not supported)`,
-        {
-          hint: 'Apply @Schedule to a regular method, not to an accessor.',
-        },
+      throw Object.assign(
+        new E_SCHEDULE_INVALID_TARGET([
+          `@Schedule cannot be applied to non-method '${String(propertyKey)}' (getters and setters are not supported)`,
+        ]),
+        { help: 'Apply @Schedule to a regular method, not to an accessor.' },
       )
     }
 

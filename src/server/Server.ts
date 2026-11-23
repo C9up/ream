@@ -6,7 +6,11 @@
  * - server.errorHandler(() => import('#exceptions/handler')) — custom exception handler
  */
 
-import { ReamError } from '../errors/ReamError.js'
+import {
+  E_MIDDLEWARE_ENTRY,
+  E_SERVER_GRPC_ALREADY_SET,
+  E_SERVER_GRPC_INVALID_LIMIT,
+} from '../errors/codes.js'
 import type { ExceptionHandler } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { MiddlewareFunction } from '../middleware/Pipeline.js'
@@ -75,10 +79,7 @@ export interface GrpcLimits {
 
 function checkGrpcLimit(name: string, value: number | undefined): void {
   if (value === undefined || value === -1 || (Number.isSafeInteger(value) && value >= 0)) return
-  throw new ReamError(
-    'E_SERVER_GRPC_INVALID_LIMIT',
-    `${name} must be a whole number of bytes, or -1 for no limit — got ${value}.`,
-  )
+  throw new E_SERVER_GRPC_INVALID_LIMIT([name, String(value)])
 }
 
 export class Server {
@@ -142,9 +143,7 @@ export class Server {
    */
   grpc(handler: GrpcHandler, limits: GrpcLimits = {}): this {
     if (this.#grpcHandler) {
-      throw new ReamError('E_SERVER_GRPC_ALREADY_SET', 'A gRPC handler is already registered.', {
-        hint: 'Only one package can serve gRPC on the HTTP port.',
-      })
+      throw new E_SERVER_GRPC_ALREADY_SET()
     }
     checkGrpcLimit('maxReceiveMessageLength', limits.maxReceiveMessageLength)
     checkGrpcLimit('maxSendMessageLength', limits.maxSendMessageLength)
@@ -252,13 +251,7 @@ export function resolveMiddlewareEntry(entry: MiddlewareEntry): MiddlewareFuncti
         // The zero-arity ambiguity, reported where it can be acted on: a bound
         // or rest-args middleware lands here because it declares no parameters
         // and was read as an import factory.
-        throw new Error(
-          '[E_MIDDLEWARE_ENTRY] A middleware entry with no declared parameters was treated as a lazy import, ' +
-            'but it did not resolve to a module with a default export. ' +
-            'If this is an inline middleware (e.g. `handle.bind(this)` or `(...args) => …`), register it on the ' +
-            'route or group — `router.get(...).use(fn)` — rather than in `router.use([...])`, which takes ' +
-            'imports of middleware classes, as AdonisJS does.',
-        )
+        throw new E_MIDDLEWARE_ENTRY()
       }
       cachedClass = mod.default
     }

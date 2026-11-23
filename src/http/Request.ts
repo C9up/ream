@@ -9,12 +9,12 @@
 
 import { type FileValidationOptions, MultipartFile } from '../bodyparser/MultipartFile.js'
 import { parseFormFields, parseQueryString } from '../bodyparser/qsParse.js'
+import { E_REQUEST_ENTITY_TOO_LARGE } from '../errors/codes.js'
 import type { CookieSigner } from '../security/CookieSigner.js'
 import type { SignedUrl } from '../security/SignedUrl.js'
 import type { Dict } from '../types/helpers.js'
 import { Macroable } from '../utils/Macroable.js'
 import { getPath, omitPaths, pickPaths } from '../utils/objectPath.js'
-import { Exception } from './Exception.js'
 import { originRelativePath } from './RedirectBuilder.js'
 import type {
   RequestAwareValidator,
@@ -1165,10 +1165,7 @@ export class Request extends Macroable {
    */
   #assertBodyKept(): void {
     if (this.#raw.bodyTooLarge === true) {
-      throw new Exception('request entity too large', {
-        status: 413,
-        code: 'E_REQUEST_ENTITY_TOO_LARGE',
-      })
+      throw new E_REQUEST_ENTITY_TOO_LARGE(['request entity too large'])
     }
   }
 

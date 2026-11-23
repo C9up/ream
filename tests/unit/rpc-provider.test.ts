@@ -1,7 +1,8 @@
+import { Exception } from '@c9up/flare'
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import type { AppContext } from '../../src/index.js'
-import { Container, ReamError } from '../../src/index.js'
+import { Container } from '../../src/index.js'
 import { MiddlewareRegistry } from '../../src/middleware/Pipeline.js'
 import { RpcProvider } from '../../src/rpc/RpcProvider.js'
 import { RpcRouter } from '../../src/rpc/RpcRouter.js'
@@ -61,8 +62,8 @@ describe('RpcProvider > container binding', () => {
       other.register()
       expect.fail('expected register() to throw on a duplicate rpc binding')
     } catch (error) {
-      expect(error).toBeInstanceOf(ReamError)
-      if (error instanceof ReamError) {
+      expect(error).toBeInstanceOf(Exception)
+      if (error instanceof Exception) {
         expect(error.code).toBe('E_RPC_PROVIDER_ALREADY_REGISTERED')
       }
     }
@@ -383,7 +384,7 @@ describe('RpcProvider > auth, validation & middleware execution', () => {
     const container = new Container()
     const registry = new MiddlewareRegistry()
     registry.register('deny', async () => {
-      throw new ReamError('RPC_DENIED', 'denied by middleware')
+      throw new Exception('denied by middleware', { code: 'RPC_DENIED' })
     })
     container.singleton('middleware', () => registry)
     const { provider, posted } = mount(container, (rpc) => {

@@ -9,6 +9,19 @@ import {
   properties,
   segments,
 } from './codemods/source.js'
+import {
+  E_CODEMODS_FILE_NOT_FOUND,
+  E_CODEMODS_INVALID_ENV_VALIDATION,
+  E_CODEMODS_INVALID_ENV_VARIABLE,
+  E_CODEMODS_INVALID_OPTION,
+  E_CODEMODS_MIDDLEWARE_CONFLICT,
+  E_CODEMODS_UNRECOGNIZED_SOURCE,
+  E_CODEMODS_UNSAFE_PATH,
+  E_REAM_STUB_NO_DESTINATION,
+  E_REAM_STUB_NOT_FOUND,
+  E_REAM_STUB_SYNTAX,
+  E_REAM_STUB_UNSAFE_PATH,
+} from './errors/codes.js'
 import { render as renderTemplate, type StubState } from './stubs/template.js'
 
 export type { StubState }
@@ -96,7 +109,9 @@ function splitFrontMatter(template: string): { to?: string; body: string } {
   const after = trimmed.slice(3).replace(/^\r?\n/, '')
   const end = after.indexOf('\n---')
   if (end === -1) {
-    throw new Error('[configure] stub front matter opened with `---` but never closed')
+    throw new E_REAM_STUB_SYNTAX([
+      '[configure] stub front matter opened with `---` but never closed',
+    ])
   }
   const block = after.slice(0, end)
   const body = after.slice(end + 4).replace(/^\r?\n/, '')
@@ -107,7 +122,7 @@ function splitFrontMatter(template: string): { to?: string; body: string } {
     if (line === '' || line.startsWith('#')) continue
     const separator = line.indexOf(':')
     if (separator === -1) {
-      throw new Error(`[configure] unreadable stub front-matter line: \`${line}\``)
+      throw new E_REAM_STUB_SYNTAX([`[configure] unreadable stub front-matter line: \`${line}\``])
     }
     const key = line.slice(0, separator).trim()
     const value = line.slice(separator + 1).trim()
@@ -202,9 +217,9 @@ function assertCanonicallyInside(root: string, filePath: string, displayName: st
   const canonRoot = fs.realpathSync(root)
   const canonFile = fs.realpathSync(filePath)
   if (!canonFile.startsWith(canonRoot + path.sep) && canonFile !== canonRoot) {
-    throw new Error(
+    throw new E_CODEMODS_UNSAFE_PATH([
       `[configure] Symlink escape detected: ${displayName} resolves outside project root`,
-    )
+    ])
   }
 }
 
@@ -222,20 +237,20 @@ const BANNER_RULE = '|----------------------------------------------------------
 function assertEnvValidations(definition: EnvValidationNode): void {
   const comment = definition.leadingComment
   if (comment !== undefined && (/[\r\n\u2028\u2029]/.test(comment) || comment.includes('*/'))) {
-    throw new Error(
+    throw new E_CODEMODS_INVALID_ENV_VALIDATION([
       '[configure] defineEnvValidations: the leading comment must be one line without `*/`',
-    )
+    ])
   }
   for (const [name, rule] of Object.entries(definition.variables)) {
     if (!ENV_NAME.test(name)) {
-      throw new Error(
+      throw new E_CODEMODS_INVALID_ENV_VARIABLE([
         `[configure] defineEnvValidations: '${name}' is not an environment variable name`,
-      )
+      ])
     }
     if (typeof rule !== 'string' || !isSingleExpression(rule)) {
-      throw new Error(
+      throw new E_CODEMODS_INVALID_ENV_VALIDATION([
         `[configure] defineEnvValidations: the rule for ${name} is not one complete expression: ${String(rule)}`,
-      )
+      ])
     }
   }
 }
@@ -245,16 +260,16 @@ function locateEnvSchema(content: string): { open: number; close: number } {
   const paren = findCall(content, 'Env.create')
   const parenClose = paren === -1 ? -1 : matchClose(content, paren)
   if (paren === -1 || parenClose === -1) {
-    throw new Error(
+    throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
       '[configure] Could not find an Env.create(...) call in start/env.ts — add the validations by hand.',
-    )
+    ])
   }
   const open = segments(content, paren + 1, parenClose)[1]?.codeStart ?? -1
   const close = content[open] === '{' ? matchClose(content, open) : -1
   if (close === -1) {
-    throw new Error(
+    throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
       '[configure] The second argument of Env.create in start/env.ts is not an object literal — add the validations by hand.',
-    )
+    ])
   }
   return { open, close }
 }
@@ -295,11 +310,13 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     shouldOverwrite: boolean,
   ): Promise<void> {
     if (path.isAbsolute(filePath)) {
-      throw new Error(`[configure] Absolute paths not allowed: ${filePath}`)
+      throw new E_CODEMODS_UNSAFE_PATH([`[configure] Absolute paths not allowed: ${filePath}`])
     }
     const resolved = path.resolve(root, filePath)
     if (!resolved.startsWith(root + path.sep) && resolved !== root) {
-      throw new Error(`[configure] Refusing to write outside project root: ${filePath}`)
+      throw new E_CODEMODS_UNSAFE_PATH([
+        `[configure] Refusing to write outside project root: ${filePath}`,
+      ])
     }
 
     const shouldForce = shouldOverwrite
@@ -313,18 +330,18 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     if (fs.existsSync(dir)) {
       const canonDir = fs.realpathSync(dir)
       if (!canonDir.startsWith(canonRoot + path.sep) && canonDir !== canonRoot) {
-        throw new Error(
+        throw new E_CODEMODS_UNSAFE_PATH([
           `[configure] Symlink escape detected: ${filePath} — directory resolves outside project root`,
-        )
+        ])
       }
     }
 
     if (fs.existsSync(resolved)) {
       const canonFile = fs.realpathSync(resolved)
       if (!canonFile.startsWith(canonRoot + path.sep)) {
-        throw new Error(
+        throw new E_CODEMODS_UNSAFE_PATH([
           `[configure] Symlink escape detected: ${filePath} — file resolves outside project root`,
-        )
+        ])
       }
     }
 
@@ -348,9 +365,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     async addProvider(importPath: string): Promise<void> {
       const rcPath = path.join(root, 'reamrc.ts')
       if (!fs.existsSync(rcPath)) {
-        throw new Error(
+        throw new E_CODEMODS_FILE_NOT_FOUND([
           `[configure] reamrc.ts not found — cannot register provider ${importPath}. Run 'ream new' first.`,
-        )
+        ])
       }
       // Same symlink-containment guard registerCommand/registerMiddleware/
       // writeFile apply — a symlinked reamrc.ts must not redirect the
@@ -372,9 +389,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       const marker = /providers\s*:\s*(?:\/\*[\s\S]*?\*\/\s*)?\[/
       const match = marker.exec(content)
       if (!match) {
-        throw new Error(
+        throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
           `[configure] Could not find 'providers: [' in reamrc.ts — provider ${importPath} not added. Check your reamrc.ts format.`,
-        )
+        ])
       }
       const insertAt = match.index + match[0].length
       const eol = detectLineEnding(content)
@@ -398,9 +415,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     async addMetaFile(pattern: string, reloadServer = false): Promise<void> {
       const rcPath = path.join(root, 'reamrc.ts')
       if (!fs.existsSync(rcPath)) {
-        throw new Error(
+        throw new E_CODEMODS_FILE_NOT_FOUND([
           `[configure] reamrc.ts not found — cannot register meta file ${pattern}. Run 'ream new' first.`,
-        )
+        ])
       }
       assertCanonicallyInside(root, rcPath, 'reamrc.ts')
 
@@ -424,9 +441,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       // No block yet — open one beside `providers`, which every rc file has.
       const providers = /providers\s*:\s*(?:\/\*[\s\S]*?\*\/\s*)?\[/.exec(content)
       if (providers === null) {
-        throw new Error(
+        throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
           `[configure] Could not find 'providers: [' in reamrc.ts — meta file ${pattern} not added. Check your reamrc.ts format.`,
-        )
+        ])
       }
       const blockAt = providers.index
       const block = `metaFiles: [${eol}${entry}${eol}  ],${eol}  `
@@ -449,10 +466,14 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       // key) would inject a variable line of the caller's choosing.
       for (const [key, value] of Object.entries(vars)) {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-          throw new Error(`[configure] "${key}" is not a valid environment variable name`)
+          throw new E_CODEMODS_INVALID_ENV_VARIABLE([
+            `[configure] "${key}" is not a valid environment variable name`,
+          ])
         }
         if (/[\r\n]/.test(value)) {
-          throw new Error(`[configure] The value of ${key} contains a line break`)
+          throw new E_CODEMODS_INVALID_ENV_VARIABLE([
+            `[configure] The value of ${key} contains a line break`,
+          ])
         }
       }
       const overwrite = options.overwrite ?? force
@@ -513,14 +534,16 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       opts?: { force?: boolean },
     ): Promise<GeneratedStub> {
       if (stubPath.includes('..') || path.isAbsolute(stubPath)) {
-        throw new Error(`[configure] Unsafe stub path: ${stubPath}`)
+        throw new E_REAM_STUB_UNSAFE_PATH([`[configure] Unsafe stub path: ${stubPath}`])
       }
 
       const published = path.resolve(root, 'stubs', stubPath)
       const shipped = path.resolve(stubsRoot, stubPath)
       const source = fs.existsSync(published) ? published : shipped
       if (!fs.existsSync(source)) {
-        throw new Error(`[configure] Stub not found: ${stubPath} (looked in ${stubsRoot})`)
+        throw new E_REAM_STUB_NOT_FOUND([
+          `[configure] Stub not found: ${stubPath} (looked in ${stubsRoot})`,
+        ])
       }
 
       const raw = fs.readFileSync(source, 'utf8')
@@ -528,9 +551,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       if (to === undefined) {
         // Without it there is nowhere to put the file, and guessing from the
         // stub's own name would put a package's config wherever it was named.
-        throw new Error(
+        throw new E_REAM_STUB_NO_DESTINATION([
           `[configure] Stub ${stubPath} declares no destination — add a \`to:\` front matter line.`,
-        )
+        ])
       }
 
       // The destination goes through the engine too: `to: config/{{ name }}.ts`
@@ -567,9 +590,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     async registerCommand(importPath: string): Promise<void> {
       const rcPath = path.join(root, 'reamrc.ts')
       if (!fs.existsSync(rcPath)) {
-        throw new Error(
+        throw new E_CODEMODS_FILE_NOT_FOUND([
           `[configure] reamrc.ts not found — cannot register command ${importPath}. Run 'ream new' first.`,
-        )
+        ])
       }
       assertCanonicallyInside(root, rcPath, 'reamrc.ts')
 
@@ -618,9 +641,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
         return
       }
 
-      throw new Error(
+      throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
         `[configure] Could not find 'defineConfig({ ... })' in reamrc.ts — command ${importPath} not added. Check your reamrc.ts format.`,
-      )
+      ])
     },
 
     /**
@@ -659,15 +682,15 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     ): Promise<void> {
       const position = options?.position ?? 'after'
       if (position !== 'before' && position !== 'after') {
-        throw new Error(
+        throw new E_CODEMODS_INVALID_OPTION([
           `[configure] Invalid middleware position: '${String(position)}'. Expected 'before' or 'after'.`,
-        )
+        ])
       }
       const requestedTier = options?.tier ?? 'router'
       if (!isMiddlewareTier(requestedTier)) {
-        throw new Error(
+        throw new E_CODEMODS_INVALID_OPTION([
           `[configure] Invalid middleware tier: '${String(requestedTier)}'. Expected 'server' or 'router'.`,
-        )
+        ])
       }
 
       const tier: MiddlewareTier = requestedTier
@@ -675,9 +698,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
 
       const kernelPath = path.join(root, 'start', 'kernel.ts')
       if (!fs.existsSync(kernelPath)) {
-        throw new Error(
+        throw new E_CODEMODS_FILE_NOT_FOUND([
           `[configure] start/kernel.ts not found — cannot register middleware ${importPath}. Run 'ream new' first or create the file from the installation guide.`,
-        )
+        ])
       }
       assertCanonicallyInside(root, kernelPath, 'start/kernel.ts')
 
@@ -687,17 +710,15 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       if (otherBlock !== null) {
         const otherSlice = content.slice(otherBlock.start, otherBlock.end)
         if (otherSlice.includes(`'${importPath}'`) || otherSlice.includes(`"${importPath}"`)) {
-          throw new Error(
-            `[configure] middleware ${importPath} is already registered in ${otherTier} tier — cannot also register in ${tier} tier. Choose one tier or remove the existing registration.`,
-          )
+          throw new E_CODEMODS_MIDDLEWARE_CONFLICT([importPath, otherTier, tier])
         }
       }
 
       const targetBlock = findTierBlock(content, tier)
       if (targetBlock === null) {
-        throw new Error(
+        throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
           `[configure] Could not find '${tier}.use([' in start/kernel.ts — middleware ${importPath} not added. Add the block manually or check your start/kernel.ts format.`,
-        )
+        ])
       }
 
       const targetSlice = content.slice(targetBlock.start, targetBlock.end)
@@ -728,9 +749,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
     async defineEnvValidations(definition: EnvValidationNode): Promise<string[]> {
       const envPath = path.join(root, 'start', 'env.ts')
       if (!fs.existsSync(envPath)) {
-        throw new Error(
+        throw new E_CODEMODS_FILE_NOT_FOUND([
           `[configure] start/env.ts not found — cannot add the validations for ${Object.keys(definition.variables).join(', ')}.`,
-        )
+        ])
       }
       assertCanonicallyInside(root, envPath, 'start/env.ts')
       assertEnvValidations(definition)
@@ -805,21 +826,23 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
      */
     async addPreloadFile(modulePath: string, environments?: PreloadEnvironment[]): Promise<void> {
       if (!SAFE_MODULE_PATH.test(modulePath)) {
-        throw new Error(`[configure] Unsafe preload module path: ${JSON.stringify(modulePath)}`)
+        throw new E_CODEMODS_UNSAFE_PATH([
+          `[configure] Unsafe preload module path: ${JSON.stringify(modulePath)}`,
+        ])
       }
       for (const environment of environments ?? []) {
         if (!PRELOAD_ENVIRONMENTS.includes(environment)) {
-          throw new Error(
+          throw new E_CODEMODS_INVALID_OPTION([
             `[configure] Unknown environment '${String(environment)}' for preload ${modulePath}. Expected one of ${PRELOAD_ENVIRONMENTS.join(', ')}.`,
-          )
+          ])
         }
       }
 
       const rcPath = path.join(root, 'reamrc.ts')
       if (!fs.existsSync(rcPath)) {
-        throw new Error(
+        throw new E_CODEMODS_FILE_NOT_FOUND([
           `[configure] reamrc.ts not found — cannot register preload ${modulePath}. Run 'ream new' first.`,
-        )
+        ])
       }
       assertCanonicallyInside(root, rcPath, 'reamrc.ts')
 
@@ -827,9 +850,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       const eol = detectLineEnding(content)
       const config = locateRcObject(content)
       if (config === null) {
-        throw new Error(
+        throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
           `[configure] Could not find 'defineConfig({ ... })' in reamrc.ts — preload ${modulePath} not added.`,
-        )
+        ])
       }
 
       // Scoped only when it actually leaves an environment out.
@@ -866,9 +889,9 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       const arrayClose =
         content[preloads.valueStart] === '[' ? matchClose(content, preloads.valueStart) : -1
       if (arrayClose === -1) {
-        throw new Error(
+        throw new E_CODEMODS_UNRECOGNIZED_SOURCE([
           `[configure] reamrc.ts declares preloads as something other than an array literal — add ${modulePath} by hand.`,
-        )
+        ])
       }
       const registered = segments(content, preloads.valueStart + 1, arrayClose).some(
         (element) => importedModule(content.slice(element.codeStart, element.end)) === modulePath,

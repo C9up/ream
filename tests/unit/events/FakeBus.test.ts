@@ -216,15 +216,21 @@ describe('FakeBus > onRequest / request', () => {
 
   it('rejects when no handler is registered', async () => {
     const bus = new FakeBus()
-    await expect(bus.request('missing', '{}')).rejects.toThrow(
-      /no request handler registered for "missing"/,
-    )
+    await expect(bus.request('missing', '{}')).rejects.toMatchObject({
+      code: 'E_EVENTS_NO_REQUEST_HANDLER',
+      message: expect.stringMatching(/no request handler registered for "missing"/),
+    })
   })
 
   it('rejects on duplicate onRequest for the same name', () => {
     const bus = new FakeBus()
     bus.onRequest('ping', (_d, r) => r('a'))
-    expect(() => bus.onRequest('ping', (_d, r) => r('b'))).toThrow(/already registered/)
+    expect(() => bus.onRequest('ping', (_d, r) => r('b'))).toThrow(
+      expect.objectContaining({
+        code: 'E_EVENTS_DUPLICATE_REQUEST_HANDLER',
+        message: expect.stringMatching(/already registered/),
+      }),
+    )
   })
 
   it('rejects after the timeout if the handler never replies', async () => {
@@ -236,7 +242,10 @@ describe('FakeBus > onRequest / request', () => {
       })
       const promise = bus.request('slow', '{}', 100)
       vi.advanceTimersByTime(101)
-      await expect(promise).rejects.toThrow(/did not reply within 100ms/)
+      await expect(promise).rejects.toMatchObject({
+        code: 'E_EVENTS_TIMEOUT',
+        message: expect.stringMatching(/did not reply within 100ms/),
+      })
     } finally {
       vi.useRealTimers()
     }
@@ -306,14 +315,22 @@ describe('FakeBus > assertion helpers', () => {
 
   it('assertEmitted failure message contains the captured state', async () => {
     await bus.emit('payment.received', JSON.stringify({ amount: 42 }))
-    expect(() => bus.assertEmitted('order.created')).toThrow(/payment\.received/)
+    expect(() => bus.assertEmitted('order.created')).toThrow(
+      expect.objectContaining({
+        code: 'E_EVENTS_ASSERTION_FAILED',
+        message: expect.stringMatching(/payment\.received/),
+      }),
+    )
     expect(() => bus.assertEmitted('order.created')).toThrow(/Captured \(1\)/)
   })
 
   it('assertNotEmitted throws when a match exists', async () => {
     await bus.emit('order.created', '{}')
     expect(() => bus.assertNotEmitted('order.created')).toThrow(
-      /at least one captured emit matches/,
+      expect.objectContaining({
+        code: 'E_EVENTS_ASSERTION_FAILED',
+        message: expect.stringMatching(/at least one captured emit matches/),
+      }),
     )
   })
 

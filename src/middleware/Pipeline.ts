@@ -12,8 +12,16 @@
  */
 
 import { debugHttp } from '../debug.js'
-import { ReamError } from '../errors/ReamError.js'
-import { E_FORBIDDEN, E_UNAUTHORIZED, E_VALIDATION_ERROR } from '../http/Exception.js'
+import {
+  E_MIDDLEWARE_NOT_FOUND,
+  E_PIPELINE_DOUBLE_NEXT,
+  E_VALIDATOR_UNUSABLE,
+} from '../errors/codes.js'
+import {
+  E_AUTHORIZATION_FAILURE,
+  E_UNAUTHORIZED_ACCESS,
+  E_VALIDATION_ERROR,
+} from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import { authenticatedByGuards, holdsPermissions } from '../http/permissions.js'
 
@@ -99,10 +107,7 @@ export async function runValidator(
 
   // A dedicated code, not a TypeError: callers tell this configuration
   // mistake apart from a TypeError raised by a bug inside a rule.
-  throw new ReamError(
-    'E_VALIDATOR_UNUSABLE',
-    'Route validator exposes none of validateResultAsync(), validateResult() or validate().',
-  )
+  throw new E_VALIDATOR_UNUSABLE()
 }
 
 /** Named middleware registry. */
@@ -140,6 +145,8 @@ export class MiddlewareRegistry {
       roles?: string[]
       permissions?: string[]
       validators?: RuntimeValidator[]
+      /** Turns an error into a response where it is thrown, see {@link composeMiddleware}. */
+      onError?: MiddlewareErrorHandler
     },
   ): MiddlewareFunction {
     const stack: MiddlewareFunction[] = [
@@ -151,10 +158,10 @@ export class MiddlewareRegistry {
       ...namedMiddleware.map((name) => {
         const mw = this.#named.get(name)
         if (mw === undefined) {
-          throw new Error(
-            `[E_MIDDLEWARE_NOT_FOUND] Named middleware '${name}' is not registered. ` +
+          throw new E_MIDDLEWARE_NOT_FOUND([
+            `Named middleware '${name}' is not registered. ` +
               `Registered: ${[...this.#named.keys()].join(', ') || '(none)'}`,
-          )
+          ])
         }
         return mw
       }),
@@ -175,9 +182,15 @@ export class MiddlewareRegistry {
       handler,
     ]
 
-    return composeMiddleware(stack)
+    return composeMiddleware(stack, options?.onError)
   }
 }
+
+/**
+ * What turns an error into a response inside the chain: the exception
+ * handler, for the HTTP kernel. It must not throw.
+ */
+export type MiddlewareErrorHandler = (error: unknown, ctx: HttpContext) => Promise<void>
 
 /**
  * Compose middleware into a single handler (onion pattern).
@@ -186,15 +199,26 @@ export class MiddlewareRegistry {
  * does in AdonisJS, and the two were one import away from each other on the
  * barrel.
  */
-function composeMiddleware(middleware: MiddlewareFunction[]): MiddlewareFunction {
+function composeMiddleware(
+  middleware: MiddlewareFunction[],
+  onError?: MiddlewareErrorHandler,
+): MiddlewareFunction {
   return async (ctx: HttpContext, finalNext: () => Promise<void>) => {
     let index = -1
 
+    // With `onError`, every layer runs under it, as upstream's middleware
+    // runner does with an error handler: an error becomes a response at the
+    // layer that threw, and the `next()` the outer layer awaits resolves. So
+    // the code after `await next()` (the session commit, a header) runs for a
+    // request that failed too, and an error's `handle()` that flashes reaches
+    // the session store.
+    const run = onError
+      ? (i: number): Promise<void> => dispatch(i).catch((error: unknown) => onError(error, ctx))
+      : dispatch
+
     async function dispatch(i: number): Promise<void> {
       if (i <= index) {
-        throw new ReamError('E_PIPELINE_DOUBLE_NEXT', 'next() called multiple times', {
-          hint: 'A middleware called next() more than once. Each middleware should call next() at most once.',
-        })
+        throw new E_PIPELINE_DOUBLE_NEXT()
       }
       index = i
 
@@ -207,16 +231,17 @@ function composeMiddleware(middleware: MiddlewareFunction[]): MiddlewareFunction
         // only thing that identifies it.
         debugHttp('middleware %d/%d %s', i + 1, middleware.length, fn.name || '(anonymous)')
       }
-      await fn(ctx, () => dispatch(i + 1))
+      await fn(ctx, () => run(i + 1))
     }
 
-    await dispatch(0)
+    await run(0)
   }
 }
 
 /**
  * Guard enforcement middleware.
- * Throws E_UNAUTHORIZED / E_FORBIDDEN exceptions (caught by ExceptionHandler).
+ * Throws `E_UNAUTHORIZED_ACCESS` (401) and `E_AUTHORIZATION_FAILURE` (403),
+ * the codes @c9up/warden raises for the same refusals.
  */
 function createGuardMiddleware(
   guards: string[],
@@ -228,11 +253,11 @@ function createGuardMiddleware(
     // another guard is not enough (see authenticatedByGuards). A 401 from the
     // guards themselves propagates, with its redirect or challenge.
     if (guards.length > 0 && !(await authenticatedByGuards(ctx.auth, guards))) {
-      throw new E_UNAUTHORIZED()
+      throw new E_UNAUTHORIZED_ACCESS()
     }
     const needsAuth = (roles && roles.length > 0) || (permissions && permissions.length > 0)
     if (needsAuth && !ctx.auth.isAuthenticated) {
-      throw new E_UNAUTHORIZED()
+      throw new E_UNAUTHORIZED_ACCESS()
     }
 
     // Auth providers may expose roles/permissions at the top level OR nested
@@ -244,14 +269,14 @@ function createGuardMiddleware(
       const userRoles = ctx.auth.roles ?? ctx.auth.user?.roles ?? []
       const hasAnyRole = roles.some((r) => userRoles.includes(r))
       if (!hasAnyRole) {
-        throw new E_FORBIDDEN('Insufficient role', roles)
+        throw new E_AUTHORIZATION_FAILURE()
       }
     }
 
     // A token-authenticated request also needs the token to allow each one.
     if (permissions && permissions.length > 0) {
       if (!(await holdsPermissions(ctx.auth, permissions))) {
-        throw new E_FORBIDDEN('Insufficient permissions', permissions)
+        throw new E_AUTHORIZATION_FAILURE()
       }
     }
 

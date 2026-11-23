@@ -4,7 +4,7 @@
  * `TestClient.ws(path)` opens one against the booted application. Messages are
  * queued as they arrive, so a test reads them in order with `next()` whether
  * they came before or after it asked. A handshake the application refuses
- * rejects with {@link WebSocketRefused}, carrying the HTTP status the
+ * rejects with `E_TEST_CLIENT_WEBSOCKET_REFUSED`, carrying the HTTP status the
  * middleware or guard answered.
  *
  * No upstream analogue: AdonisJS' test client (`@japa/api-client`) has no
@@ -13,19 +13,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { request, WebSocket } from 'node:http'
-
-/** The application answered the handshake with a status other than 101. */
-export class WebSocketRefused extends Error {
-  readonly status: number
-  readonly body: string
-
-  constructor(status: number, body: string) {
-    super(`WebSocket handshake refused with ${status}${body === '' ? '' : `: ${body}`}`)
-    this.name = 'WebSocketRefused'
-    this.status = status
-    this.body = body
-  }
-}
+import { E_TEST_CLIENT_TIMEOUT, E_TEST_CLIENT_WEBSOCKET_REFUSED } from '../errors/codes.js'
 
 export interface TestWebSocketOptions {
   /** Extra handshake headers (cookies, an `Authorization`, an `Origin`). */
@@ -99,7 +87,7 @@ export class TestWebSocket {
     // HTTP to learn the status the application answered.
     const refusal = await probe(port, path, headers, options.protocols ?? [])
     if (refusal !== undefined) throw refusal
-    throw new Error(`WebSocket handshake to ${path} failed`)
+    throw new E_TEST_CLIENT_WEBSOCKET_REFUSED(path)
   }
 
   /** The subprotocol the server chose, `''` when none. */
@@ -119,7 +107,7 @@ export class TestWebSocket {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#waiting = this.#waiting.filter((waiter) => waiter !== deliver)
-        reject(new Error(`no WebSocket message within ${timeoutMs}ms`))
+        reject(new E_TEST_CLIENT_TIMEOUT([`no WebSocket message within ${timeoutMs}ms`]))
       }, timeoutMs)
       const deliver = (message: Received): void => {
         clearTimeout(timer)
@@ -151,7 +139,7 @@ function probe(
   path: string,
   headers: Record<string, string>,
   protocols: string[],
-): Promise<WebSocketRefused | undefined> {
+): Promise<E_TEST_CLIENT_WEBSOCKET_REFUSED | undefined> {
   return new Promise((resolve) => {
     const req = request({
       host: '127.0.0.1',
@@ -176,7 +164,9 @@ function probe(
       res.on('data', (chunk: string) => {
         body += chunk
       })
-      res.on('end', () => resolve(new WebSocketRefused(res.statusCode ?? 0, body)))
+      res.on('end', () =>
+        resolve(new E_TEST_CLIENT_WEBSOCKET_REFUSED(path, { status: res.statusCode ?? 0, body })),
+      )
     })
     req.on('error', () => resolve(undefined))
     req.end()

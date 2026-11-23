@@ -1,4 +1,4 @@
-import { ReamError } from '../errors/ReamError.js'
+import { E_BODYPARSER_INVALID_SIZE } from '../errors/codes.js'
 import { parse } from '../helpers/bytes.js'
 
 /**
@@ -12,10 +12,7 @@ import { parse } from '../helpers/bytes.js'
 export function parseSize(size: string | number): number {
   const bytes = parse(size)
   if (bytes === null || !Number.isFinite(bytes) || bytes < 0) {
-    throw new ReamError(
-      'E_BODYPARSER_INVALID_SIZE',
-      `Cannot read the size ${JSON.stringify(size)}: expected a number of bytes or a value such as '512kb', '1.5mb' or '2 gb'.`,
-    )
+    throw new E_BODYPARSER_INVALID_SIZE([JSON.stringify(size)])
   }
   return bytes
 }

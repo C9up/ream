@@ -7,6 +7,12 @@
  * @implements FR64, FR65, FR66, FR67, FR68 (Story 11.1)
  */
 
+import {
+  E_EVENTS_ASSERTION_FAILED,
+  E_EVENTS_INVALID_ARGUMENT,
+  E_EVENTS_TIMEOUT,
+} from '../../errors/codes.js'
+
 export interface CollectedEvent {
   name: string
   data: unknown
@@ -78,10 +84,10 @@ export function assertEmitted(events: CollectedEvent[], name: string, payload?: 
 
   if (matching.length === 0) {
     const emittedNames = [...new Set(events.map((e) => e.name))].join(', ')
-    throw new Error(
-      `[HELIX_ASSERT_EMITTED] Expected event '${name}' to be emitted, but it was not.\n` +
+    throw new E_EVENTS_ASSERTION_FAILED([
+      `Expected event '${name}' to be emitted, but it was not.\n` +
         `  Emitted events: ${emittedNames || '(none)'}`,
-    )
+    ])
   }
 
   if (payload !== undefined && payload !== null) {
@@ -98,11 +104,11 @@ export function assertEmitted(events: CollectedEvent[], name: string, payload?: 
         })
         .join('\n    ')
 
-      throw new Error(
-        `[HELIX_ASSERT_EMITTED] Event '${name}' was emitted but no payload matched.\n` +
+      throw new E_EVENTS_ASSERTION_FAILED([
+        `Event '${name}' was emitted but no payload matched.\n` +
           `  Expected (partial): ${JSON.stringify(payload)}\n` +
           `  Actual payloads:\n    ${actualPayloads}`,
-      )
+      ])
     }
   }
 }
@@ -111,9 +117,9 @@ export function assertEmitted(events: CollectedEvent[], name: string, payload?: 
 export function assertNotEmitted(events: CollectedEvent[], name: string): void {
   const matching = events.filter((e) => e.name === name)
   if (matching.length > 0) {
-    throw new Error(
-      `[HELIX_ASSERT_NOT_EMITTED] Expected event '${name}' to NOT be emitted, but it was emitted ${matching.length} time(s).`,
-    )
+    throw new E_EVENTS_ASSERTION_FAILED([
+      `Expected event '${name}' to NOT be emitted, but it was emitted ${matching.length} time(s).`,
+    ])
   }
 }
 
@@ -157,10 +163,10 @@ export function waitForEvent(
         settled = true
         const received = events.map((e) => e.name).join(', ')
         reject(
-          new Error(
-            `[HELIX_TIMEOUT] Timed out waiting for event '${name}' after ${timeout}ms.\n` +
+          new E_EVENTS_TIMEOUT([
+            `Timed out waiting for event '${name}' after ${timeout}ms.\n` +
               `  Events received so far: ${received || '(none)'}`,
-          ),
+          ]),
         )
         return
       }
@@ -189,7 +195,9 @@ export function waitForChain(
   options: WaitForChainOptions = {},
 ): Promise<CollectedEvent[]> {
   if (!expectedNames || expectedNames.length === 0) {
-    return Promise.reject(new Error('[HELIX_CHAIN] expectedNames must be a non-empty array'))
+    return Promise.reject(
+      new E_EVENTS_INVALID_ARGUMENT(['expectedNames must be a non-empty array']),
+    )
   }
   const timeout = options.timeout ?? 5000
   const interval = options.interval ?? 10
@@ -216,12 +224,12 @@ export function waitForChain(
         const completed = expectedNames.filter((n) => chainNames.includes(n))
         const pending = expectedNames.filter((n) => !chainNames.includes(n))
         reject(
-          new Error(
-            `[HELIX_CHAIN_TIMEOUT] Event chain timed out after ${timeout}ms.\n` +
+          new E_EVENTS_TIMEOUT([
+            `Event chain timed out after ${timeout}ms.\n` +
               `  Correlation ID: ${correlationId}\n` +
               `  Completed: ${completed.join(', ') || '(none)'}\n` +
               `  Pending: ${pending.join(', ')}`,
-          ),
+          ]),
         )
         return
       }

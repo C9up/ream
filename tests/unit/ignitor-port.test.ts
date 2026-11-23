@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import { createServer } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { HttpKernelRequest, HttpKernelResponse } from '../../src/HttpKernel.js'
 import type { HyperServerLike } from '../../src/index.js'
@@ -41,6 +42,24 @@ function mockFactory() {
   }
 }
 
+/**
+ * A port the system reports free. Outside production the Ignitor moves to the
+ * next port when the one asked for is taken, so a fixed number made these tests
+ * fail whenever another process held it (even as the source port of an
+ * outgoing connection).
+ */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer()
+    probe.once('error', reject)
+    probe.listen(0, 'localhost', () => {
+      const address = probe.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      probe.close(() => resolve(port))
+    })
+  })
+}
+
 const previousPort = process.env.PORT
 
 afterEach(() => {
@@ -51,6 +70,7 @@ afterEach(() => {
 describe('ignitor > bind port', () => {
   it('reads a PORT that only exists once booting() has run', async () => {
     delete process.env.PORT
+    const port = await freePort()
     const { factory, boundPort } = mockFactory()
     const ignitor = new Ignitor({ serverFactory: factory, gracefulShutdown: false })
       .httpServer()
@@ -58,30 +78,32 @@ describe('ignitor > bind port', () => {
       // here, and importing it is what puts .env into process.env.
       .tap((app) => {
         app.booting(async () => {
-          process.env.PORT = '34517'
+          process.env.PORT = String(port)
         })
       })
     const app = await ignitor.start()
-    expect(boundPort()).toBe(34517)
+    expect(boundPort()).toBe(port)
     // And the accessor agrees with the socket, so a banner built from it
     // cannot contradict what was bound.
-    expect(await app.port()).toBe(34517)
+    expect(await app.port()).toBe(port)
     await app.stop()
   })
 
   it('lets an explicit port win over the environment', async () => {
     // A harness booting several applications in one process has already picked
     // an ephemeral port for each; the environment must not override that.
-    process.env.PORT = '34517'
+    const fromEnvironment = await freePort()
+    const explicit = await freePort()
+    process.env.PORT = String(fromEnvironment)
     const { factory, boundPort } = mockFactory()
     const app = await new Ignitor({
-      port: 34518,
+      port: explicit,
       serverFactory: factory,
       gracefulShutdown: false,
     })
       .httpServer()
       .start()
-    expect(boundPort()).toBe(34518)
+    expect(boundPort()).toBe(explicit)
     await app.stop()
   })
 

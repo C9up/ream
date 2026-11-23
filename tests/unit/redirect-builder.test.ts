@@ -78,7 +78,10 @@ describe('ream > RedirectBuilder > toRoute', () => {
   it('throws when no resolver was configured', () => {
     const { response } = makeResponseFake()
     expect(() => new RedirectBuilder(response).toRoute('show')).toThrow(
-      /Route URL resolver not configured/,
+      expect.objectContaining({
+        code: 'E_REDIRECT_NO_ROUTER',
+        message: expect.stringMatching(/Route URL resolver not configured/),
+      }),
     )
   })
 })

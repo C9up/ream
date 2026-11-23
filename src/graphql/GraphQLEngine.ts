@@ -23,8 +23,8 @@
 
 import * as fs from 'node:fs'
 import { currentNodeEnv } from '../env/nodeEnv.js'
+import { E_GRAPHQL_SCHEMA_NOT_FOUND } from '../errors/codes.js'
 import { loadNapi } from '../helpers/napi-loader.js'
-import { Exception } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import {
   authenticatedByGuards,
@@ -125,14 +125,13 @@ let graphqlNativeCache: GraphqlNative | undefined
 /**
  * Lazily load the Rust GraphQL parser from the `index` NAPI binary. There is no
  * TS fallback — when Rust exists, the engine is full-Rust. `loadNapi` throws a
- * typed `ReamError` if the native module is missing.
+ * `E_REAM_NAPI_NOT_FOUND` if the native module is missing.
  */
 function graphqlNative(): GraphqlNative {
   if (graphqlNativeCache === undefined) {
     graphqlNativeCache = loadNapi<GraphqlNative>({
       binaryName: 'index',
       callerMetaUrl: import.meta.url,
-      errorCodePrefix: 'GRAPHQL',
     })
   }
   return graphqlNativeCache
@@ -216,9 +215,8 @@ export interface GraphQLConfig {
   maxComplexity?: number
   /**
    * Echo the message of any error a resolver throws to the client. Default:
-   * only when NODE_ENV is development. Otherwise only a deliberate
-   * `Exception`, a client error (status below 500) or an error flagged
-   * `expose: true` keeps its message; anything else reads "Internal server
+   * only when NODE_ENV is development. Otherwise only a client error (status
+   * below 500) or an error flagged `expose: true` keeps its message; anything else reads "Internal server
    * error", and the real error goes to `ctx.logger`.
    */
   debug?: boolean
@@ -291,7 +289,7 @@ export class GraphQLEngine {
 
   constructor(config: GraphQLConfig) {
     if (!fs.existsSync(config.schemaPath)) {
-      throw new Error(`GraphQL schema not found: ${config.schemaPath}`)
+      throw new E_GRAPHQL_SCHEMA_NOT_FOUND([config.schemaPath])
     }
     this.#schemaSource = fs.readFileSync(config.schemaPath, 'utf8')
     this.path = config.path ?? '/graphql'
@@ -639,9 +637,12 @@ function isVariablesRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** A deliberate `Exception`, a client error, or an error flagged `expose: true`. */
+/**
+ * A client error, or an error flagged `expose: true`. Being an `Exception` is
+ * not a reason: every package raises flare `Exception`s, and a 500 one names
+ * hosts, paths and queries.
+ */
 function isPublicError(err: unknown): boolean {
-  if (err instanceof Exception) return true
   if (err === null || typeof err !== 'object') return false
   if ('expose' in err && err.expose === true) return true
   return 'status' in err && typeof err.status === 'number' && err.status < 500

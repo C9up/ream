@@ -4,7 +4,8 @@
  * @implements FR73
  */
 
-import { ReamError } from './ReamError.js'
+import { Exception } from '@c9up/flare'
+import { E_PIPELINE_ERROR, E_PIPELINE_UNKNOWN_MIDDLEWARE } from './codes.js'
 
 /**
  * Pipeline stage names in execution order.
@@ -39,7 +40,7 @@ export function createPipelineError(
   stageIndex: number,
   originalError: Error,
   context?: Record<string, string>,
-): ReamError {
+): E_PIPELINE_ERROR {
   const total = PIPELINE_STAGES.length
   const clampedIndex = Math.max(0, Math.min(stageIndex, total - 1))
   // The index is clamped into the list just above, so the lookup lands — the
@@ -48,20 +49,23 @@ export function createPipelineError(
   const position = `${clampedIndex + 1}/${total}`
   const nextStage = PIPELINE_STAGES[clampedIndex + 1] ?? '(end)'
 
-  const errorCode = originalError instanceof ReamError ? originalError.code : 'E_PIPELINE_ERROR'
-
-  return new ReamError(errorCode, originalError.message, {
+  // The wrapped error's code stays the code: a framework error keeps saying
+  // what it is, and only an error without one reads `E_PIPELINE_ERROR`.
+  const code =
+    originalError instanceof Exception && originalError.code !== undefined
+      ? originalError.code
+      : undefined
+  return new E_PIPELINE_ERROR(originalError.message, {
+    code,
+    cause: originalError,
     pipelineStage: `${position} (${stageName})`,
-    hint: `Error occurred at pipeline stage ${position} (${stageName}). Next stage would have been: ${nextStage}.`,
+    help: `Error occurred at pipeline stage ${position} (${stageName}). Next stage would have been: ${nextStage}.`,
     context: {
       ...context,
       stage: stageName,
       position,
       nextStage,
     },
-    sourceFile: originalError instanceof ReamError ? originalError.sourceFile : undefined,
-    sourceLine: originalError instanceof ReamError ? originalError.sourceLine : undefined,
-    docsUrl: originalError instanceof ReamError ? originalError.docsUrl : undefined,
   })
 }
 
@@ -75,8 +79,8 @@ export function validatePipelineConfig(config: {
   globalMiddleware?: unknown[]
   namedMiddleware?: Record<string, unknown>
   routes?: Array<{ middleware?: string[] }>
-}): ReamError[] {
-  const errors: ReamError[] = []
+}): E_PIPELINE_UNKNOWN_MIDDLEWARE[] {
+  const errors: E_PIPELINE_UNKNOWN_MIDDLEWARE[] = []
 
   // Check named middleware references exist (deduplicated)
   if (config.routes && config.namedMiddleware) {
@@ -87,15 +91,7 @@ export function validatePipelineConfig(config: {
       for (const mw of route.middleware ?? []) {
         if (!registered.has(mw) && !reported.has(mw)) {
           reported.add(mw)
-          errors.push(
-            new ReamError('E_PIPELINE_UNKNOWN_MIDDLEWARE', `Middleware '${mw}' is not registered`, {
-              hint: `Register it with middleware.register('${mw}', handler) before using it on routes.`,
-              context: {
-                middleware: mw,
-                registered: [...registered].join(', '),
-              },
-            }),
-          )
+          errors.push(new E_PIPELINE_UNKNOWN_MIDDLEWARE(mw, [...registered].join(', ')))
         }
       }
     }

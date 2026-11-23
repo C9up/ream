@@ -1,23 +1,25 @@
 /**
  * Exception system — AdonisJS-compatible exception handling.
  *
- * - Exception: base class with self-handling support
+ * - Exception: flare's, re-exported, with self-handling support
  * - ExceptionHandler: global exception handler with content negotiation
  * - Built-in E_* exceptions
  */
 
-import { format } from 'node:util'
+import { createError, Exception } from '@c9up/flare'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import { Macroable } from '../utils/Macroable.js'
 import type { HttpContext } from './HttpContext.js'
 
 /**
- * Base exception class. Extend this to create self-handling exceptions.
+ * The exception classes are flare's, the ones every package of the ecosystem
+ * extends: `Exception` (static `status`, `code`, `help`, `message`),
+ * `createError(message, code, status?)` whose class takes the placeholder
+ * values as an array, `RuntimeException`, `InvalidArgumentsException`.
  *
- * Usage:
- *   throw new Exception('Something went wrong', { status: 400, code: 'E_BAD_REQUEST' })
+ * A self-handling exception declares `handle()` and `report()`; the handler
+ * calls them on whatever was thrown, duck-typed:
  *
- * Self-handled exception:
  *   class PaymentFailed extends Exception {
  *     static status = 402
  *     static code = 'E_PAYMENT_FAILED'
@@ -29,192 +31,207 @@ import type { HttpContext } from './HttpContext.js'
  *     }
  *   }
  */
-export class Exception extends Error {
-  static status = 500
-  static code = 'E_UNKNOWN'
-  /** Optional static remediation hint, copied onto instances (AdonisJS `Exception.help`). */
-  static help?: string
-
-  status: number
-  code: string
-  /** Human-readable remediation hint surfaced in debug output (AdonisJS `error.help`). */
-  help?: string
-
-  constructor(message: string, options?: { status?: number; code?: string }) {
-    super(message)
-    this.name = this.constructor.name
-    // `this.constructor` is typed `Function`, which carries none of the statics
-    // a subclass sets (`status`, `code`, `help`). Reading them through
-    // `Reflect.get` states that we are looking at OPTIONAL statics, which is
-    // exactly the contract — a subclass need not define any of them.
-    const ctor = this.constructor
-    const staticNumber = (key: string): number | undefined => {
-      const v = Reflect.get(ctor, key)
-      return typeof v === 'number' ? v : undefined
-    }
-    const staticString = (key: string): string | undefined => {
-      const v = Reflect.get(ctor, key)
-      return typeof v === 'string' ? v : undefined
-    }
-    this.status = options?.status ?? staticNumber('status') ?? Exception.status
-    this.code = options?.code ?? staticString('code') ?? Exception.code
-    const help = staticString('help')
-    if (help !== undefined) this.help = help
-  }
-
-  /** Override to self-handle the exception (convert to HTTP response). */
-  handle?(error: this, ctx: HttpContext): Promise<void> | void
-
-  /** Override to report the exception (logging, monitoring). Never send HTTP from here. */
-  report?(error: this, ctx: HttpContext): Promise<void> | void
-}
-
-/** A concrete Exception subclass produced by {@link createError}. */
-export interface ExceptionConstructor {
-  new (...args: unknown[]): Exception
-  status: number
-  code: string
-}
-
-/**
- * Build a reusable Exception subclass in one line (AdonisJS `createError`).
- * `message` may contain `util.format` placeholders (`%s`, `%d`) filled by the
- * constructor args:
- *
- *   const E_RESOURCE_MISSING = createError('Resource %s not found', 'E_RESOURCE_MISSING', 404)
- *   throw new E_RESOURCE_MISSING('user-42')   // → "Resource user-42 not found"
- */
-export function createError(message: string, code: string, status = 500): ExceptionConstructor {
-  return class extends Exception {
-    static override status = status
-    static override code = code
-    constructor(...args: unknown[]) {
-      super(format(message, ...args), { status, code })
-    }
-  }
-}
-
-/** A generic 500 runtime error (AdonisJS `RuntimeException`). */
-export class RuntimeException extends Exception {
-  static override status = 500
-  static override code = 'E_RUNTIME_EXCEPTION'
-}
-
-/** Raised when a function receives invalid arguments (AdonisJS `InvalidArgumentsException`). */
-export class InvalidArgumentsException extends RuntimeException {
-  static override code = 'E_INVALID_ARGUMENTS'
-}
+export {
+  createError,
+  type ErrorClass,
+  Exception,
+  InvalidArgumentsException,
+  RuntimeException,
+} from '@c9up/flare'
 
 // ─── Built-in exceptions ──────────────────────────────────
 
-export class E_ROUTE_NOT_FOUND extends Exception {
-  static override status = 404
-  static override code = 'E_ROUTE_NOT_FOUND'
+/** No route matches the request's method and URL (`Cannot GET:/missing`). */
+export const E_ROUTE_NOT_FOUND = createError<[method: string, url: string]>(
+  'Cannot %s:%s',
+  'E_ROUTE_NOT_FOUND',
+  404,
+)
 
-  constructor(method: string, path: string) {
-    super(`Route not found: ${method} ${path}`, { status: 404, code: 'E_ROUTE_NOT_FOUND' })
-  }
-}
-
-export class E_UNAUTHORIZED extends Exception {
+/**
+ * A route's `.auth()` guard (or its `.role()` / `.permission()` check on an
+ * anonymous request) refused the request.
+ *
+ * The code, status, message, `identifier`, `getResponseMessage` and `handle`
+ * are those of `E_UNAUTHORIZED_ACCESS` in `@c9up/warden`, so the refusal
+ * answers the same bytes whichever of the two raised it, and an application
+ * branches on `error.code` the same way. Ream does not depend on warden, so the
+ * class is its own: test the code, not the class, across the two.
+ */
+export class E_UNAUTHORIZED_ACCESS extends Exception {
   static override status = 401
-  static override code = 'E_UNAUTHORIZED'
+  static override code = 'E_UNAUTHORIZED_ACCESS'
+  static override message = 'Unauthorized access'
 
-  constructor(message = 'Authentication required') {
-    super(message, { status: 401, code: 'E_UNAUTHORIZED' })
+  /** The translation key of the message (`ctx.i18n.t`). */
+  readonly identifier = 'errors.E_UNAUTHORIZED_ACCESS'
+
+  /** The message, translated through `ctx.i18n` when the request has one. */
+  getResponseMessage(error: E_UNAUTHORIZED_ACCESS, ctx: HttpContext): string {
+    return translate(ctx, error.identifier, {}, error.message)
   }
 
-  override handle(_error: this, ctx: HttpContext): void {
-    ctx.response.status(401).json({ error: { code: 'E_UNAUTHORIZED', message: this.message } })
-  }
-}
-
-export class E_FORBIDDEN extends Exception {
-  static override status = 403
-  static override code = 'E_FORBIDDEN'
-
-  required?: string[]
-
-  constructor(message = 'Insufficient permissions', required?: string[]) {
-    super(message, { status: 403, code: 'E_FORBIDDEN' })
-    this.required = required
-  }
-
-  override handle(_error: this, ctx: HttpContext): void {
-    ctx.response.status(403).json({
+  /**
+   * Write the refusal: `401 { error: { code, message } }`, whatever the client
+   * accepts — the body warden's refusal writes for a guard with no login route
+   * to redirect to and no challenge to send.
+   */
+  async handle(error: E_UNAUTHORIZED_ACCESS, ctx: HttpContext): Promise<void> {
+    ctx.response.status(error.status)
+    ctx.response.json({
       error: {
-        code: 'E_FORBIDDEN',
-        message: this.message,
-        ...(this.required ? { required: this.required } : {}),
+        code: error.code ?? E_UNAUTHORIZED_ACCESS.code,
+        message: error.getResponseMessage(error, ctx),
       },
     })
   }
 }
 
+/**
+ * A route's `.role()` or `.permission()` check refused an authenticated user.
+ *
+ * The code, status, message, `identifier`, `getResponseMessage` and `handle`
+ * are those of `E_AUTHORIZATION_FAILURE` in `@c9up/warden` (a denied
+ * `authorize()`), so the refusal answers the same bytes as warden's. The roles
+ * and permissions the route asks for are not carried: the message reaches the
+ * client, and the list would tell it what to obtain.
+ */
+export class E_AUTHORIZATION_FAILURE extends Exception {
+  static override status = 403
+  static override code = 'E_AUTHORIZATION_FAILURE'
+  static override message = 'Access denied'
+
+  /** The translation key of the message (`ctx.i18n.t`). */
+  readonly identifier = 'errors.E_AUTHORIZATION_FAILURE'
+
+  /** The message, translated through `ctx.i18n` when the request has one. */
+  getResponseMessage(ctx: HttpContext): string {
+    return translate(ctx, this.identifier, {}, this.message)
+  }
+
+  /**
+   * Write the denial by content negotiation: a form submission (POST, PUT,
+   * PATCH, DELETE) from a browser with a session gets the form flashed back
+   * (without `_csrf`, `_method` and passwords), the message flashed, and a
+   * redirect back; any other HTML request the message as text;
+   * `{ errors: [{ message }] }` for JSON; a JSON:API error object.
+   */
+  async handle(_: unknown, ctx: HttpContext): Promise<void> {
+    const message = this.getResponseMessage(ctx)
+    const code = E_AUTHORIZATION_FAILURE.code
+    switch (ctx.request.accepts(['html', 'application/vnd.api+json', 'json'])) {
+      case 'json':
+        ctx.response.status(this.status)
+        ctx.response.send({ errors: [{ message }] })
+        return
+      case 'application/vnd.api+json':
+        ctx.response.status(this.status)
+        ctx.response.send({ errors: [{ code, title: message }] })
+        return
+    }
+    const session = ctx.session
+    if (session && FORM_SUBMISSION_METHODS.includes(ctx.request.method().toUpperCase())) {
+      session.flashExcept([
+        '_csrf',
+        '_method',
+        'password',
+        'password_confirmation',
+        'passwordConfirmation',
+      ])
+      session.flash('error', message)
+      session.flashErrors({ [code]: message })
+      ctx.response.redirect('back', true)
+      return
+    }
+    ctx.response.status(this.status)
+    ctx.response.send(message)
+  }
+}
+
+/** The methods of a form submission, which a denial redirects back from. */
+const FORM_SUBMISSION_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
+
+/**
+ * `identifier` translated through the request's i18n service
+ * (`ctx.i18n.t(identifier, data, { defaultValue })`, the shape of the
+ * ecosystem's i18n package), `fallback` without one. Read structurally: ream
+ * does not depend on the i18n package.
+ */
+function translate(
+  ctx: HttpContext,
+  identifier: string,
+  data: Record<string, unknown>,
+  fallback: string,
+): string {
+  const i18n: unknown = Reflect.get(ctx, 'i18n')
+  if (typeof i18n !== 'object' || i18n === null) return fallback
+  const t: unknown = Reflect.get(i18n, 't')
+  if (typeof t !== 'function') return fallback
+  const translated: unknown = Reflect.apply(t, i18n, [identifier, data, { defaultValue: fallback }])
+  return typeof translated === 'string' ? translated : fallback
+}
+
+/**
+ * A route validator rejected the request body. The same shape as
+ * `E_VALIDATION_ERROR` in `@c9up/rune` (code, status 422, message, the
+ * per-field `messages`), which ream does not depend on: the exception handler
+ * keys its validation renderers on the code and `messages`, so both render the
+ * same way.
+ */
 export class E_VALIDATION_ERROR extends Exception {
   static override status = 422
   static override code = 'E_VALIDATION_ERROR'
+  static override message = 'Validation failure'
 
-  /**
-   * Per-field failures. Named `messages` because that is what rune and
-   * AdonisJS's own validation renderers read — a handler copied from an Adonis
-   * app reaches for `error.messages`.
-   */
-  messages: unknown[]
+  /** Per-field failures, as the validator reported them. */
+  readonly messages: unknown[]
 
-  constructor(messages: unknown[]) {
-    super('Validation failure', { status: 422, code: 'E_VALIDATION_ERROR' })
+  constructor(messages: unknown[], options?: ErrorOptions) {
+    super(undefined, options)
     this.messages = messages
   }
 }
 
-export class E_ROW_NOT_FOUND extends Exception {
-  static override status = 404
-  static override code = 'E_ROW_NOT_FOUND'
-
-  constructor(model?: string) {
-    super(model ? `${model} not found` : 'Resource not found', {
-      status: 404,
-      code: 'E_ROW_NOT_FOUND',
-    })
-  }
-
-  override handle(_error: this, ctx: HttpContext): void {
-    ctx.response.status(404).json({ error: { code: 'E_ROW_NOT_FOUND', message: this.message } })
-  }
-}
-
+/**
+ * An exception that carries the body of the response it turns into.
+ * `E_HTTP_EXCEPTION.invoke(body, status)` builds one from a string, an object
+ * (its `message` becomes the error's) or nothing at all.
+ */
 export class E_HTTP_EXCEPTION extends Exception {
-  constructor(message: string, status: number) {
-    super(message, { status, code: 'E_HTTP_EXCEPTION' })
+  static override code = 'E_HTTP_EXCEPTION'
+
+  /** What is sent to the client. */
+  body: unknown
+
+  static invoke(body: unknown, status: number, code = 'E_HTTP_EXCEPTION'): E_HTTP_EXCEPTION {
+    if (body === null || body === undefined) {
+      const error = new this('HTTP Exception', { status, code })
+      error.body = 'Internal server error'
+      return error
+    }
+    if (typeof body === 'object') {
+      const message: unknown = Reflect.get(body, 'message')
+      const error = new this(
+        typeof message === 'string' && message.length > 0 ? message : 'HTTP Exception',
+        { status, code },
+      )
+      error.body = body
+      return error
+    }
+    const error = new this(String(body), { status, code })
+    error.body = body
+    return error
   }
 }
 
 /**
- * Thrown by `response.abort()` / `response.abortIf()` (AdonisJS parity). Carries
- * an arbitrary body that {@link handle} renders as-is — a string verbatim,
- * anything else as JSON.
+ * Thrown by `response.abort()`, `abortIf()` and `abortUnless()`, built through
+ * `invoke()`, so its `code` is `E_HTTP_EXCEPTION`. It handles itself: the
+ * response gets its status and its body as given.
  */
-export class E_HTTP_REQUEST_ABORTED extends Exception {
-  static override status = 400
-  static override code = 'E_HTTP_REQUEST_ABORTED'
-
-  readonly body: unknown
-
-  constructor(body: unknown, status = 400) {
-    super(typeof body === 'string' ? body : 'Request aborted', {
-      status,
-      code: 'E_HTTP_REQUEST_ABORTED',
-    })
-    this.body = body
-  }
-
-  override handle(_error: this, ctx: HttpContext): void {
-    if (typeof this.body === 'string') {
-      ctx.response.status(this.status).send(this.body)
-    } else {
-      ctx.response.status(this.status).json(this.body)
-    }
+export class E_HTTP_REQUEST_ABORTED extends E_HTTP_EXCEPTION {
+  handle(error: E_HTTP_EXCEPTION, ctx: HttpContext): void {
+    ctx.response.status(error.status).send(error.body)
   }
 }
 
@@ -358,11 +375,15 @@ export class ExceptionHandler extends Macroable {
    * The message a client is allowed to see.
    *
    * DEVIATION (named): outside debug mode ream only echoes the message of a
-   * deliberate `Exception`, of a client error (status below 500, which a
-   * package raises on purpose: 401, 403, 413…), or of an error flagged
-   * `expose: true`; anything else collapses to a generic line. AdonisJS
-   * echoes `error.message` whatever was thrown, which leaks the text of driver
-   * and library errors to the client.
+   * client error (status below 500, which a package raises on purpose: 401,
+   * 403, 413…), or of an error flagged `expose: true`; anything else
+   * collapses to a generic line. AdonisJS echoes `error.message` whatever was
+   * thrown, which leaks the text of driver and library errors to the client.
+   *
+   * Being an `Exception` grants nothing: every package of the ecosystem
+   * raises flare `Exception`s, status 500 by default, and their messages name
+   * hosts, paths and queries. An application that wants a 5xx message shown
+   * sets `expose = true` on its error.
    *
    * A `code` is NOT a reason to show the message: Node system errors
    * (`ECONNREFUSED`, `ENOENT`) and database drivers (`23505`) carry one, and
@@ -371,7 +392,7 @@ export class ExceptionHandler extends Macroable {
    */
   protected publicMessage(error: HttpError, ctx: HttpContext): string {
     if (this.isDebuggingEnabled(ctx)) return error.message
-    if (error instanceof Exception || error.status < 500 || error.expose === true) {
+    if (error.status < 500 || error.expose === true) {
       return error.message
     }
     return 'An internal error occurred'
@@ -571,14 +592,11 @@ function toJsonApiValidationError(message: unknown): Record<string, unknown> {
   return error
 }
 
-/** Extract status + code from an Exception, ReamError, or duck-typed error. */
+/** Extract status + code from an `Exception` or a duck-typed error. */
 function extractErrorMeta(error: unknown): { status: number; code: string } {
   let status = 500
   let code = 'E_UNKNOWN'
-  if (error instanceof Exception) {
-    status = error.status
-    code = error.code
-  } else if (error !== null && typeof error === 'object') {
+  if (error !== null && typeof error === 'object') {
     if ('status' in error && typeof error.status === 'number') status = error.status
     if ('code' in error && typeof error.code === 'string') code = error.code
   }

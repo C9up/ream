@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { E_SESSION_FILE_LOCKED } from '../../errors/codes.js'
 import type { SessionDriver } from '../Session.js'
 
 /**
@@ -150,7 +151,7 @@ export class FileDriver implements SessionDriver {
           continue
         }
         if (Date.now() > deadline) {
-          throw new Error(`Session file is locked: ${lock}`)
+          throw new E_SESSION_FILE_LOCKED([lock])
         }
         await new Promise((resolve) => setTimeout(resolve, 5))
       }

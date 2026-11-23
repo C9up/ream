@@ -8,6 +8,7 @@
  */
 
 import type { Application } from '../Application.js'
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
 let instance: Application | undefined
@@ -37,8 +38,11 @@ export function getApp(): Application | undefined {
 
 const app: Application = createServiceProxy<Application>(
   () => instance,
-  'Application accessed before initialization. ' +
-    'Ensure this code runs during or after the boot phase.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      'Application accessed before initialization. ' +
+        'Ensure this code runs during or after the boot phase.',
+    ]),
 )
 
 export default app

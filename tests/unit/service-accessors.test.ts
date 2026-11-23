@@ -62,9 +62,19 @@ describe('service accessors > pre-boot behaviour', () => {
         expect(() => inspect(mod.default)).not.toThrow()
       })
 
-      it('throws a message naming the missing wiring on a real read', async () => {
+      it('throws an error naming the missing wiring on a real read', async () => {
         const mod = await load()
-        expect(() => Reflect.get(mod.default, 'somethingReal')).toThrow(/accessed before/i)
+        let thrown: unknown
+        try {
+          Reflect.get(mod.default, 'somethingReal')
+        } catch (error) {
+          thrown = error
+        }
+        // The encryption accessor raises `E_MISSING_ENCRYPTER_KEY`, whose
+        // message is the fixed one: the wiring it missed is on `help`.
+        const message = thrown instanceof Error ? thrown.message : ''
+        const help: unknown = thrown instanceof Error ? Reflect.get(thrown, 'help') : undefined
+        expect(`${message}\n${typeof help === 'string' ? help : ''}`).toMatch(/accessed before/i)
       })
     })
   }
@@ -105,7 +115,9 @@ describe('services/encryption > APP_KEY-gated', () => {
 
     // Absent is the normal state without APP_KEY, so the message has to point
     // at the key rather than at the boot phase.
-    expect(() => encryption.sign('x')).toThrow(/E_MISSING_APP_KEY/)
+    expect(() => encryption.sign('x')).toThrow(
+      expect.objectContaining({ code: 'E_MISSING_ENCRYPTER_KEY' }),
+    )
 
     const signer = new CookieSigner('a-key-long-enough-to-pass')
     setEncryption(signer)
@@ -113,7 +125,9 @@ describe('services/encryption > APP_KEY-gated', () => {
     expect(signer.unsign(signed)).toBe('payload')
 
     clearEncryption(signer)
-    expect(() => encryption.sign('x')).toThrow(/E_MISSING_APP_KEY/)
+    expect(() => encryption.sign('x')).toThrow(
+      expect.objectContaining({ code: 'E_MISSING_ENCRYPTER_KEY' }),
+    )
   })
 })
 
@@ -125,7 +139,12 @@ describe('services/urlBuilder > delegates to the router', () => {
       import('../../src/router/Router.js'),
     ])
 
-    expect(() => urlFor('users.show')).toThrow(/used before initialization/i)
+    expect(() => urlFor('users.show')).toThrow(
+      expect.objectContaining({
+        code: 'E_SERVICE_NOT_BOOTED',
+        message: expect.stringMatching(/used before initialization/i),
+      }),
+    )
 
     const router = new Router()
     router.get('/users/:id', () => 'ok').as('users.show')
@@ -137,7 +156,9 @@ describe('services/urlBuilder > delegates to the router', () => {
 
     // Signing needs a signer the router was handed; without one it says so
     // rather than returning an unsigned URL.
-    expect(() => signedUrlFor('users.show', { id: '42' })).toThrow(/E_MISSING_APP_KEY/)
+    expect(() => signedUrlFor('users.show', { id: '42' })).toThrow(
+      expect.objectContaining({ code: 'E_MISSING_ENCRYPTER_KEY' }),
+    )
 
     clearRouter(router)
     expect(() => urlFor('users.show')).toThrow(/used before initialization/i)

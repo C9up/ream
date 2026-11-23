@@ -14,7 +14,7 @@
  *   command.error     // the failure, when one survived completed()
  */
 
-import { ReamError } from '../errors/ReamError.js'
+import { E_CONSOLE_NOT_BOOTED } from '../errors/codes.js'
 import type { Ui } from './cliui.js'
 import type { Kernel, KernelState } from './Kernel.js'
 import type { CommandClass, CommandInstance, ExecutedCommand, SerializedCommand } from './types.js'
@@ -160,11 +160,7 @@ export class Console {
 
   #assertBooted(method: string): void {
     if (this.#booted) return
-    throw new ReamError(
-      'E_CONSOLE_NOT_BOOTED',
-      `consoleApp.${method}() was called before the commands were loaded.`,
-      { hint: 'Await consoleApp.boot() first — consoleApp.exec() does it for you.' },
-    )
+    throw new E_CONSOLE_NOT_BOOTED([method])
   }
 
   /** The underlying kernel, for anything the façade does not cover. */

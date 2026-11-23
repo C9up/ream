@@ -25,6 +25,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { E_WEBSOCKET_PROTOCOL, E_WEBSOCKET_REGISTER } from '../errors/codes.js'
 import { Exception } from './Exception.js'
 import type { HttpContext } from './HttpContext.js'
 
@@ -122,9 +123,7 @@ export class ServerWebSocket {
    */
   acceptProtocol(protocol: string): this {
     if (!this.offeredProtocols.includes(protocol)) {
-      throw new Error(
-        `[E_WEBSOCKET_PROTOCOL] '${protocol}' was not offered by the client (offered: ${this.offeredProtocols.join(', ') || 'none'})`,
-      )
+      throw new E_WEBSOCKET_PROTOCOL([protocol, this.offeredProtocols.join(', ') || 'none'])
     }
     this.#protocol = protocol
     return this
@@ -231,7 +230,7 @@ export class WebSocketHub {
   open(offeredProtocols: readonly string[]): ServerWebSocket {
     const id = randomUUID()
     if (!this.#backend.registerWebSocket(id)) {
-      throw new Error('[E_WEBSOCKET_REGISTER] the native server refused a fresh socket id')
+      throw new E_WEBSOCKET_REGISTER()
     }
     const socket = new ServerWebSocket(id, this.#backend, offeredProtocols, this.#onListenerError)
     this.#sockets.set(id, socket)

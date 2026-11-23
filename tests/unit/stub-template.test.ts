@@ -7,7 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { compile, escapeHtml, render, StubSyntaxError } from '../../src/stubs/template.js'
+import { errors } from '../../src/index.js'
+import { compile, escapeHtml, render } from '../../src/stubs/template.js'
 
 describe('stub templates — interpolation', () => {
   it('reads a value, and reaches into an object', () => {
@@ -115,7 +116,7 @@ describe('stub templates — what it refuses', () => {
   })
 
   it('reports a template that does not compile as a stub error', () => {
-    expect(() => render('{{#if a b c}}x{{/if}}', {})).toThrowError(StubSyntaxError)
+    expect(() => render('{{#if a b c}}x{{/if}}', {})).toThrowError(errors.E_REAM_STUB_SYNTAX)
   })
 })
 
@@ -158,6 +159,9 @@ describe('stub templates — what a stub cannot reach', () => {
     expect(() => render('{{ name.constructor }}', { name: 'x' })).toThrowError(
       /cannot read "constructor"/,
     )
+    expect(() => render('{{ name.constructor }}', { name: 'x' })).toThrowError(
+      expect.objectContaining({ code: 'E_REAM_STUB_FORBIDDEN_KEY' }),
+    )
     expect(() =>
       render("{{ name.constructor.constructor('return process')() }}", { name: 'x' }),
     ).toThrowError(/cannot read "constructor"/)
@@ -172,26 +176,32 @@ describe('stub templates — what a stub cannot reach', () => {
     expect(() => render('{{ name.toUpperCase() }}', { name: 'x' })).toThrowError(
       /is not a function/,
     )
+    expect(() => render('{{ name.toUpperCase() }}', { name: 'x' })).toThrowError(
+      expect.objectContaining({ code: 'E_REAM_STUB_EVALUATION' }),
+    )
   })
 
   it('sees no global', () => {
     for (const global of ['process', 'globalThis', 'require', 'Function', 'eval']) {
       expect(() => render(`{{ ${global} }}`, {})).toThrowError(
-        new ReferenceError(`${global} is not defined`),
+        expect.objectContaining({
+          code: 'E_REAM_STUB_EVALUATION',
+          message: `${global} is not defined`,
+        }),
       )
     }
   })
 
   it('refuses JavaScript it does not interpret, at compile time', () => {
     for (const source of ['{{ a = 1 }}', '{{ (() => 1)() }}', `{{ \`$\{a}\` }}`, '{{ a; b }}']) {
-      expect(() => compile(source, { props: ['a', 'b'] })).toThrowError(StubSyntaxError)
+      expect(() => compile(source, { props: ['a', 'b'] })).toThrowError(errors.E_REAM_STUB_SYNTAX)
     }
   })
 
   it('refuses an elif or an else with no if open', () => {
     expect(() => render('{{#else}}x', {})).toThrowError(/outside an \{\{#if\}\}/)
     expect(() => render('{{#each items}}{{#elif a}}{{/each}}', { items: [], a: 1 })).toThrowError(
-      StubSyntaxError,
+      errors.E_REAM_STUB_SYNTAX,
     )
   })
 })

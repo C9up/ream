@@ -996,7 +996,7 @@ async fn hyper_to_ream_request(
                     Err(crate::multipart::MultipartError::Malformed(_)) => {
                         return Err(ReamResponse::json(
                             400,
-                            r#"{"error":{"code":"E_BAD_MULTIPART","message":"Malformed multipart/form-data body"}}"#,
+                            r#"{"error":{"code":"E_INVALID_MULTIPART_REQUEST","message":"Invalid multipart request"}}"#,
                         ));
                     }
                 }
@@ -1004,7 +1004,7 @@ async fn hyper_to_ream_request(
             None => {
                 return Err(ReamResponse::json(
                     400,
-                    r#"{"error":{"code":"E_BAD_MULTIPART","message":"multipart/form-data missing boundary parameter"}}"#,
+                    r#"{"error":{"code":"E_INVALID_MULTIPART_REQUEST","message":"multipart/form-data missing boundary parameter"}}"#,
                 ));
             }
         };

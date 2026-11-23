@@ -82,7 +82,12 @@ describe('security regressions > request/cookie parsing', () => {
 describe('security regressions > CRLF header injection', () => {
   it('Response.header rejects CRLF in value', async () => {
     const res = new Response()
-    expect(() => res.header('x-custom', 'value\r\ninjected: true')).toThrow(/CRLF/)
+    expect(() => res.header('x-custom', 'value\r\ninjected: true')).toThrow(
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_HEADER',
+        message: expect.stringMatching(/CRLF/),
+      }),
+    )
   })
 
   it('Response.header accepts normal values', async () => {
@@ -92,8 +97,18 @@ describe('security regressions > CRLF header injection', () => {
 
   it('Response.type rejects CRLF/NUL (no response-splitting via content-type)', async () => {
     const res = new Response()
-    expect(() => res.type('text/html\r\nset-cookie: evil=1')).toThrow(/CRLF/)
-    expect(() => res.type('text/html\0')).toThrow(/CRLF/)
+    expect(() => res.type('text/html\r\nset-cookie: evil=1')).toThrow(
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_HEADER',
+        message: expect.stringMatching(/CRLF/),
+      }),
+    )
+    expect(() => res.type('text/html\0')).toThrow(
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_HEADER',
+        message: expect.stringMatching(/CRLF/),
+      }),
+    )
   })
 
   it('Response.type accepts a normal content-type', async () => {
@@ -138,14 +153,20 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
   it('Response.cookie throws when SameSite=None is paired with secure=false', async () => {
     const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none', secure: false })).toThrow(
-      /SameSite=None requires Secure/,
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_COOKIE',
+        message: expect.stringMatching(/SameSite=None requires Secure/),
+      }),
     )
   })
 
   it('Response.cookie throws when SameSite=None is paired with secure omitted', async () => {
     const res = await signingResponse(Response)
     expect(() => res.cookie('sid', 'abc', { sameSite: 'none' })).toThrow(
-      /SameSite=None requires Secure/,
+      expect.objectContaining({
+        code: 'E_RESPONSE_INVALID_COOKIE',
+        message: expect.stringMatching(/SameSite=None requires Secure/),
+      }),
     )
   })
 

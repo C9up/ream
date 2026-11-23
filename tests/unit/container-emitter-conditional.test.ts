@@ -213,7 +213,7 @@ describe('Container > conditional bindings', () => {
     container.if(() => false).bind('svc', () => 'never')
     await expect(container.make('svc')).rejects.toMatchObject({
       code: 'E_CONTAINER_NOT_FOUND',
-      hint: expect.stringMatching(/conditional binding/),
+      help: expect.stringMatching(/conditional binding/),
     })
   })
 })

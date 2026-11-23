@@ -80,6 +80,7 @@ describe('events > listener forms on a class event', () => {
     emitter.on(UserRegistered, [SendWelcome, 'nope'])
     await new UserRegistered('m@n.o').emit()
     expect(String(errors[0])).toContain('Missing method "nope"')
+    expect(errors[0]).toMatchObject({ code: 'E_EVENTS_MISSING_LISTENER_METHOD' })
   })
 
   it('off / clearListeners / listenerCount / hasListeners take the class', async () => {

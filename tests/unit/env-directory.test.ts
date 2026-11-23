@@ -80,7 +80,10 @@ describe('env > which directory the files come from', () => {
     // variable is somebody saying where the file IS. A typo would otherwise
     // start the app on whatever defaults were around.
     process.env.ENV_PATH = root
-    await expect(loadEnvFiles(dir(built))).rejects.toThrow(/ENV_PATH/)
+    await expect(loadEnvFiles(dir(built))).rejects.toMatchObject({
+      code: 'E_ENV_PATH_NO_FILE',
+      message: expect.stringMatching(/ENV_PATH/),
+    })
   })
 
   it('stays silent about a missing file when nobody named a directory', async () => {

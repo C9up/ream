@@ -77,7 +77,9 @@ describe('helix > assertEmitted()', () => {
     bus.emit('order.created', '{}')
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    expect(() => assertEmitted(events, 'order.deleted')).toThrow('HELIX_ASSERT_EMITTED')
+    expect(() => assertEmitted(events, 'order.deleted')).toThrow(
+      expect.objectContaining({ code: 'E_EVENTS_ASSERTION_FAILED' }),
+    )
   })
 
   it('matches partial payload', async () => {
@@ -138,7 +140,9 @@ describe('helix > assertNotEmitted()', () => {
     bus.emit('order.created', '{}')
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    expect(() => assertNotEmitted(events, 'order.created')).toThrow('HELIX_ASSERT_NOT_EMITTED')
+    expect(() => assertNotEmitted(events, 'order.created')).toThrow(
+      expect.objectContaining({ code: 'E_EVENTS_ASSERTION_FAILED' }),
+    )
   })
 })
 
@@ -178,9 +182,9 @@ describe('helix > waitForEvent()', () => {
 
     bus.emit('order.created', '{}')
 
-    await expect(waitForEvent(events, 'payment.received', { timeout: 100 })).rejects.toThrow(
-      'HELIX_TIMEOUT',
-    )
+    await expect(waitForEvent(events, 'payment.received', { timeout: 100 })).rejects.toMatchObject({
+      code: 'E_EVENTS_TIMEOUT',
+    })
   })
 
   it('resolves immediately if event already in array', async () => {

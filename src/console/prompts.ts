@@ -11,7 +11,13 @@
 
 import { stdin, stdout } from 'node:process'
 import { clearLine, createInterface, cursorTo } from 'node:readline'
-import { ReamError } from '../errors/ReamError.js'
+import {
+  E_CONSOLE_EMPTY_CHOICES,
+  E_CONSOLE_INVALID_TRAP_VALUE,
+  E_CONSOLE_NOT_INTERACTIVE,
+  E_CONSOLE_PROMPT_CANCELLED,
+  E_CONSOLE_TRAP_OUT_OF_RANGE,
+} from '../errors/codes.js'
 import { runSelection } from './selection.js'
 import { colourise } from './ui.js'
 
@@ -291,7 +297,7 @@ export class Prompt {
     limit?: number,
   ): Promise<unknown[]> {
     if (choices.length === 0) {
-      throw new ReamError('E_CONSOLE_EMPTY_CHOICES', `"${message}" was asked with no options.`)
+      throw new E_CONSOLE_EMPTY_CHOICES([message])
     }
 
     const trapped = this.#takeTrap(message, options.name)
@@ -330,9 +336,7 @@ export class Prompt {
       })
 
       if (outcome.kind === 'cancelled') {
-        throw new ReamError('E_CONSOLE_PROMPT_CANCELLED', `"${message}" was cancelled.`, {
-          hint: 'Answer the prompt, or pass the value as a flag.',
-        })
+        throw new E_CONSOLE_PROMPT_CANCELLED([message])
       }
 
       // A multiple with nothing ticked is an answer of none, which is only
@@ -378,11 +382,7 @@ export class Prompt {
   ): Promise<void> {
     const problem = await this.#selectionProblem(picked, options, many)
     if (problem === undefined) return
-    throw new ReamError(
-      'E_CONSOLE_INVALID_TRAP_VALUE',
-      `A scripted answer was rejected by its own validation: ${problem}`,
-      { hint: 'The trap supplies a value the real prompt would refuse — fix the test.' },
-    )
+    throw new E_CONSOLE_INVALID_TRAP_VALUE([problem])
   }
 
   /**
@@ -406,21 +406,14 @@ export class Prompt {
   async #assertTrapped<T>(value: T, options: ValidatableOptions<T>): Promise<void> {
     const problem = await this.#check(value, options)
     if (problem === undefined) return
-    throw new ReamError(
-      'E_CONSOLE_INVALID_TRAP_VALUE',
-      `A scripted answer was rejected by its own validation: ${problem}`,
-      { hint: 'The trap supplies a value the real prompt would refuse — fix the test.' },
-    )
+    throw new E_CONSOLE_INVALID_TRAP_VALUE([problem])
   }
 
   #fromTrap(trapped: unknown, choices: readonly PromptChoice[], many: boolean): unknown[] {
     const read = (index: number): string => {
       const choice = choices[index]
       if (choice === undefined) {
-        throw new ReamError(
-          'E_CONSOLE_TRAP_OUT_OF_RANGE',
-          `A trap chose option ${index + 1}, but only ${choices.length} were offered.`,
-        )
+        throw new E_CONSOLE_TRAP_OUT_OF_RANGE([String(index + 1), String(choices.length)])
       }
       return nameOf(choice)
     }
@@ -481,13 +474,9 @@ export class Prompt {
   protected readLine(query: string, masked = false): Promise<string> {
     if (!stdin.isTTY) {
       return Promise.reject(
-        new ReamError(
-          'E_CONSOLE_NOT_INTERACTIVE',
-          `Cannot prompt for "${query.trim()}" — stdin is not interactive.`,
-          {
-            hint: 'Pass the value as a flag, or script the answer in tests with prompt.trap(name).',
-          },
-        ),
+        Object.assign(new E_CONSOLE_NOT_INTERACTIVE([query.trim()]), {
+          help: 'Pass the value as a flag, or script the answer in tests with prompt.trap(name).',
+        }),
       )
     }
 

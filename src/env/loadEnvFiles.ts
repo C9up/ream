@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseEnv } from 'node:util'
-import { ReamError } from '../errors/ReamError.js'
+import { E_ENV_CIRCULAR_REFERENCE, E_ENV_PATH_NO_FILE } from '../errors/codes.js'
 import { applyIdentifier, interpolate } from './interpolate.js'
 import { normalizeNodeEnv } from './nodeEnv.js'
 
@@ -109,9 +109,7 @@ export async function loadEnvFiles(
   // Without `ENV_PATH` a missing file stays silent: an application may have
   // none at all, and every value may come from the environment.
   if (!found && process.env.ENV_PATH !== undefined && process.env.ENV_PATH.trim() !== '') {
-    throw new Error(
-      `ENV_PATH points at ${process.env.ENV_PATH}, which holds none of ${envFileNames(options).join(', ')}`,
-    )
+    throw new E_ENV_PATH_NO_FILE([process.env.ENV_PATH, envFileNames(options).join(', ')])
   }
 }
 
@@ -134,11 +132,7 @@ function referenceResolver(parsed: Record<string, string | undefined>): (key: st
     const known = done.get(key)
     if (known !== undefined) return known
     if (inProgress.has(key)) {
-      throw new ReamError(
-        'E_ENV_CIRCULAR_REFERENCE',
-        `Env variable "${key}" references itself: ${[...chain, key].join(' -> ')}`,
-        { context: { key }, hint: 'Break the loop: one of these variables needs a literal value.' },
-      )
+      throw new E_ENV_CIRCULAR_REFERENCE(key, [...chain, key].join(' -> '))
     }
     const raw = parsed[key]
     if (raw === undefined) return ''

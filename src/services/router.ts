@@ -8,6 +8,7 @@
  * The proxy is initialized by Ignitor before preload files are imported.
  */
 
+import { E_SERVICE_NOT_BOOTED } from '../errors/codes.js'
 import type { Router } from '../router/Router.js'
 import { createServiceProxy } from './createServiceProxy.js'
 
@@ -37,8 +38,11 @@ export function getRouter(): Router | undefined {
  */
 const router: Router = createServiceProxy<Router>(
   () => instance,
-  'Router accessed before initialization. ' +
-    'Ensure your route files are loaded as preloads in reamrc.ts, not at import time.',
+  () =>
+    new E_SERVICE_NOT_BOOTED([
+      'Router accessed before initialization. ' +
+        'Ensure your route files are loaded as preloads in reamrc.ts, not at import time.',
+    ]),
 )
 
 export default router

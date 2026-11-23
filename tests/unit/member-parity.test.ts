@@ -6,7 +6,7 @@ import {
   Container,
   Emitter,
   Env,
-  EnvValidationException,
+  errors,
   RedirectBuilder,
   Request,
   Response,
@@ -58,8 +58,8 @@ describe('Env.rules', () => {
       expect.unreachable('should have thrown')
     } catch (error) {
       // Every failure lands in `help`, which is where AdonisJS puts the detail.
-      expect(error).toBeInstanceOf(EnvValidationException)
-      const help = error instanceof EnvValidationException ? error.help : ''
+      expect(error).toBeInstanceOf(errors.E_INVALID_ENV_VARIABLES)
+      const help = error instanceof errors.E_INVALID_ENV_VARIABLES ? error.help : ''
       expect(help).toContain('PORT')
       expect(help).toContain('HOST')
     }

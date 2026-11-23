@@ -103,7 +103,11 @@ describe('env > references and the identifier registry', () => {
   it('refuses to redefine a taken identifier', () => {
     defineIdentifier('reamtest', (value) => value)
     expect(() => defineIdentifier('reamtest', (value) => value.repeat(2))).toThrow(
-      expect.objectContaining({ code: 'E_IDENTIFIER_ALREADY_DEFINED' }),
+      expect.objectContaining({
+        code: 'E_IDENTIFIER_ALREADY_DEFINED',
+        status: 500,
+        message: 'The identifier "reamtest" is already defined',
+      }),
     )
     expect(() => Env.defineIdentifier('file', (value) => value)).toThrow(/already defined/)
   })

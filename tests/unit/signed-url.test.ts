@@ -115,7 +115,12 @@ describe('ream > SignedUrl > expiration', () => {
   it('refuses an expiry it cannot read rather than signing for a default', () => {
     const su = new SignedUrl({ secret: SECRET })
     for (const expiresIn of ['garbage', 'one week', Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => su.make('/p', { expiresIn }), String(expiresIn)).toThrow(/signed URL expiry/)
+      expect(() => su.make('/p', { expiresIn }), String(expiresIn)).toThrow(
+        expect.objectContaining({
+          code: 'E_INVALID_DURATION',
+          message: expect.stringMatching(/signed URL expiry/),
+        }),
+      )
     }
   })
 })

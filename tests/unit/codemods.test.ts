@@ -25,16 +25,18 @@ describe('Codemods', () => {
 
     it('rejects absolute paths', async () => {
       const codemods = createCodemods({ cwd: tmpDir })
-      await expect(codemods.writeFile('/etc/passwd', 'hacked')).rejects.toThrow(
-        'Absolute paths not allowed',
-      )
+      await expect(codemods.writeFile('/etc/passwd', 'hacked')).rejects.toMatchObject({
+        code: 'E_CODEMODS_UNSAFE_PATH',
+        message: expect.stringContaining('Absolute paths not allowed'),
+      })
     })
 
     it('rejects path traversal with ..', async () => {
       const codemods = createCodemods({ cwd: tmpDir })
-      await expect(codemods.writeFile('../outside.txt', 'hacked')).rejects.toThrow(
-        'outside project root',
-      )
+      await expect(codemods.writeFile('../outside.txt', 'hacked')).rejects.toMatchObject({
+        code: 'E_CODEMODS_UNSAFE_PATH',
+        message: expect.stringContaining('outside project root'),
+      })
     })
 
     it('does not overwrite without force', async () => {
@@ -92,9 +94,10 @@ describe('Codemods', () => {
         fs.symlinkSync(realRcPath, path.join(tmpDir, 'reamrc.ts'))
 
         const codemods = createCodemods({ cwd: tmpDir })
-        await expect(codemods.addProvider('@c9up/atlas/provider')).rejects.toThrow(
-          /Symlink escape detected: reamrc\.ts/,
-        )
+        await expect(codemods.addProvider('@c9up/atlas/provider')).rejects.toMatchObject({
+          code: 'E_CODEMODS_UNSAFE_PATH',
+          message: expect.stringMatching(/Symlink escape detected: reamrc\.ts/),
+        })
         // The outside file must be untouched.
         expect(fs.readFileSync(realRcPath, 'utf8')).toBe(
           `export default {\n  providers: [\n  ],\n}`,
@@ -108,7 +111,10 @@ describe('Codemods', () => {
       const rcPath = path.join(tmpDir, 'reamrc.ts')
       fs.writeFileSync(rcPath, `export default { modules: [] }`)
       const codemods = createCodemods({ cwd: tmpDir })
-      await expect(codemods.addProvider('@c9up/atlas/provider')).rejects.toThrow('Could not find')
+      await expect(codemods.addProvider('@c9up/atlas/provider')).rejects.toMatchObject({
+        code: 'E_CODEMODS_UNRECOGNIZED_SOURCE',
+        message: expect.stringContaining('Could not find'),
+      })
     })
 
     it('preserves CRLF line endings on Windows-checkout reamrc.ts', async () => {
@@ -167,9 +173,10 @@ describe('Codemods', () => {
         fs.symlinkSync(realEnvPath, path.join(tmpDir, '.env'))
 
         const codemods = createCodemods({ cwd: tmpDir })
-        await expect(codemods.addEnvVars({ SECRET: 'leaked' })).rejects.toThrow(
-          /Symlink escape detected: \.env/,
-        )
+        await expect(codemods.addEnvVars({ SECRET: 'leaked' })).rejects.toMatchObject({
+          code: 'E_CODEMODS_UNSAFE_PATH',
+          message: expect.stringMatching(/Symlink escape detected: \.env/),
+        })
         // The outside file must be untouched.
         expect(fs.readFileSync(realEnvPath, 'utf8')).toBe('EXISTING=1\n')
       } finally {
@@ -248,9 +255,12 @@ describe('Codemods', () => {
       const rcPath = path.join(tmpDir, 'reamrc.ts')
       fs.writeFileSync(rcPath, `// totally non-canonical\nexport const x = 1\n`)
       const codemods = createCodemods({ cwd: tmpDir })
-      await expect(codemods.registerCommand('@community/echo/cmd.js')).rejects.toThrow(
-        "[configure] Could not find 'defineConfig({ ... })' in reamrc.ts",
-      )
+      await expect(codemods.registerCommand('@community/echo/cmd.js')).rejects.toMatchObject({
+        code: 'E_CODEMODS_UNRECOGNIZED_SOURCE',
+        message: expect.stringContaining(
+          "[configure] Could not find 'defineConfig({ ... })' in reamrc.ts",
+        ),
+      })
     })
 
     it('targets the LAST }) in the file when bootstrapping (not a helper above defineConfig) [F3]', async () => {
@@ -309,9 +319,10 @@ describe('Codemods', () => {
         fs.symlinkSync(realRcPath, path.join(tmpDir, 'reamrc.ts'))
 
         const codemods = createCodemods({ cwd: tmpDir })
-        await expect(codemods.registerCommand('@plugin/cmd.js')).rejects.toThrow(
-          /Symlink escape detected: reamrc\.ts/,
-        )
+        await expect(codemods.registerCommand('@plugin/cmd.js')).rejects.toMatchObject({
+          code: 'E_CODEMODS_UNSAFE_PATH',
+          message: expect.stringMatching(/Symlink escape detected: reamrc\.ts/),
+        })
 
         expect(fs.readFileSync(realRcPath, 'utf8')).toBe(
           'export default { providers: [], commands: [] }',
@@ -405,9 +416,12 @@ describe('Codemods', () => {
       writeKernel(tmpDir, canonicalKernel)
       const codemods = createCodemods({ cwd: tmpDir })
       const opts = bypassTypeCheck<{ position?: 'before' | 'after' }>({ position: 'middle' })
-      await expect(codemods.registerMiddleware('@community/x/middleware.js', opts)).rejects.toThrow(
-        "[configure] Invalid middleware position: 'middle'.",
-      )
+      await expect(
+        codemods.registerMiddleware('@community/x/middleware.js', opts),
+      ).rejects.toMatchObject({
+        code: 'E_CODEMODS_INVALID_OPTION',
+        message: expect.stringContaining("[configure] Invalid middleware position: 'middle'."),
+      })
     })
 
     it('is idempotent per-tier on re-run', async () => {
@@ -422,9 +436,12 @@ describe('Codemods', () => {
 
     it('throws when start/kernel.ts is missing', async () => {
       const codemods = createCodemods({ cwd: tmpDir })
-      await expect(codemods.registerMiddleware('@community/csrf/middleware.js')).rejects.toThrow(
-        '[configure] start/kernel.ts not found',
-      )
+      await expect(
+        codemods.registerMiddleware('@community/csrf/middleware.js'),
+      ).rejects.toMatchObject({
+        code: 'E_CODEMODS_FILE_NOT_FOUND',
+        message: expect.stringContaining('[configure] start/kernel.ts not found'),
+      })
     })
 
     it('throws when target tier block is absent (no bootstrap)', async () => {
@@ -432,7 +449,12 @@ describe('Codemods', () => {
       const codemods = createCodemods({ cwd: tmpDir })
       await expect(
         codemods.registerMiddleware('@community/csrf/middleware.js', { tier: 'router' }),
-      ).rejects.toThrow("[configure] Could not find 'router.use([' in start/kernel.ts")
+      ).rejects.toMatchObject({
+        code: 'E_CODEMODS_UNRECOGNIZED_SOURCE',
+        message: expect.stringContaining(
+          "[configure] Could not find 'router.use([' in start/kernel.ts",
+        ),
+      })
     })
 
     it('rejects an invalid tier', async () => {
@@ -440,9 +462,14 @@ describe('Codemods', () => {
       const codemods = createCodemods({ cwd: tmpDir })
       // Use bypassTypeCheck<T> for runtime-bad-value injection — see helper JSDoc.
       const opts = bypassTypeCheck<{ tier?: 'server' | 'router' }>({ tier: 'global' })
-      await expect(codemods.registerMiddleware('@community/x/middleware.js', opts)).rejects.toThrow(
-        "[configure] Invalid middleware tier: 'global'. Expected 'server' or 'router'.",
-      )
+      await expect(
+        codemods.registerMiddleware('@community/x/middleware.js', opts),
+      ).rejects.toMatchObject({
+        code: 'E_CODEMODS_INVALID_OPTION',
+        message: expect.stringContaining(
+          "[configure] Invalid middleware tier: 'global'. Expected 'server' or 'router'.",
+        ),
+      })
     })
 
     it('rejects cross-tier collision when same import is already in the other tier', async () => {
@@ -451,9 +478,12 @@ describe('Codemods', () => {
       await codemods.registerMiddleware('@community/m/middleware.js', { tier: 'router' })
       await expect(
         codemods.registerMiddleware('@community/m/middleware.js', { tier: 'server' }),
-      ).rejects.toThrow(
-        '[configure] middleware @community/m/middleware.js is already registered in router tier — cannot also register in server tier.',
-      )
+      ).rejects.toMatchObject({
+        code: 'E_CODEMODS_MIDDLEWARE_CONFLICT',
+        message: expect.stringContaining(
+          '[configure] middleware @community/m/middleware.js is already registered in router tier — cannot also register in server tier.',
+        ),
+      })
       const content = fs.readFileSync(kernelPath, 'utf8')
       const matches = content.match(/@community\/m\/middleware\.js/g)
       expect(matches).toHaveLength(1)
@@ -741,11 +771,18 @@ describe('Codemods — makeUsingStub', () => {
       fs.writeFileSync(path.join(stubs, 'broken.stub'), '---\nto: out.ts\nstill open\n')
       const codemods = createCodemods({ cwd: project })
 
-      await expect(codemods.makeUsingStub(stubs, 'nowhere.stub')).rejects.toThrow(
-        /declares no destination/,
-      )
-      await expect(codemods.makeUsingStub(stubs, 'broken.stub')).rejects.toThrow(/never closed/)
-      await expect(codemods.makeUsingStub(stubs, 'missing.stub')).rejects.toThrow(/Stub not found/)
+      await expect(codemods.makeUsingStub(stubs, 'nowhere.stub')).rejects.toMatchObject({
+        code: 'E_REAM_STUB_NO_DESTINATION',
+        message: expect.stringMatching(/declares no destination/),
+      })
+      await expect(codemods.makeUsingStub(stubs, 'broken.stub')).rejects.toMatchObject({
+        code: 'E_REAM_STUB_SYNTAX',
+        message: expect.stringMatching(/never closed/),
+      })
+      await expect(codemods.makeUsingStub(stubs, 'missing.stub')).rejects.toMatchObject({
+        code: 'E_REAM_STUB_NOT_FOUND',
+        message: expect.stringMatching(/Stub not found/),
+      })
     } finally {
       fs.rmSync(project, { recursive: true, force: true })
       fs.rmSync(stubs, { recursive: true, force: true })
@@ -757,10 +794,14 @@ describe('Codemods — makeUsingStub', () => {
     const stubs = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-source-'))
     try {
       const codemods = createCodemods({ cwd: project })
-      await expect(codemods.makeUsingStub(stubs, '../outside.stub')).rejects.toThrow(
-        /Unsafe stub path/,
-      )
-      await expect(codemods.makeUsingStub(stubs, '/etc/passwd')).rejects.toThrow(/Unsafe stub path/)
+      await expect(codemods.makeUsingStub(stubs, '../outside.stub')).rejects.toMatchObject({
+        code: 'E_REAM_STUB_UNSAFE_PATH',
+        message: expect.stringMatching(/Unsafe stub path/),
+      })
+      await expect(codemods.makeUsingStub(stubs, '/etc/passwd')).rejects.toMatchObject({
+        code: 'E_REAM_STUB_UNSAFE_PATH',
+        message: expect.stringMatching(/Unsafe stub path/),
+      })
     } finally {
       fs.rmSync(project, { recursive: true, force: true })
       fs.rmSync(stubs, { recursive: true, force: true })

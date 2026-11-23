@@ -1,3 +1,7 @@
+import {
+  E_SESSION_INVALID_GC_PROBABILITY,
+  E_SESSION_INVALID_TABLE_NAME,
+} from '../../errors/codes.js'
 import type { SessionDriverWithTagging, TaggedSession } from '../Session.js'
 
 /**
@@ -72,18 +76,14 @@ export class DatabaseDriver implements SessionDriverWithTagging {
     this.#db = options.connection
     const gc = options.gcProbability ?? DEFAULT_GC_PROBABILITY
     if (!Number.isFinite(gc) || gc < 0 || gc > 100) {
-      throw new Error(
-        `Session gcProbability must be a percentage between 0 and 100, got ${String(options.gcProbability)}.`,
-      )
+      throw new E_SESSION_INVALID_GC_PROBABILITY([String(options.gcProbability)])
     }
     this.#gcProbability = gc
     const table = options.tableName ?? 'sessions'
     // The table name is concatenated into the SQL (it cannot be a bind
     // parameter), so it is restricted to an identifier rather than trusted.
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) {
-      throw new Error(
-        `Session table name "${table}" is not a plain identifier — letters, digits and underscores only.`,
-      )
+      throw new E_SESSION_INVALID_TABLE_NAME([table])
     }
     this.#table = table
   }

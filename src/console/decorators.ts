@@ -22,7 +22,7 @@
  * and wipe the value the kernel assigned.
  */
 
-import { ReamError } from '../errors/ReamError.js'
+import { E_CONSOLE_INVALID_ARGUMENT } from '../errors/codes.js'
 import type { ArgumentMetaData, FlagMetaData } from './types.js'
 
 /** `startServer` → `start-server`. */
@@ -94,17 +94,19 @@ export function assertArgumentOrder(
   if (last === undefined) return
 
   if (last.type === 'spread') {
-    throw new ReamError(
-      'E_CONSOLE_INVALID_ARGUMENT',
-      `Argument "${incoming.argumentName}" comes after the spread argument "${last.argumentName}".`,
-      { hint: 'A spread argument consumes the rest, so it must be declared last.' },
+    throw Object.assign(
+      new E_CONSOLE_INVALID_ARGUMENT([
+        `Argument "${incoming.argumentName}" comes after the spread argument "${last.argumentName}".`,
+      ]),
+      { help: 'A spread argument consumes the rest, so it must be declared last.' },
     )
   }
   if (incoming.required && last.required === false) {
-    throw new ReamError(
-      'E_CONSOLE_INVALID_ARGUMENT',
-      `Required argument "${incoming.argumentName}" comes after the optional "${last.argumentName}".`,
-      { hint: 'Declare the required arguments first, or make this one optional.' },
+    throw Object.assign(
+      new E_CONSOLE_INVALID_ARGUMENT([
+        `Required argument "${incoming.argumentName}" comes after the optional "${last.argumentName}".`,
+      ]),
+      { help: 'Declare the required arguments first, or make this one optional.' },
     )
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ScheduleInvocation } from '../../src/index.js'
-import { ReamError, Scheduler } from '../../src/index.js'
+import { errors, Scheduler } from '../../src/index.js'
 
 /**
  * These tests exercise the `Scheduler` TS wrapper by injecting a fake
@@ -67,25 +67,53 @@ describe('Scheduler (wrapper)', () => {
     await expect(wrapper({ taskName: 'boom-async', scheduledForMs: 0 })).resolves.toBeUndefined()
   })
 
-  it('translates native errors into ReamError via fromNapi', () => {
+  it('rethrows a coded native error as its E_SCHEDULER_* class', () => {
     const { native, scheduler } = build()
-    const rustJson = JSON.stringify({
-      code: 'DUPLICATE_TASK',
-      message: "Task 'dup' is already registered",
-      hint: 'Unregister the existing task first or use a unique name',
-      context: { task: 'dup' },
-    })
+    const nativeError = new Error(
+      JSON.stringify({
+        code: 'DUPLICATE_TASK',
+        message: "Task 'dup' is already registered",
+        hint: 'Unregister the existing task first or use a unique name',
+        context: { task: 'dup' },
+      }),
+    )
     native.register.mockImplementationOnce(() => {
-      throw new Error(rustJson)
+      throw nativeError
     })
-    try {
-      scheduler.register('dup', '*/1 * * * *', () => {})
-      expect.fail('should have thrown')
-    } catch (e) {
-      expect(e).toBeInstanceOf(ReamError)
-      expect((e as ReamError).code).toBe('DUPLICATE_TASK')
-      expect((e as ReamError).hint).toContain('unique name')
-    }
+    const thrown = (() => {
+      try {
+        scheduler.register('dup', '*/1 * * * *', () => {})
+      } catch (e) {
+        return e
+      }
+      return undefined
+    })()
+    expect(thrown).toBeInstanceOf(errors.E_SCHEDULER_DUPLICATE_TASK)
+    expect(thrown).toMatchObject({
+      code: 'E_SCHEDULER_DUPLICATE_TASK',
+      message: "Task 'dup' is already registered",
+      help: 'Unregister the existing task first or use a unique name',
+      cause: nativeError,
+    })
+  })
+
+  it('rethrows any other native failure as E_SCHEDULER_NATIVE_ERROR', () => {
+    const { native, scheduler } = build()
+    native.register.mockImplementationOnce(() => {
+      throw new Error(JSON.stringify({ code: 'RUST_PANIC', message: 'Rust panic caught: boom' }))
+    })
+    expect(() => scheduler.register('p', '*/1 * * * *', () => {})).toThrow(
+      expect.objectContaining({
+        code: 'E_SCHEDULER_NATIVE_ERROR',
+        message: 'ream-scheduler NAPI call failed: [RUST_PANIC] Rust panic caught: boom',
+      }),
+    )
+    native.register.mockImplementationOnce(() => {
+      throw new Error('not json')
+    })
+    expect(() => scheduler.register('q', '*/1 * * * *', () => {})).toThrow(
+      expect.objectContaining({ code: 'E_SCHEDULER_NATIVE_ERROR' }),
+    )
   })
 
   it('unregister drops the task from the local task map', () => {

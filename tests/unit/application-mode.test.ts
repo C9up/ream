@@ -21,7 +21,12 @@ describe('ream > application mode', () => {
     await app.boot()
     // The side effects a provider skipped are already skipped; pretending
     // otherwise would leave the app half-started.
-    expect(() => app.setMode('warmup')).toThrow(/already booted/)
+    expect(() => app.setMode('warmup')).toThrow(
+      expect.objectContaining({
+        code: 'E_APP_ALREADY_BOOTED',
+        message: expect.stringMatching(/already booted/),
+      }),
+    )
   })
 
   it('lets a provider skip its side effects without changing its bindings', async () => {

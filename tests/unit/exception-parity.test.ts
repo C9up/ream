@@ -18,11 +18,15 @@ function ctxWith(accept?: string): HttpContext {
 
 describe('createError (AdonisJS parity)', () => {
   it('builds an Exception subclass with static status/code and formatted message', () => {
-    const E_RESOURCE_MISSING = createError('Resource %s not found', 'E_RESOURCE_MISSING', 404)
+    const E_RESOURCE_MISSING = createError<[string]>(
+      'Resource %s not found',
+      'E_RESOURCE_MISSING',
+      404,
+    )
     expect(E_RESOURCE_MISSING.status).toBe(404)
     expect(E_RESOURCE_MISSING.code).toBe('E_RESOURCE_MISSING')
 
-    const err = new E_RESOURCE_MISSING('user-42')
+    const err = new E_RESOURCE_MISSING(['user-42'])
     expect(err).toBeInstanceOf(Exception)
     expect(err.message).toBe('Resource user-42 not found')
     expect(err.status).toBe(404)
@@ -353,10 +357,27 @@ describe('ExceptionHandler > production messages', () => {
     })
   }
 
-  it('shows the message of an Exception, whatever its status', async () => {
+  it('hides the message of a 5xx Exception: being an Exception grants nothing', async () => {
+    // Every package raises flare Exceptions, status 500 by default, and their
+    // messages name hosts, paths and queries.
+    const E_POOL_DOWN = createError<[string]>('pool exhausted on %s', 'E_POOL_DOWN')
+    const payload = await jsonError(new E_POOL_DOWN(['db-internal-3']))
+    expect(payload).toMatchObject({ message: 'An internal error occurred', status: 500 })
     expect((await jsonError(new Exception('Payment provider down', { status: 503 }))).message).toBe(
-      'Payment provider down',
+      'An internal error occurred',
     )
+  })
+
+  it('shows the message of a 4xx Exception', async () => {
+    const E_QUOTA = createError('Quota exceeded', 'E_QUOTA', 429)
+    expect(await jsonError(new E_QUOTA())).toMatchObject({ message: 'Quota exceeded', status: 429 })
+  })
+
+  it('shows the message of a 5xx Exception flagged expose', async () => {
+    const error = Object.assign(new Exception('Payment provider down', { status: 503 }), {
+      expose: true,
+    })
+    expect((await jsonError(error)).message).toBe('Payment provider down')
   })
 
   it('shows the message of a client error raised by a package that is not an Exception', async () => {

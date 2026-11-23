@@ -11,6 +11,7 @@
  * parity — helix code never calls it) so `res.json()` call sites need no change.
  */
 
+import { E_TEST_CLIENT_ASSERTION_FAILED } from '../errors/codes.js'
 import type { Dict } from '../types/helpers.js'
 
 /** The raw response shape the low-level sender produces. */
@@ -19,14 +20,6 @@ export interface TestResponse {
   headers: Dict
   body: string
   json<T = unknown>(): T
-}
-
-/** Assertion failure — plain Error so tests see a clean stack trace. */
-export class ExpectationError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'ExpectationError'
-  }
 }
 
 export function capBody(s: string, max = 512): string {
@@ -205,9 +198,9 @@ function jsonOf(raw: TestResponse): unknown {
   try {
     return raw.json()
   } catch (err) {
-    throw new ExpectationError(
+    throw new E_TEST_CLIENT_ASSERTION_FAILED([
       `Expected JSON body, got non-JSON. Body: ${capBody(raw.body)} (parse error: ${err instanceof Error ? err.message : String(err)})`,
-    )
+    ])
   }
 }
 
@@ -467,9 +460,9 @@ export class ApiResponse {
 
   assertStatus(code: number): this {
     if (this.#raw.status !== code) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected status ${code}, got ${this.#raw.status}. Body: ${capBody(this.#raw.body)}`,
-      )
+      ])
     }
     return this
   }
@@ -477,24 +470,30 @@ export class ApiResponse {
   assertHeader(name: string, value?: string | RegExp): this {
     const actual = this.#raw.headers[name.toLowerCase()]
     if (actual === undefined) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected header ${name}, not present in: ${Object.keys(this.#raw.headers).join(', ')}`,
-      )
+      ])
     }
     if (value === undefined) return this
     if (value instanceof RegExp) {
       if (!value.test(actual)) {
-        throw new ExpectationError(`Expected header ${name} to match ${value}, got "${actual}"`)
+        throw new E_TEST_CLIENT_ASSERTION_FAILED([
+          `Expected header ${name} to match ${value}, got "${actual}"`,
+        ])
       }
     } else if (actual !== value) {
-      throw new ExpectationError(`Expected header ${name} = "${value}", got "${actual}"`)
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
+        `Expected header ${name} = "${value}", got "${actual}"`,
+      ])
     }
     return this
   }
 
   assertHeaderMissing(name: string): this {
     if (this.#raw.headers[name.toLowerCase()] !== undefined) {
-      throw new ExpectationError(`Expected header ${name} to be absent, but it was present.`)
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
+        `Expected header ${name} to be absent, but it was present.`,
+      ])
     }
     return this
   }
@@ -502,26 +501,30 @@ export class ApiResponse {
   assertCookie(name: string, value?: string | RegExp): this {
     const cookie = this.cookies()[name]
     if (!cookie) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected cookie ${name}, not found in Set-Cookie: ${this.#raw.headers['set-cookie'] ?? '(none)'}`,
-      )
+      ])
     }
     if (value === undefined) return this
     if (value instanceof RegExp) {
       if (!value.test(cookie.value)) {
-        throw new ExpectationError(
+        throw new E_TEST_CLIENT_ASSERTION_FAILED([
           `Expected cookie ${name} to match ${value}, got "${cookie.value}"`,
-        )
+        ])
       }
     } else if (cookie.value !== value) {
-      throw new ExpectationError(`Expected cookie ${name} = "${value}", got "${cookie.value}"`)
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
+        `Expected cookie ${name} = "${value}", got "${cookie.value}"`,
+      ])
     }
     return this
   }
 
   assertCookieMissing(name: string): this {
     if (this.cookies()[name]) {
-      throw new ExpectationError(`Expected cookie ${name} to be absent, but it was set.`)
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
+        `Expected cookie ${name} to be absent, but it was set.`,
+      ])
     }
     return this
   }
@@ -542,9 +545,9 @@ export class ApiResponse {
   assertBody(expected: unknown): this {
     const actual = this.#assertionBody()
     if (!deepEqual(actual, expected)) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected body to equal.\nExpected: ${JSON.stringify(expected)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
+      ])
     }
     return this
   }
@@ -552,9 +555,9 @@ export class ApiResponse {
   assertBodyContains(subset: unknown): this {
     const actual = this.#assertionBody()
     if (!partialMatch(actual, subset)) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected body to contain subset.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
+      ])
     }
     return this
   }
@@ -562,18 +565,18 @@ export class ApiResponse {
   assertBodyNotContains(subset: unknown): this {
     const actual = this.#assertionBody()
     if (partialMatch(actual, subset)) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected body NOT to contain subset, but it did.\nSubset: ${JSON.stringify(subset)}\nActual: ${capBody(JSON.stringify(actual))}`,
-      )
+      ])
     }
     return this
   }
 
   assertTextIncludes(substring: string): this {
     if (!this.#raw.body.includes(substring)) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         `Expected response text to include ${JSON.stringify(substring)}.\nActual: ${capBody(this.#raw.body)}`,
-      )
+      ])
     }
     return this
   }
@@ -597,10 +600,10 @@ export class ApiResponse {
       return this
     }
     const chain = this.#redirects.length > 0 ? this.#redirects.map(pathOf).join(', ') : '(none)'
-    throw new ExpectationError(
+    throw new E_TEST_CLIENT_ASSERTION_FAILED([
       `Expected redirect to "${path}". Followed: ${chain}; final status ${this.#raw.status}` +
         (location ? `, Location "${location}"` : ''),
-    )
+    ])
   }
 
   /**
@@ -612,10 +615,10 @@ export class ApiResponse {
    */
   assertAgainstApiSpec(): this {
     if (!apiSpecValidator) {
-      throw new ExpectationError(
+      throw new E_TEST_CLIENT_ASSERTION_FAILED([
         'assertAgainstApiSpec() requires an OpenAPI validator. Register one via ' +
           'ApiResponse.registerApiSpecValidator(fn) (the opt-in equivalent of a separate OpenAPI-assertions plugin).',
-      )
+      ])
     }
     apiSpecValidator(this)
     return this

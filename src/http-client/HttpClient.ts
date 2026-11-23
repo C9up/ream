@@ -13,7 +13,7 @@
  *
  * Also bounded: one deadline for the whole exchange (redirects included), a
  * maximum response size, and a few redirects, to the same host by default.
- * Every failure is an {@link HttpClientError} with a `reason`.
+ * Every failure is one of the `E_HTTP_CLIENT_*` errors, carrying the `url`.
  *
  * No AdonisJS counterpart: the framework ships no outbound client.
  */
@@ -22,46 +22,16 @@ import { lookup as dnsLookup } from 'node:dns'
 import http from 'node:http'
 import https from 'node:https'
 import { isIP, type LookupFunction } from 'node:net'
-import { ReamError } from '../errors/ReamError.js'
 import { isPublicAddress } from './addresses.js'
-
-/** Why an outbound request failed. */
-export type HttpClientFailure =
-  | 'invalidUrl'
-  | 'privateAddress'
-  | 'unreachable'
-  | 'timedOut'
-  | 'tooLarge'
-  | 'redirect'
-
-const CODES: Record<HttpClientFailure, string> = {
-  invalidUrl: 'E_HTTP_CLIENT_INVALID_URL',
-  privateAddress: 'E_HTTP_CLIENT_PRIVATE_ADDRESS',
-  unreachable: 'E_HTTP_CLIENT_UNREACHABLE',
-  timedOut: 'E_HTTP_CLIENT_TIMED_OUT',
-  tooLarge: 'E_HTTP_CLIENT_TOO_LARGE',
-  redirect: 'E_HTTP_CLIENT_REDIRECT_REFUSED',
-}
-
-/**
- * A failed outbound request. A `ReamError`, not an HTTP `Exception`: left
- * uncaught in a handler it answers a generic 500 and its message, which names
- * hosts and addresses, never reaches the client.
- */
-export class HttpClientError extends ReamError {
-  readonly reason: HttpClientFailure
-  /** The target, without its query string (which may carry credentials). */
-  readonly url: string
-
-  constructor(reason: HttpClientFailure, url: URL | string, message: string, cause?: unknown) {
-    const shown = describeUrl(url)
-    super(CODES[reason], message, { context: { url: shown } })
-    this.name = 'HttpClientError'
-    this.reason = reason
-    this.url = shown
-    if (cause !== undefined) this.cause = cause
-  }
-}
+import {
+  E_HTTP_CLIENT_INVALID_URL,
+  E_HTTP_CLIENT_PRIVATE_ADDRESS,
+  E_HTTP_CLIENT_REDIRECT_REFUSED,
+  E_HTTP_CLIENT_TIMED_OUT,
+  E_HTTP_CLIENT_TOO_LARGE,
+  E_HTTP_CLIENT_UNREACHABLE,
+  isHttpClientError,
+} from './errors.js'
 
 export interface HttpClientOptions {
   /** Deadline for the whole exchange, redirects included, in ms. Default 10 000. */
@@ -219,9 +189,7 @@ export class HttpClient {
     const timeout = options.timeout ?? this.#timeout
     const deadline = new AbortController()
     const timer = setTimeout(() => {
-      deadline.abort(
-        new HttpClientError('timedOut', url, `No complete response within ${timeout} ms.`),
-      )
+      deadline.abort(new E_HTTP_CLIENT_TIMED_OUT(url, `No complete response within ${timeout} ms.`))
     }, timeout)
     const signal = options.signal
       ? AbortSignal.any([deadline.signal, options.signal])
@@ -233,24 +201,26 @@ export class HttpClient {
         if (body !== undefined) headers['content-length'] = String(body.length)
         const response = await this.send({ url, method, headers, body, signal, maxResponseBytes })
         if (response.body.length > maxResponseBytes) {
-          throw new HttpClientError('tooLarge', url, `Response exceeds ${maxResponseBytes} bytes.`)
+          throw new E_HTTP_CLIENT_TOO_LARGE(url, `Response exceeds ${maxResponseBytes} bytes.`)
         }
 
         const location = response.header('location')
         if (!REDIRECT_STATUSES.has(response.status) || location === undefined) return response
         if (this.#maxRedirects === 0) return response
         if (redirects >= this.#maxRedirects) {
-          throw new HttpClientError('redirect', url, `More than ${this.#maxRedirects} redirects.`)
+          throw new E_HTTP_CLIENT_REDIRECT_REFUSED(
+            url,
+            `More than ${this.#maxRedirects} redirects.`,
+          )
         }
 
         const next = parseTarget(location, url)
         if (url.protocol === 'https:' && next.protocol === 'http:') {
-          throw new HttpClientError('redirect', next, 'Refused a redirect from https to http.')
+          throw new E_HTTP_CLIENT_REDIRECT_REFUSED(next, 'Refused a redirect from https to http.')
         }
         if (next.host !== url.host) {
           if (!this.#crossHostRedirects) {
-            throw new HttpClientError(
-              'redirect',
+            throw new E_HTTP_CLIENT_REDIRECT_REFUSED(
               next,
               `Refused a redirect from ${url.host} to another host (${next.host}).`,
             )
@@ -272,7 +242,7 @@ export class HttpClient {
     } catch (error) {
       // An abort from the deadline surfaces as whatever the transport threw;
       // the deadline's own error says what happened.
-      if (deadline.signal.aborted && deadline.signal.reason instanceof HttpClientError) {
+      if (deadline.signal.aborted && isHttpClientError(deadline.signal.reason)) {
         throw deadline.signal.reason
       }
       throw error
@@ -305,7 +275,7 @@ export class HttpClient {
       const req = transport.request(url, { method, headers, agent }, (res) => {
         const declared = Number(res.headers['content-length'])
         if (Number.isFinite(declared) && declared > maxResponseBytes) {
-          fail(new HttpClientError('tooLarge', url, `Response exceeds ${maxResponseBytes} bytes.`))
+          fail(new E_HTTP_CLIENT_TOO_LARGE(url, `Response exceeds ${maxResponseBytes} bytes.`))
           return
         }
         const chunks: Buffer[] = []
@@ -313,9 +283,7 @@ export class HttpClient {
         res.on('data', (chunk: Buffer) => {
           received += chunk.length
           if (received > maxResponseBytes) {
-            fail(
-              new HttpClientError('tooLarge', url, `Response exceeds ${maxResponseBytes} bytes.`),
-            )
+            fail(new E_HTTP_CLIENT_TOO_LARGE(url, `Response exceeds ${maxResponseBytes} bytes.`))
             return
           }
           chunks.push(chunk)
@@ -373,7 +341,7 @@ export class HttpClient {
     const address = url.hostname.replace(/^\[|\]$/g, '')
     if (isIP(address) === 0 || this.#isExempt(url)) return
     if (!isPublicAddress(address)) {
-      throw new HttpClientError('privateAddress', url, `${address} is not a public address.`)
+      throw new E_HTTP_CLIENT_PRIVATE_ADDRESS(url, `${address} is not a public address.`)
     }
   }
 
@@ -408,8 +376,7 @@ const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
     const [first] = addresses
     if (refused !== undefined || first === undefined) {
       callback(
-        new HttpClientError(
-          'privateAddress',
+        new E_HTTP_CLIENT_PRIVATE_ADDRESS(
           `http://${hostname}`,
           `${hostname} resolves to ${refused?.address ?? 'no address'}, which is not a public address.`,
         ),
@@ -427,21 +394,16 @@ function parseTarget(input: string | URL, base?: URL): URL {
   try {
     url = new URL(input, base)
   } catch (error) {
-    throw new HttpClientError('invalidUrl', String(input), 'Not a valid URL.', error)
+    throw new E_HTTP_CLIENT_INVALID_URL(String(input), 'Not a valid URL.', { cause: error })
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new HttpClientError(
-      'invalidUrl',
+    throw new E_HTTP_CLIENT_INVALID_URL(
       url,
       `Only http and https URLs are allowed, not ${url.protocol}`,
     )
   }
   if (url.username !== '' || url.password !== '') {
-    throw new HttpClientError(
-      'invalidUrl',
-      url,
-      'Credentials in the URL are refused; send a header.',
-    )
+    throw new E_HTTP_CLIENT_INVALID_URL(url, 'Credentials in the URL are refused; send a header.')
   }
   return url
 }
@@ -461,11 +423,13 @@ function encodeBody(
 }
 
 function toClientError(error: unknown, url: URL, signal: AbortSignal): unknown {
-  if (error instanceof HttpClientError) return error
+  if (isHttpClientError(error)) return error
   // An abort the caller asked for is theirs to recognise: hand back its reason.
   if (signal.aborted && error === signal.reason) return error
   const message = error instanceof Error ? error.message : String(error)
-  return new HttpClientError('unreachable', url, `Could not reach ${url.host}: ${message}`, error)
+  return new E_HTTP_CLIENT_UNREACHABLE(url, `Could not reach ${url.host}: ${message}`, {
+    cause: error,
+  })
 }
 
 function lowercaseKeys(headers: Record<string, string>): Record<string, string> {
@@ -491,15 +455,4 @@ function copyHeaders(headers: http.IncomingHttpHeaders): Record<string, string |
     if (value !== undefined) out[name] = value
   }
   return out
-}
-
-function describeUrl(url: URL | string): string {
-  if (typeof url === 'string') {
-    try {
-      return describeUrl(new URL(url))
-    } catch {
-      return url.split('?')[0] ?? url
-    }
-  }
-  return `${url.origin}${url.pathname}`
 }

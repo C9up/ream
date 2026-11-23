@@ -60,6 +60,7 @@ function isMimeType(value: string): value is MimeType {
 
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
+import { E_MULTIPART_FILE_EXISTS, E_MULTIPART_UNSAFE_FILE_NAME } from '../errors/codes.js'
 import { errorCode } from '../helpers/errors.js'
 import { Macroable } from '../utils/Macroable.js'
 import { parseSize } from './parseSize.js'
@@ -358,15 +359,15 @@ export class MultipartFile extends Macroable {
     const { join } = await import('node:path')
 
     if (options?.name !== undefined && !isSafeFilename(options.name)) {
-      throw new Error(
+      throw new E_MULTIPART_UNSAFE_FILE_NAME([
         `MultipartFile.move: 'name' must be a plain filename (no path separators, '.', or '..'). Got: ${JSON.stringify(options.name)}`,
-      )
+      ])
     }
     const name = options?.name ?? `${randomBytes(16).toString('hex')}.${this.extname || 'unknown'}`
     if (!isSafeFilename(name)) {
-      throw new Error(
+      throw new E_MULTIPART_UNSAFE_FILE_NAME([
         `MultipartFile.move: the derived file name ${JSON.stringify(name)} is unsafe (a separator or NUL in the extension of the client's filename).`,
-      )
+      ])
     }
 
     const filePath = join(location, name)
@@ -386,9 +387,7 @@ export class MultipartFile extends Macroable {
       await writeFile(filePath, this.content, options?.overwrite === false ? { flag: 'wx' } : {})
     } catch (error) {
       if (errorCode(error) === 'EEXIST') {
-        throw new Error(
-          `"${name}" already exists at "${location}". Set "overwrite = true" to overwrite it`,
-        )
+        throw new E_MULTIPART_FILE_EXISTS([name, location])
       }
       throw error
     }

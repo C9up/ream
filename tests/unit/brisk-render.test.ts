@@ -75,6 +75,6 @@ describe('ream > router.on().render()', () => {
     router.on('/none').render('pages/none')
     const { ctx } = contextWith({})
     const matched = router.match('GET', '/none')
-    await expect(matched?.route.handler?.(ctx)).rejects.toThrow(/E_NO_VIEW_ENGINE/)
+    await expect(matched?.route.handler?.(ctx)).rejects.toMatchObject({ code: 'E_NO_VIEW_ENGINE' })
   })
 })

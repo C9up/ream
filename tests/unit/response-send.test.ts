@@ -2,7 +2,7 @@ import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { E_HTTP_REQUEST_ABORTED } from '../../src/http/Exception.js'
+import { E_HTTP_EXCEPTION, E_HTTP_REQUEST_ABORTED } from '../../src/http/Exception.js'
 import type { RawRequest } from '../../src/http/Request.js'
 import { Request } from '../../src/http/Request.js'
 import { Response } from '../../src/http/Response.js'
@@ -243,7 +243,27 @@ describe('ream > Response file / caching / abort (AdonisJS parity)', () => {
     if (caught instanceof E_HTTP_REQUEST_ABORTED) {
       expect(caught.status).toBe(422)
       expect(caught.body).toEqual({ error: 'x' })
+      // Built by `invoke()`, as upstream: the code is the HTTP exception's.
+      expect(caught.code).toBe('E_HTTP_EXCEPTION')
+      expect(caught).toBeInstanceOf(E_HTTP_EXCEPTION)
     }
+  })
+
+  it('invoke() reads the message from the body, and stands in for a missing one', () => {
+    const fromObject = E_HTTP_EXCEPTION.invoke({ message: 'Gone' }, 410)
+    expect(fromObject).toMatchObject({ message: 'Gone', status: 410, code: 'E_HTTP_EXCEPTION' })
+    expect(fromObject.body).toEqual({ message: 'Gone' })
+
+    const empty = E_HTTP_REQUEST_ABORTED.invoke(null, 400)
+    expect(empty).toBeInstanceOf(E_HTTP_REQUEST_ABORTED)
+    expect(empty).toMatchObject({ message: 'HTTP Exception', body: 'Internal server error' })
+
+    const coded = E_HTTP_EXCEPTION.invoke('Nope', 403, 'E_CUSTOM')
+    expect(coded).toMatchObject({ message: 'Nope', body: 'Nope', status: 403, code: 'E_CUSTOM' })
+  })
+
+  it('abort without a status answers 400', () => {
+    expect(() => new Response().abort('nope')).toThrow(expect.objectContaining({ status: 400 }))
   })
 
   it('abortIf only aborts when the condition is truthy', () => {
@@ -413,14 +433,24 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
   })
 
   it('encryptedCookie() throws without an encryption service', () => {
-    expect(() => new Response().encryptedCookie('x', 'y')).toThrow(/APP_KEY/)
+    expect(() => new Response().encryptedCookie('x', 'y')).toThrow(
+      expect.objectContaining({
+        code: 'E_MISSING_ENCRYPTER_KEY',
+        help: expect.stringMatching(/APP_KEY/),
+      }),
+    )
   })
 
   it('cookie() refuses to write without APP_KEY rather than sending it plain', () => {
     // A silent fallback is the worst of both: the caller asked for integrity,
     // the value ships without it, and the far side reads whatever the client
     // wrote as though it had been verified.
-    expect(() => new Response().cookie('sid', 'abc')).toThrow(/APP_KEY/)
+    expect(() => new Response().cookie('sid', 'abc')).toThrow(
+      expect.objectContaining({
+        code: 'E_MISSING_ENCRYPTER_KEY',
+        help: expect.stringMatching(/APP_KEY/),
+      }),
+    )
   })
 
   it('request.cookie() answers nothing rather than an unverified value', () => {
@@ -539,7 +569,7 @@ describe('Response body ceiling', () => {
       expect.objectContaining({ code: 'E_RESPONSE_TOO_LARGE' }),
     )
     expect(() => res.sendBuffer(Buffer.alloc(2048))).toThrow(
-      expect.objectContaining({ hint: expect.stringContaining('@c9up/archive') }),
+      expect.objectContaining({ help: expect.stringContaining('@c9up/archive') }),
     )
   })
 

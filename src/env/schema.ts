@@ -9,19 +9,12 @@
  *   Env.schema.enum([...]).optional()  // node form
  *
  * Each node validates + coerces a raw `process.env` string into its typed
- * value (or throws {@link EnvVarError}); `.optional()` accepts an absent/empty
+ * value (or throws `E_INVALID_ENV_VARIABLES` naming that one variable); `.optional()` accepts an absent/empty
  * value as `undefined`.
  */
 
+import { E_INVALID_ENV_VARIABLES } from '../errors/codes.js'
 import { Secret } from './Secret.js'
-
-/** A single failed-variable validation — collected by `Env.create`. */
-export class EnvVarError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'EnvVarError'
-  }
-}
 
 /** A validator: parse + coerce a raw env value (or `undefined`) into `T`. */
 export interface SchemaNode<T> {
@@ -67,7 +60,9 @@ const FALSE_VALUES = new Set(['false', '0'])
 function makeNode<T>(parse: (name: string, raw: string) => T, message?: string): RequiredNode<T> {
   const required = (name: string, value: string | undefined): T => {
     if (value === undefined || value === '') {
-      throw new EnvVarError(message ?? `Missing required environment variable "${name}"`)
+      throw new E_INVALID_ENV_VARIABLES([
+        message ?? `Missing required environment variable "${name}"`,
+      ])
     }
     return parse(name, value)
   }
@@ -129,10 +124,10 @@ function checkFormat(name: string, value: string, options?: StringOptions): void
           ? isUuid(value)
           : isEmail(value)
   if (!ok) {
-    throw new EnvVarError(
+    throw new E_INVALID_ENV_VARIABLES([
       options.message ??
         `Environment variable "${name}" must be a valid ${options.format}, got "${value}"`,
-    )
+    ])
   }
 }
 
@@ -164,9 +159,9 @@ function numberParse(options?: SchemaFnOptions): (name: string, raw: string) => 
   return (name, raw) => {
     const parsed = Number(raw)
     if (Number.isNaN(parsed)) {
-      throw new EnvVarError(
+      throw new E_INVALID_ENV_VARIABLES([
         options?.message ?? `Environment variable "${name}" must be a number, got "${raw}"`,
-      )
+      ])
     }
     return parsed
   }
@@ -180,10 +175,10 @@ function booleanParse(options?: SchemaFnOptions): (name: string, raw: string) =>
   return (name, raw) => {
     if (TRUE_VALUES.has(raw)) return true
     if (FALSE_VALUES.has(raw)) return false
-    throw new EnvVarError(
+    throw new E_INVALID_ENV_VARIABLES([
       options?.message ??
         `Environment variable "${name}" must be a boolean (true/false/1/0), got "${raw}"`,
-    )
+    ])
   }
 }
 
@@ -198,10 +193,10 @@ function enumNode<V extends readonly string[]>(
   return makeNode((name, raw) => {
     const match = values.find((candidate) => candidate === raw)
     if (match === undefined) {
-      throw new EnvVarError(
+      throw new E_INVALID_ENV_VARIABLES([
         options?.message ??
           `Environment variable "${name}" must be one of [${values.join(', ')}], got "${raw}"`,
-      )
+      ])
     }
     return match
   }, options?.message)

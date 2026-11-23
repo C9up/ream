@@ -1,5 +1,5 @@
+import type { Exception } from '@c9up/flare'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { ReamError } from '../../src/index.js'
 import { MemoryLockBackend } from '../../src/index.js'
 
 describe('MemoryLockBackend', () => {
@@ -52,7 +52,7 @@ describe('MemoryLockBackend', () => {
     for (const ttl of invalid) {
       await expect(backend.acquire('ttl-test', ttl)).rejects.toMatchObject({
         code: 'E_SCHEDULE_INVALID_LOCK_TTL',
-      } satisfies Partial<ReamError>)
+      } satisfies Partial<Exception>)
     }
   })
 

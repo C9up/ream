@@ -18,8 +18,14 @@ import {
   getServiceMetadata,
   getServiceRegistry,
 } from '../decorators/Service.js'
+import {
+  E_CIRCULAR_DEPENDENCY,
+  E_CONTAINER_METHOD_NOT_CALLABLE,
+  E_CONTAINER_MISSING_METADATA,
+  E_CONTAINER_NOT_FOUND,
+  E_CONTAINER_RESERVED_TOKEN,
+} from '../errors/codes.js'
 import { didYouMean } from '../errors/FuzzyMatcher.js'
-import { ReamError } from '../errors/ReamError.js'
 import { ConditionalBindingsBuilder } from './ConditionalBindingsBuilder.js'
 import { ContainerResolver } from './ContainerResolver.js'
 import { ContextualBindingsBuilder } from './ContextualBindingsBuilder.js'
@@ -426,10 +432,7 @@ export class Container {
       key = this.#tokenToKey(target)
       if (seenAliases.has(key)) {
         const cycle = [...seenAliases, key].map(describeToken).join(' → ')
-        throw new ReamError('E_CIRCULAR_DEPENDENCY', `Circular alias detected: ${cycle}`, {
-          hint: 'An alias chain must end at a real binding — remove one of the aliases.',
-          context: { chain: cycle },
-        })
+        throw new E_CIRCULAR_DEPENDENCY('alias', cycle)
       }
       seenAliases.add(key)
     }
@@ -444,10 +447,7 @@ export class Container {
 
     if (chain.set.has(key)) {
       const cycle = [...chain.stack, key].map(describeToken).join(' → ')
-      throw new ReamError('E_CIRCULAR_DEPENDENCY', `Circular dependency detected: ${cycle}`, {
-        hint: 'Break the cycle by resolving one dependency lazily inside a method (`await container.make(Dep)`) instead of injecting it in the constructor.',
-        context: { chain: cycle },
-      })
+      throw new E_CIRCULAR_DEPENDENCY('dependency', cycle)
     }
     // On a copy: see `ResolutionChain`. What this resolution triggers sees the
     // key above it; a sibling running at the same time does not.
@@ -496,7 +496,7 @@ export class Container {
 
     const member: unknown = instance[method]
     if (!isCallable(member)) {
-      throw new Error(`Container.call: '${method}' is not a callable method`)
+      throw new E_CONTAINER_METHOD_NOT_CALLABLE([method])
     }
     return member.apply(instance, args)
   }
@@ -818,16 +818,12 @@ export class Container {
     const name = describeToken(key)
     const allKeys = [...this.#bindings.keys(), ...this.#overrides.keys()].map(describeToken)
     const suggestion = didYouMean(name, allKeys)
-    throw new ReamError(
-      'E_CONTAINER_NOT_FOUND',
-      `No binding found for '${name}'.${suggestion ? ` ${suggestion}` : ''}`,
-      {
-        hint:
-          conditional === undefined
-            ? 'Register it with container.singleton() or decorate with @inject().'
-            : `The binding has ${conditional.length} conditional binding(s), and none of their conditions held. Register a fallback with container.bind().`,
-      },
-    )
+    throw Object.assign(new E_CONTAINER_NOT_FOUND([name, suggestion ? ` ${suggestion}` : '']), {
+      help:
+        conditional === undefined
+          ? 'Register it with container.singleton() or decorate with @inject().'
+          : `The binding has ${conditional.length} conditional binding(s), and none of their conditions held. Register a fallback with container.bind().`,
+    })
   }
 
   /**
@@ -1015,13 +1011,7 @@ export class Container {
       //     them (no metadata, no @Inject, no containerInjections). Fail LOUDLY
       //     instead of `new target()` with undefined deps.
       if (target.length > 0) {
-        throw new ReamError(
-          'E_CONTAINER_MISSING_METADATA',
-          `Cannot auto-construct ${target.name}: it declares ${target.length} constructor parameter(s) but no dependency metadata was found.`,
-          {
-            hint: 'Enable decorator metadata (swc/tsc emitDecoratorMetadata), annotate constructor params with @Inject(token), or declare static containerInjections.',
-          },
-        )
+        throw new E_CONTAINER_MISSING_METADATA([target.name, String(target.length)])
       }
       // (d) Genuine zero-argument class.
       //
@@ -1114,13 +1104,9 @@ export class Container {
    */
   #assertNotReserved(name: string): void {
     if (RESERVED_TOKEN_NAMES.has(name)) {
-      throw new ReamError(
-        'E_CONTAINER_RESERVED_TOKEN',
-        `Reserved container token name '${name}'.`,
-        {
-          hint: `'${name}' reads as an Object.prototype key. Pick a different token name.`,
-        },
-      )
+      throw Object.assign(new E_CONTAINER_RESERVED_TOKEN([name]), {
+        help: `'${name}' reads as an Object.prototype key. Pick a different token name.`,
+      })
     }
   }
 }

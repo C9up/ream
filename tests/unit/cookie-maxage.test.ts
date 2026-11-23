@@ -31,6 +31,11 @@ describe('ream > cookie maxAge', () => {
   })
 
   it('refuses a duration it cannot read instead of voiding the cookie', () => {
-    expect(() => setCookie('soon')).toThrow(/Cannot read "soon" as a cookie maxAge/)
+    expect(() => setCookie('soon')).toThrow(
+      expect.objectContaining({
+        code: 'E_INVALID_DURATION',
+        message: expect.stringMatching(/Cannot read "soon" as a cookie maxAge/),
+      }),
+    )
   })
 })
