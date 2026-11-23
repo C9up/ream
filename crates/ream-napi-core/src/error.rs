@@ -24,7 +24,7 @@ use std::fmt;
 ///     .with_hint("Did you mean: mail?")
 ///     .with_context("token", "mailer")
 ///     .with_source_location(file!(), line!())
-///     .with_docs_url("https://r-eam.com/en/reference/errors#e-container-not-found");
+///     .with_docs_url("https://reamjs.com/en/reference/errors#e-container-not-found");
 /// ```
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

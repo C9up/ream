@@ -10,7 +10,7 @@
 import { currentNodeEnv } from '../env/nodeEnv.js'
 
 /** Where the framework's documentation is served. */
-export const DOCS_BASE_URL = 'https://r-eam.com'
+export const DOCS_BASE_URL = 'https://reamjs.com'
 
 /**
  * The documentation of an error code: its row in the error index, whose anchor

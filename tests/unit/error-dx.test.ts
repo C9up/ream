@@ -34,12 +34,12 @@ describe('error-dx > ReamError', () => {
     expect(err.hint).toBe('Try fixing this')
     expect(err.sourceFile).toBe('app/Order.ts')
     expect(err.sourceLine).toBe(42)
-    expect(err.docsUrl).toBe('https://r-eam.com/en/reference/errors#test-error')
+    expect(err.docsUrl).toBe('https://reamjs.com/en/reference/errors#test-error')
   })
 
   it('auto-generates docsUrl from code', () => {
     const err = new ReamError('E_CONTAINER_NOT_FOUND', 'Not found')
-    expect(err.docsUrl).toBe('https://r-eam.com/en/reference/errors#e-container-not-found')
+    expect(err.docsUrl).toBe('https://reamjs.com/en/reference/errors#e-container-not-found')
   })
 
   it('allows custom docsUrl', () => {
@@ -159,7 +159,7 @@ describe('error-dx > Module error subclasses', () => {
 
   it('all subclasses inherit docsUrl', () => {
     const err = new AtlasError('QUERY_ERROR', 'Bad query')
-    expect(err.docsUrl).toBe('https://r-eam.com/en/reference/errors#e-atlas-query-error')
+    expect(err.docsUrl).toBe('https://reamjs.com/en/reference/errors#e-atlas-query-error')
   })
 })
 
