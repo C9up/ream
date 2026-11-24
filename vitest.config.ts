@@ -6,6 +6,12 @@ import { configDefaults, defineConfig } from "vitest/config";
 const slow = process.env.REAM_RUN_SLOW_TESTS === "1";
 
 export default defineConfig({
+	// The tests use parameter decorators (`constructor(@Inject(...) x)`), which
+	// only TypeScript's legacy decorators allow. `tsconfig.json` turns them on but
+	// includes `src` alone, and vite 8's oxc transform honours that `include`, so
+	// it read `tests/` with standard decorators and refused them. Asked here, for
+	// every file the suite loads. (vite 7's esbuild ignores the key.)
+	oxc: { decorator: { legacy: true, emitDecoratorMetadata: true } },
 	test: {
 		exclude: slow
 			? configDefaults.exclude
