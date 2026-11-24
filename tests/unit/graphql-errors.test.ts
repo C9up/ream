@@ -95,4 +95,13 @@ describe('GraphQLEngine > resolver error messages', () => {
     const { body } = await query(makeEngine(true), '{ secret }')
     expect(body.errors?.[0]?.message).toBe('ECONNREFUSED db-internal.local:5432 user=admin')
   })
+
+  it('logs a schema that does not parse by its message, not its native JSON', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ream-gql-errors-'))
+    const schemaPath = join(dir, 'schema.graphql')
+    writeFileSync(schemaPath, 'type Query { secret: String } type {')
+    const { body, logged } = await query(new GraphQLEngine({ schemaPath }), '{ secret }')
+    expect(body.errors?.[0]?.message).toBe('GraphQL schema could not be read')
+    expect(logged[0]).toMatch(/^The GraphQL schema could not be read: /)
+  })
 })

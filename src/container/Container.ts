@@ -4,7 +4,7 @@
  * - make(Class) auto-constructs any class with @inject(), no explicit binding needed
  * - call(instance, 'method') for method-level injection
  * - singleton() / bind() for explicit factory bindings
- * - swap() / restore() for testing
+ * - swap() / restore() / swapped() for testing
  *
  * @implements FR11, FR12, FR14, FR16
  */
@@ -101,6 +101,20 @@ interface ResolutionChain {
    */
   readonly scopedReads: { count: number }
   /**
+   * Whether the resolution that opened this chain is still running. A box
+   * shared by every copy, closed when that resolution settles.
+   *
+   * `AsyncLocalStorage` hands the store to every async resource created while
+   * it is active — a timer a singleton's constructor starts, a promise nobody
+   * awaits — for as long as that resource lives. Without this, background work
+   * started by a singleton built during one request kept that request's chain:
+   * its later `make(HttpContext)` received that request's context, after it
+   * had ended, while other users were served. A closed chain reads as no chain
+   * at all, so a late reader finds no request-scoped value, as with
+   * @adonisjs/fold, where those values live on the resolver object only.
+   */
+  readonly lifetime: { open: boolean }
+  /**
    * The class whose dependencies are being resolved right now.
    *
    * A contextual binding answers "when THIS class asks for that, give it
@@ -117,7 +131,13 @@ interface ResolutionChain {
 
 /** A chain with nothing in it yet. */
 function openChain(extra: Partial<ResolutionChain> = {}): ResolutionChain {
-  return { stack: [], set: new Set(), scopedReads: { count: 0 }, ...extra }
+  return {
+    stack: [],
+    set: new Set(),
+    scopedReads: { count: 0 },
+    lifetime: { open: true },
+    ...extra,
+  }
 }
 
 export class Container {
@@ -357,6 +377,29 @@ export class Container {
     this.swap(token, () => value)
   }
 
+  /**
+   * The factory `swap()` / `override()` put in place for `token`, or
+   * `undefined` when the token resolves through its own binding.
+   *
+   * A read: the factory is handed back without running it, so it builds
+   * nothing and has no side effect. Truthy exactly when the token is swapped.
+   *
+   * `restore()` stays flat, as in AdonisJS: it removes the token's swap
+   * outright. A caller that swaps on top of an existing swap and wants to undo
+   * only its own reads this first, then puts it back with
+   * `swap(token, previous)` (or `restore(token)` when it was `undefined`). A
+   * swap over a swap keeps the singleton snapshot taken by the first one, so
+   * the final `restore()` still re-seats the original instance.
+   *
+   * NAMED ADDITION over Fold: `@adonisjs/fold` keeps its swaps in a private
+   * map with no reader, so a test-scoped override there cannot undo itself
+   * without also removing a swap the file installed before it. Purely
+   * additive: `swap` / `restore` / `restoreAll` keep Fold's flat semantics.
+   */
+  swapped(token: ServiceToken): ServiceFactory | undefined {
+    return this.#overrides.get(this.#tokenToKey(token))
+  }
+
   /** Restore a specific swap, or all swaps if no token given. */
   restore(token?: ServiceToken): void {
     if (token) {
@@ -440,9 +483,9 @@ export class Container {
 
     // Top of a chain: open one, so everything this resolution triggers shares
     // it and nothing outside it does.
-    const chain = this.#chain.getStore()
+    const chain = this.#currentChain()
     if (chain === undefined) {
-      return this.#chain.run(openChain(), () => this.resolve<T>(token, runtimeValues))
+      return this.#runOpened(openChain(), () => this.resolve<T>(token, runtimeValues))
     }
 
     if (chain.set.has(key)) {
@@ -480,9 +523,9 @@ export class Container {
     // is usually no chain open here — `call()` is an entry point — so one is
     // opened to carry the parent, rather than each `resolve()` below opening
     // its own with nobody in it.
-    const chain = this.#chain.getStore()
+    const chain = this.#currentChain()
     if (chain === undefined) {
-      return this.#chain.run(openChain({ parent: target }), () =>
+      return this.#runOpened(openChain({ parent: target }), () =>
         this.call(instance, method, runtimeValues),
       )
     }
@@ -567,8 +610,27 @@ export class Container {
     values: ReadonlyMap<ServiceToken, unknown>,
     fn: () => Promise<T>,
   ): Promise<T> {
+    const chain = this.#currentChain()
+    if (chain === undefined) return this.#runOpened(openChain({ values }), fn)
+    return this.#chain.run({ ...chain, values }, fn)
+  }
+
+  /** The chain of the resolution in progress, or none once it has settled. */
+  #currentChain(): ResolutionChain | undefined {
     const chain = this.#chain.getStore()
-    return this.#chain.run(chain === undefined ? openChain({ values }) : { ...chain, values }, fn)
+    return chain?.lifetime.open === true ? chain : undefined
+  }
+
+  /**
+   * Run `fn` on a chain it opens, and close that chain when `fn` settles —
+   * see `ResolutionChain.lifetime`.
+   */
+  async #runOpened<T>(chain: ResolutionChain, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await this.#chain.run(chain, fn)
+    } finally {
+      chain.lifetime.open = false
+    }
   }
 
   /** @internal Validate a token and hand back the value the container keys on. */
@@ -587,10 +649,10 @@ export class Container {
     runtimeValues?: unknown[],
   ): Promise<T> {
     if (parent === null) return this.make<T>(token, runtimeValues)
-    const chain = this.#chain.getStore()
-    return this.#chain.run(chain === undefined ? openChain({ parent }) : { ...chain, parent }, () =>
-      this.make<T>(token, runtimeValues),
-    )
+    const chain = this.#currentChain()
+    const resolve = () => this.make<T>(token, runtimeValues)
+    if (chain === undefined) return this.#runOpened(openChain({ parent }), resolve)
+    return this.#chain.run({ ...chain, parent }, resolve)
   }
 
   // ─── Introspection ────────────────────────────────────────
@@ -703,7 +765,7 @@ export class Container {
     // 2. A contextual binding for the class currently being built — "when
     //    UsersController asks for Hash, give it Argon2". Before the resolver's
     //    values and the container's, after swaps: @adonisjs/fold's order.
-    const store = this.#chain.getStore()
+    const store = this.#currentChain()
     const contextual =
       store?.parent === undefined ? undefined : this.#contextualBindings.get(store.parent)?.get(key)
     if (contextual !== undefined) {
@@ -912,7 +974,7 @@ export class Container {
     }
 
     // Same rule as the explicit bindings: see `ResolutionChain.scopedReads`.
-    const store = this.#chain.getStore()
+    const store = this.#currentChain()
     const readsBefore = store?.scopedReads.count ?? 0
     const building = (async (): Promise<unknown> => {
       const instance = await this.#autoConstruct(target, runtimeValues)
@@ -939,7 +1001,7 @@ export class Container {
     // contextual binding keys on. On a copy of the chain (see
     // `ResolutionChain`): nothing to restore on any of the construction's
     // exits, and a construction running beside this one keeps its own parent.
-    const store = this.#chain.getStore() ?? openChain()
+    const store = this.#currentChain() ?? openChain()
     return this.#chain.run({ ...store, parent: target }, () =>
       this.#constructWithDeps(target, runtimeValues),
     )

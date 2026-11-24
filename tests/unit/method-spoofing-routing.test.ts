@@ -37,6 +37,31 @@ describe('method spoofing > routing', () => {
     expect(JSON.parse(res.body)).toEqual({ ran: 'delete', method: 'DELETE', id: '1' })
   })
 
+  it('routes a POST whose BODY carries _method to the POST route, and tells the handler POST', async () => {
+    const router = new Router()
+    router.get('/transfer', (ctx) => {
+      ctx.response.json({ ran: 'get' })
+    })
+    router.post('/transfer', (ctx) => {
+      ctx.request.setInitialBody({ _method: 'GET', amount: '1' })
+      ctx.response.json({ ran: 'post', method: ctx.request.method() })
+    })
+    const kernel = createHttpKernel({
+      router,
+      middleware: new MiddlewareRegistry(),
+      allowMethodSpoofing: true,
+    })
+    const res = await kernel({
+      method: 'POST',
+      path: '/transfer',
+      query: '',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', host: 'app.test' },
+      body: '_method=GET&amount=1',
+    })
+
+    expect(JSON.parse(res.body)).toEqual({ ran: 'post', method: 'POST' })
+  })
+
   it('accepts a lower-case _method', async () => {
     const res = await kernelFor(true)(post('_method=delete'))
 

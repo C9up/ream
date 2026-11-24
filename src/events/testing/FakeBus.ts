@@ -17,6 +17,7 @@
 import {
   E_EVENTS_ASSERTION_FAILED,
   E_EVENTS_DUPLICATE_REQUEST_HANDLER,
+  E_EVENTS_HANDLER_FAILED,
   E_EVENTS_NO_REQUEST_HANDLER,
   E_EVENTS_TIMEOUT,
 } from '../../errors/codes.js'
@@ -67,6 +68,7 @@ interface Subscription {
 export type FakeBusRequestHandler = (
   eventJson: string,
   reply: (response: string) => void,
+  fail: (message: string) => void,
 ) => void | PromiseLike<void>
 
 export class FakeBus {
@@ -192,8 +194,16 @@ export class FakeBus {
         clearTimeout(timer)
         reject(err instanceof Error ? err : new Error(String(err)))
       }
+      // What the native bus hands a handler as its third argument: the
+      // request ends with `E_EVENTS_HANDLER_FAILED`, as in production.
+      const fail = (message: string): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(new E_EVENTS_HANDLER_FAILED([message]))
+      }
       try {
-        const ret = handler(data, reply)
+        const ret = handler(data, reply, fail)
         if (isThenable(ret)) ret.then(undefined, onError)
       } catch (err) {
         onError(err)

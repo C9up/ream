@@ -18,7 +18,7 @@
  * @implements Story 24.1, 24.2
  */
 
-import { E_RPC_PROVIDER_ALREADY_REGISTERED } from '../errors/codes.js'
+import { E_EMPTY_GATE_REQUIREMENT, E_RPC_PROVIDER_ALREADY_REGISTERED } from '../errors/codes.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import type { AppContext } from '../Provider.js'
 import { Provider } from '../Provider.js'
@@ -100,6 +100,11 @@ export class RpcProvider extends Provider {
     // Apply route-level guards (e.g. ['jwt']) so warden authenticates the
     // endpoint at the edge and populates ctx.auth — the inline route has no
     // decorator metadata otherwise.
+    // `guards: []` reads as a guarded endpoint and names no guard: refused at
+    // boot rather than mounted public. Leave the key out for no guard.
+    if (config?.guards !== undefined && config.guards.length === 0) {
+      throw new E_EMPTY_GATE_REQUIREMENT(['config/rpc.ts', 'guards: []'])
+    }
     const guards = config?.guards ?? []
     if (guards.length > 0) route.guard(...guards)
 

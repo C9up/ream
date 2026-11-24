@@ -11,7 +11,7 @@ use napi::bindgen_prelude::*;
 use napi::bindgen_prelude::{Function, Unknown};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
-use ream_napi_core::callback::CallbackConfig;
+use ream_napi_core::callback::callback_failed;
 
 /// A task callback that does NOT hold Node's event loop open.
 ///
@@ -80,9 +80,9 @@ impl TaskInvoker for JsTaskInvoker {
         // or during shutdown.
         //
         // Audit 2026-05-22: `ErrorStrategy::Fatal` (no err arg) is what
-        // the TS `Scheduler.register` wrapper expects — see the helper
-        // comment in `ream-napi-core::callback::create_threadsafe_fn`
-        // for the bug history.
+        // the TS `Scheduler.register` wrapper expects — see
+        // `ream_napi_core::callback::FatalThreadsafeFunction` for the bug
+        // history.
         let _ = self
             .tsfn
             .call(js_payload, ThreadsafeFunctionCallMode::NonBlocking);
@@ -126,22 +126,8 @@ impl RustScheduler {
         cron_expr: String,
         callback: Function<'static, Unknown<'static>, Unknown<'static>>,
     ) -> Result<()> {
-        // Routed through `ream_napi_core::callback::create_threadsafe_fn`
-        // so all Ream NAPI crates share identical ThreadsafeFunction
-        // setup (see ream-http-napi, ream-events-napi). Matches the
-        // `CallbackConfig::default()` convention: unlimited queue,
-        // non-blocking calls.
-        // Built here rather than through `create_threadsafe_fn`: the shared
-        // helper returns a STRONG handle, which is right for the HTTP listener
-        // and the event bus — both of which are a reason for the process to be
-        // running — and wrong for this one.
-        let config = CallbackConfig::default();
-        if config.max_queue_size != 0 {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                "max_queue_size is a compile-time constant in napi 3; only 0 (unlimited) is supported",
-            ));
-        }
+        // Weak, with an unbounded queue and non-blocking calls: see
+        // `WeakTaskCallback`.
         let tsfn: WeakTaskCallback<JsTaskPayload> = callback
             .build_threadsafe_function::<JsTaskPayload>()
             .callee_handled::<false>()
@@ -150,7 +136,8 @@ impl RustScheduler {
                 |ctx: napi::threadsafe_function::ThreadsafeCallContext<JsTaskPayload>| {
                     ctx.env.to_js_value(&ctx.value)
                 },
-            )?;
+            )
+            .map_err(callback_failed)?;
 
         let inner = Arc::clone(&self.inner);
         catch_unwind_napi(std::panic::AssertUnwindSafe(move || {

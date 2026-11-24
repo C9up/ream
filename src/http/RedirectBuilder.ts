@@ -23,10 +23,18 @@ function isTrustedRedirect(
   authority: string | undefined,
   allowedHosts: readonly string[],
 ): boolean {
-  // A relative path is trusted only when it starts with a single "/" and has no
-  // backslash: browsers normalise "\" to "/", so "/\evil.com" would become the
-  // protocol-relative "//evil.com" that a lone `!startsWith("//")` check misses.
-  if (url.startsWith('/') && !url.startsWith('//') && !url.includes('\\')) return true
+  // A relative path is trusted only when the URL parser a browser uses keeps
+  // it on this origin. A string test misses what that parser normalises:
+  // "\" becomes "/" and tabs and newlines are dropped, so "/\evil.com" and
+  // "/<TAB>/evil.com" are both the protocol-relative "//evil.com".
+  if (url.startsWith('/')) {
+    if (url.startsWith('//')) return false
+    try {
+      return new URL(url, 'http://localhost').host === 'localhost'
+    } catch {
+      return false
+    }
+  }
   let parsed: URL
   try {
     parsed = new URL(url)

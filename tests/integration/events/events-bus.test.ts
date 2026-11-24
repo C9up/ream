@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { callNativeAsync } from '../../../src/errors/native.js'
 import { EventBus } from '../../../src/events/native.js'
+import { errors } from '../../../src/index.js'
 
 let bus: InstanceType<typeof EventBus>
 
@@ -154,6 +156,9 @@ describe('events > request/reply', () => {
     const message = failure instanceof Error ? failure.message : ''
     expect(message).toContain('request handler timed out after 30ms')
     expect(message).not.toContain('panicked')
+    await expect(
+      callNativeAsync(() => reqBus.request('never.replies', '{}', 2000)),
+    ).rejects.toThrow(errors.E_EVENTS_TIMEOUT)
   })
 
   it('the handler is reachable the instant onRequest returns', async () => {
@@ -173,6 +178,9 @@ describe('events > request/reply', () => {
 
   it('request throws on no handler', async () => {
     const reqBus = new EventBus()
-    await expect(reqBus.request('nonexistent', '{}')).rejects.toThrow(Error)
+    await expect(callNativeAsync(() => reqBus.request('nonexistent', '{}'))).rejects.toMatchObject({
+      code: 'E_EVENTS_NO_REQUEST_HANDLER',
+      message: 'no request handler registered for "nonexistent"',
+    })
   })
 })

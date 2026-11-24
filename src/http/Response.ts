@@ -55,6 +55,14 @@ function assertNoCRLF(name: string, value: string): void {
   }
 }
 
+/** RFC 6265 cookie-name token, as cookie-es checks it: visible ASCII but `;` and `=`. */
+const COOKIE_NAME = /^[\u0021-\u003A\u003C\u003E-\u007E]+$/
+/** A `Path` attribute value, as cookie-es checks it: printable ASCII but `;`. */
+const COOKIE_PATH = /^[\u0020-\u003A\u003C-\u007E]*$/
+/** A `Domain` attribute value, as cookie-es checks it: a host name, optionally dot-led. */
+const COOKIE_DOMAIN =
+  /^([.]?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i
+
 /**
  * Build a `Content-Disposition` value for a download (RFC 6266).
  *
@@ -129,6 +137,61 @@ export interface CookieOptions {
   priority?: 'low' | 'medium' | 'high'
 }
 
+/**
+ * The attributes every cookie gets unless the call says otherwise (AdonisJS
+ * `http.cookie`): two hours, the whole site, out of reach of scripts, HTTPS
+ * only, not sent on cross-site subrequests. `config/app.ts` overrides them
+ * with an `http.cookie` block; a call overrides both.
+ */
+export const DEFAULT_COOKIE_OPTIONS: Readonly<CookieOptions> = Object.freeze({
+  maxAge: '2h',
+  path: '/',
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax',
+})
+
+/** What each key of an `http.cookie` block must be. */
+const COOKIE_CONFIG_KEYS: Readonly<Record<string, (value: unknown) => boolean>> = {
+  maxAge: (value) => typeof value === 'number' || typeof value === 'string',
+  path: (value) => typeof value === 'string',
+  domain: (value) => typeof value === 'string',
+  httpOnly: (value) => typeof value === 'boolean',
+  secure: (value) => typeof value === 'boolean',
+  sameSite: (value) => value === false || value === 'lax' || value === 'strict' || value === 'none',
+  partitioned: (value) => typeof value === 'boolean',
+  priority: (value) => value === 'low' || value === 'medium' || value === 'high',
+}
+
+/**
+ * The cookie defaults of an application: its `http.cookie` block over
+ * {@link DEFAULT_COOKIE_OPTIONS}. A key the block does not know, or a value of
+ * the wrong type, is refused when the application boots, not on the first
+ * cookie written.
+ */
+export function cookieDefaultsFromConfig(block: unknown): CookieOptions {
+  const merged: CookieOptions = { ...DEFAULT_COOKIE_OPTIONS }
+  if (block === undefined || block === null) return merged
+  if (typeof block !== 'object' || Array.isArray(block)) {
+    throw new E_RESPONSE_INVALID_COOKIE(['app.http.cookie must be an object of cookie options.'])
+  }
+  for (const [key, value] of Object.entries(block)) {
+    const valid = Object.hasOwn(COOKIE_CONFIG_KEYS, key) ? COOKIE_CONFIG_KEYS[key] : undefined
+    if (valid === undefined) {
+      throw new E_RESPONSE_INVALID_COOKIE([
+        `app.http.cookie.${key} is not a cookie option (${Object.keys(COOKIE_CONFIG_KEYS).join(', ')}).`,
+      ])
+    }
+    // Left out, as lodash.merge leaves it: the default stays.
+    if (value === undefined) continue
+    if (!valid(value)) {
+      throw new E_RESPONSE_INVALID_COOKIE([`app.http.cookie.${key} has a value of the wrong type.`])
+    }
+    Reflect.set(merged, key, value)
+  }
+  return merged
+}
+
 export class Response extends Macroable {
   #status = 200
   /** A body still being drained by {@link stream}; awaited by {@link finish}. */
@@ -164,6 +227,8 @@ export class Response extends Macroable {
   #webSocket?: { socket: ServerWebSocket; hub: WebSocketHub }
   #request?: { method(): string; header(key: string): string | undefined }
   #cookieSigner?: CookieSigner
+  /** Merged under the options of every cookie written (AdonisJS `http.cookie`). */
+  #cookieDefaults: CookieOptions = { ...DEFAULT_COOKIE_OPTIONS }
 
   /**
    * CSP nonce for this request (AdonisJS idiom: `response.nonce`). Seeded by
@@ -306,6 +371,8 @@ export class Response extends Macroable {
       c === '\u2028' ? '\\u2028' : '\\u2029',
     )
     this.#headers['content-type'] = 'text/javascript; charset=utf-8'
+    // The body is script: a browser must not sniff it into anything else.
+    this.#headers['x-content-type-options'] = 'nosniff'
     this.#setBody(`/**/ typeof ${safeCallback} === 'function' && ${safeCallback}(${json});`)
     this.#finished = true
   }
@@ -698,6 +765,14 @@ export class Response extends Macroable {
     this.#cookieSigner = signer
   }
 
+  /**
+   * The application's cookie defaults (see {@link cookieDefaultsFromConfig}).
+   * Wired by HttpKernel from `config/app.ts` → `http.cookie`.
+   */
+  setCookieDefaults(defaults: CookieOptions): void {
+    this.#cookieDefaults = { ...defaults }
+  }
+
   /** Set a strong (or weak) `ETag` for the given body (AdonisJS parity, `etag` pkg). */
   setEtag(body: string | Buffer, weak = false): this {
     this.header('Etag', etag(body, { weak }))
@@ -1080,7 +1155,10 @@ export class Response extends Macroable {
         help: 'cookie() signs the value and needs APP_KEY — set it so the encryption service is registered, or use plainCookie() when the value does not need signing.',
       })
     }
-    return this.#writeCookie(name, this.#cookieSigner.sign(value, undefined, name), options)
+    return this.#writeCookie(name, this.#cookieSigner.sign(value, undefined, name), {
+      ...this.#cookieDefaults,
+      ...options,
+    })
   }
 
   /**
@@ -1094,7 +1172,7 @@ export class Response extends Macroable {
     // `encode: false` writes the string as-is — for a value a browser script
     // has to read, or one that is already protected (a signed CSRF token).
     const encoded = options?.encode === false ? String(value) : packCookieValue(value)
-    return this.#writeCookie(name, encoded, options)
+    return this.#writeCookie(name, encoded, { ...this.#cookieDefaults, ...options })
   }
 
   /**
@@ -1110,54 +1188,72 @@ export class Response extends Macroable {
     }
     // The cookie name is the purpose, as for a signed cookie: a value issued
     // as one encrypted cookie cannot be replayed under another one's name.
-    return this.#writeCookie(name, this.#cookieSigner.encrypt(value, undefined, name), options)
+    return this.#writeCookie(name, this.#cookieSigner.encrypt(value, undefined, name), {
+      ...this.#cookieDefaults,
+      ...options,
+    })
   }
 
-  #writeCookie(name: string, value: string, options?: CookieOptions): this {
+  /** `options` already carry the defaults: an explicit `undefined` in a call drops one, as upstream. */
+  #writeCookie(name: string, value: string, options: CookieOptions): this {
     // SameSite=None cookies REQUIRE the Secure attribute — modern browsers
     // (Chrome 80+, Firefox, Safari) silently reject the cookie otherwise, so
     // a missing Secure here turns OAuth callbacks / iframe sessions into a
     // "works in dev (localhost relaxes Secure), breaks in prod" foot-gun.
-    if (options?.sameSite === true) {
+    if (options.sameSite === true) {
       throw new E_RESPONSE_INVALID_COOKIE([
         `Cookie '${name}': sameSite: true is not an attribute value — use 'lax', 'strict', 'none', or false to omit it.`,
       ])
     }
-    if (options?.sameSite === 'none' && !options.secure) {
+    if (options.sameSite === 'none' && !options.secure) {
       throw new E_RESPONSE_INVALID_COOKIE([
         `Cookie '${name}': SameSite=None requires Secure: true (browsers reject SameSite=None cookies without Secure).`,
       ])
     }
-    const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`]
+    // The name is written as given and must be an RFC 6265 token (cookie-es
+    // `cookieNameRegExp`). Percent-encoding it instead would write a name the
+    // reader never decodes — cookie names are compared byte for byte.
+    if (!COOKIE_NAME.test(name)) {
+      throw new E_RESPONSE_INVALID_COOKIE([
+        `Cookie name ${JSON.stringify(name)} is not a valid token: use visible ASCII characters other than ';' and '='.`,
+      ])
+    }
+    const parts = [`${name}=${encodeURIComponent(value)}`]
     // `maxAge: 0` is the RFC 6265 "delete-now" signal used by logout flows. A
     // truthiness check would skip it; explicit `!== undefined` covers 0 too.
-    if (options?.maxAge !== undefined) {
+    if (options.maxAge !== undefined) {
       parts.push(`Max-Age=${durationToSeconds(options.maxAge, 'a cookie maxAge')}`)
     }
-    if (options?.path) {
-      // `Path` is concatenated raw (encodeURIComponent would mangle `/`), so it
-      // needs the same CRLF/NUL guard as header() (response-splitting).
-      assertNoCRLF(`Set-Cookie path for '${name}'`, options.path)
+    if (options.path) {
+      // `Path` is written raw (encodeURIComponent would mangle `/`): a `;` would
+      // add attributes of its own (`/; SameSite=None`), a control character
+      // would split the header.
+      if (!COOKIE_PATH.test(options.path)) {
+        throw new E_RESPONSE_INVALID_COOKIE([
+          `Cookie '${name}': path may hold printable ASCII characters other than ';' only.`,
+        ])
+      }
       parts.push(`Path=${options.path}`)
     }
-    if (options?.domain) {
-      // Concatenated raw like `Path`, so it carries the same splitting guard.
-      assertNoCRLF(`Set-Cookie domain for '${name}'`, options.domain)
+    if (options.domain) {
+      if (!COOKIE_DOMAIN.test(options.domain)) {
+        throw new E_RESPONSE_INVALID_COOKIE([`Cookie '${name}': domain must be a host name.`])
+      }
       parts.push(`Domain=${options.domain}`)
     }
-    if (options?.expires !== undefined) {
+    if (options.expires !== undefined) {
       const at = typeof options.expires === 'function' ? options.expires() : options.expires
       if (Number.isNaN(at.getTime())) {
         throw new E_RESPONSE_INVALID_COOKIE([`Cookie '${name}': expires is an invalid Date.`])
       }
       parts.push(`Expires=${at.toUTCString()}`)
     }
-    if (options?.httpOnly !== false) parts.push('HttpOnly')
-    if (options?.secure) parts.push('Secure')
-    if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`)
+    if (options.httpOnly !== false) parts.push('HttpOnly')
+    if (options.secure) parts.push('Secure')
+    if (options.sameSite) parts.push(`SameSite=${options.sameSite}`)
     // Partitioned only means anything on a Secure cookie, and browsers drop it
     // otherwise — say so rather than emit an attribute that will be ignored.
-    if (options?.partitioned) {
+    if (options.partitioned) {
       if (!options.secure) {
         throw new E_RESPONSE_INVALID_COOKIE([
           `Cookie '${name}': partitioned requires Secure: true (browsers ignore partitioned cookies without it).`,
@@ -1165,7 +1261,7 @@ export class Response extends Macroable {
       }
       parts.push('Partitioned')
     }
-    if (options?.priority) parts.push(`Priority=${options.priority}`)
+    if (options.priority) parts.push(`Priority=${options.priority}`)
     this.#cookies.push(parts.join('; '))
     return this
   }

@@ -36,12 +36,30 @@ type FatalTsfn<T, Args = Unknown<'static>> = napi::threadsafe_function::Threadsa
     0,
 >;
 use napi_derive::napi;
-use ream_events::{Bus, Event};
-use ream_napi_core::catch_unwind_napi;
+use ream_events::{Bus, Event, RequestError};
+use ream_napi_core::callback::callback_failed;
+use ream_napi_core::{catch_unwind_napi, ReamError};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 const DEFAULT_REQUEST_HANDLER_TIMEOUT_MS: u64 = 5_000;
+
+/// The bus itself failed (its task panicked or was cancelled, or an event
+/// would not serialize): `E_EVENTS_BUS_FAILED`, carried as ream's JSON error.
+fn bus_failed(error: impl std::fmt::Display) -> napi::Error {
+    ReamError::new("E_EVENTS_BUS_FAILED", error.to_string()).into()
+}
+
+/// A request that got no reply, under the code of its kind. A missing
+/// handler also carries the request's name, which its TypeScript class takes.
+fn request_failed(error: RequestError) -> napi::Error {
+    let coded = ReamError::new(error.code(), error.to_string());
+    match &error {
+        RequestError::NoHandler(name) => coded.with_context("name", name.as_str()),
+        _ => coded,
+    }
+    .into()
+}
 
 /// NAPI-exposed event bus.
 /// Uses shared Tokio runtime (no per-instance runtime).
@@ -51,10 +69,23 @@ pub struct EventBus {
     request_handler_timeout_ms: u64,
 }
 
+/// What a request handler sends back: its reply, or why it failed.
+type HandlerOutcome = Result<String, String>;
+
 /// Shared state for passing reply channels from Rust to JS.
 struct RequestContext {
     event_json: String,
-    reply_tx: Arc<Mutex<Option<mpsc::SyncSender<String>>>>,
+    reply_tx: Arc<Mutex<Option<mpsc::SyncSender<HandlerOutcome>>>>,
+}
+
+/// Send the handler's outcome, once: the first of `reply` / `fail` wins and
+/// later calls are ignored.
+fn settle(reply_tx: &Mutex<Option<mpsc::SyncSender<HandlerOutcome>>>, outcome: HandlerOutcome) {
+    if let Ok(mut guard) = reply_tx.lock() {
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(outcome);
+        }
+    }
 }
 
 #[napi]
@@ -95,10 +126,9 @@ impl EventBus {
                 event
             })
             .await
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))?;
+            .map_err(bus_failed)?;
 
-        serde_json::to_string(&event)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+        serde_json::to_string(&event).map_err(bus_failed)
     }
 
     /// Subscribe to events matching a pattern. Callback receives event JSON string.
@@ -120,7 +150,8 @@ impl EventBus {
             .build_threadsafe_function::<String>()
             .callee_handled::<false>()
             .weak::<true>()
-            .build_callback(|ctx: ThreadsafeCallContext<String>| Ok(ctx.value))?;
+            .build_callback(|ctx: ThreadsafeCallContext<String>| Ok(ctx.value))
+            .map_err(callback_failed)?;
 
         let tsfn = Arc::new(tsfn);
         let bus = self.bus.clone();
@@ -153,7 +184,7 @@ impl EventBus {
             bus.unsubscribe(id).await;
         })
         .await
-        .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))?;
+        .map_err(bus_failed)?;
         Ok(())
     }
 
@@ -167,7 +198,7 @@ impl EventBus {
         let rt = ream_napi_core::shared_runtime();
         rt.spawn(async move { bus.clear().await })
             .await
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+            .map_err(bus_failed)
     }
 
     /// Register a request handler.
@@ -177,42 +208,59 @@ impl EventBus {
         name: String,
         callback: Function<'static, Unknown<'static>, Unknown<'static>>,
     ) -> napi::Result<()> {
-        let tsfn: FatalTsfn<RequestContext, FnArgs<(String, sys::napi_value)>> = callback
-            .build_threadsafe_function::<RequestContext>()
-            .callee_handled::<false>()
-            .weak::<true>()
-            .build_callback(|ctx: ThreadsafeCallContext<RequestContext>| {
-                let event_json = ctx.value.event_json;
-                let reply_tx = ctx.value.reply_tx;
+        let tsfn: FatalTsfn<RequestContext, FnArgs<(String, sys::napi_value, sys::napi_value)>> =
+            callback
+                .build_threadsafe_function::<RequestContext>()
+                .callee_handled::<false>()
+                .weak::<true>()
+                .build_callback(|ctx: ThreadsafeCallContext<RequestContext>| {
+                    let event_json = ctx.value.event_json;
+                    let reply_tx = ctx.value.reply_tx;
 
-                // The argument type has to be spelled now: napi 3 infers the
-                // closure's parameters from it, and `reply(response: string)`
-                // is the JS signature this hands back.
-                let reply_fn: Function<'_, String, ()> =
-                    ctx.env.create_function_from_closure("reply", move |ctx| {
-                        let response: String = ctx
-                            .get::<napi::JsString>(0)?
-                            .into_utf8()?
-                            .as_str()?
-                            .to_string();
-                        if let Ok(mut guard) = reply_tx.lock() {
-                            if let Some(tx) = guard.take() {
-                                let _ = tx.send(response);
-                            }
-                        }
-                        // napi 3 maps the unit type to `undefined`; `Env::get_undefined`
-                        // is gone.
-                        Ok(())
-                    })?;
+                    // The argument type has to be spelled now: napi 3 infers the
+                    // closure's parameters from it, and `reply(response: string)`
+                    // is the JS signature this hands back.
+                    let reply_sink = reply_tx.clone();
+                    let reply_fn: Function<'_, String, ()> =
+                        ctx.env.create_function_from_closure("reply", move |ctx| {
+                            let response: String = ctx
+                                .get::<napi::JsString>(0)?
+                                .into_utf8()?
+                                .as_str()?
+                                .to_string();
+                            settle(&reply_sink, Ok(response));
+                            // napi 3 maps the unit type to `undefined`; `Env::get_undefined`
+                            // is gone.
+                            Ok(())
+                        })?;
 
-                // The RAW value, not the typed `Function`: napi 3 requires a
-                // callback's arguments to be `'static`, and a `Function<'a>`
-                // built from this callback's own `Env` is not. `napi_value` is
-                // a pointer, so it satisfies that — and it is valid exactly as
-                // long as it needs to be, since napi converts it back and hands
-                // it to JavaScript before this scope ends.
-                Ok(FnArgs::from((event_json, reply_fn.value().value)))
-            })?;
+                    // `fail(message)`: the handler threw or rejected. The request
+                    // ends at once with `E_EVENTS_HANDLER_FAILED` instead of
+                    // waiting out the handler timeout.
+                    let fail_fn: Function<'_, String, ()> =
+                        ctx.env.create_function_from_closure("fail", move |ctx| {
+                            let message: String = ctx
+                                .get::<napi::JsString>(0)?
+                                .into_utf8()?
+                                .as_str()?
+                                .to_string();
+                            settle(&reply_tx, Err(message));
+                            Ok(())
+                        })?;
+
+                    // The RAW value, not the typed `Function`: napi 3 requires a
+                    // callback's arguments to be `'static`, and a `Function<'a>`
+                    // built from this callback's own `Env` is not. `napi_value` is
+                    // a pointer, so it satisfies that — and it is valid exactly as
+                    // long as it needs to be, since napi converts it back and hands
+                    // it to JavaScript before this scope ends.
+                    Ok(FnArgs::from((
+                        event_json,
+                        reply_fn.value().value,
+                        fail_fn.value().value,
+                    )))
+                })
+                .map_err(callback_failed)?;
 
         let tsfn = Arc::new(tsfn);
         let bus = self.bus.clone();
@@ -226,7 +274,7 @@ impl EventBus {
             &name,
             Arc::new(move |event| {
                 let json = serde_json::to_string(&event).unwrap_or_default();
-                let (tx, rx) = mpsc::sync_channel::<String>(1);
+                let (tx, rx) = mpsc::sync_channel::<HandlerOutcome>(1);
 
                 let ctx = RequestContext {
                     event_json: json,
@@ -238,8 +286,14 @@ impl EventBus {
                     napi::threadsafe_function::ThreadsafeFunctionCallMode::Blocking,
                 );
 
-                rx.recv_timeout(StdDuration::from_millis(timeout_ms))
-                    .map_err(|_| format!("request handler timed out after {}ms", timeout_ms))
+                match rx.recv_timeout(StdDuration::from_millis(timeout_ms)) {
+                    Ok(Ok(response)) => Ok(response),
+                    Ok(Err(message)) => Err(RequestError::Failed(message)),
+                    Err(_) => Err(RequestError::Timeout(format!(
+                        "request handler timed out after {}ms",
+                        timeout_ms
+                    ))),
+                }
             }),
         );
 
@@ -270,9 +324,9 @@ impl EventBus {
                 bus.request_event(event, timeout).await
             })
             .await
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))?;
+            .map_err(bus_failed)?;
 
-        result.map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+        result.map_err(request_failed)
     }
 
     /// Check if a pattern matches an event name (wildcard matching via Rust).
@@ -289,7 +343,35 @@ impl EventBus {
         let count = rt
             .spawn(async move { bus.subscription_count().await })
             .await
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))?;
+            .map_err(bus_failed)?;
         Ok(count as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload(error: napi::Error) -> serde_json::Value {
+        serde_json::from_str(&error.reason).unwrap()
+    }
+
+    #[test]
+    fn a_request_error_crosses_under_its_code() {
+        let error = payload(request_failed(RequestError::NoHandler("q".to_string())));
+        assert_eq!(error["code"], "E_EVENTS_NO_REQUEST_HANDLER");
+        assert_eq!(error["message"], "No request handler for 'q'");
+        assert_eq!(error["context"]["name"], "q");
+
+        let error = payload(request_failed(RequestError::Timeout("late".to_string())));
+        assert_eq!(error["code"], "E_EVENTS_TIMEOUT");
+        assert_eq!(error["message"], "late");
+    }
+
+    #[test]
+    fn a_bus_failure_crosses_as_e_events_bus_failed() {
+        let error = payload(bus_failed("task cancelled"));
+        assert_eq!(error["code"], "E_EVENTS_BUS_FAILED");
+        assert_eq!(error["message"], "task cancelled");
     }
 }

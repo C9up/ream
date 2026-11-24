@@ -22,6 +22,7 @@ import {
 } from '@c9up/comet'
 import { currentNodeEnv } from '../env/nodeEnv.js'
 import {
+  E_EMPTY_GATE_REQUIREMENT,
   E_MIDDLEWARE_NOT_FOUND,
   E_RPC_INVALID_METHOD_NAME,
   E_RPC_RESERVED_METHOD_NAME,
@@ -31,8 +32,9 @@ import {
 } from '../errors/codes.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import {
-  authenticatedByGuards,
+  authenticatedByGuardLevels,
   holdsPermissions,
+  holdsRoles,
   isUnauthorizedError,
 } from '../http/permissions.js'
 import type { WebSocketContext, WebSocketMessage } from '../http/WebSocket.js'
@@ -56,8 +58,10 @@ interface RpcContainer {
 export interface RpcMethodDefinition {
   name: string
   handler: RpcHandler
-  guards: string[]
-  roles: string[]
+  /** Guard levels: the call must be authenticated by a guard EVERY list names. */
+  guards: string[][]
+  /** Role requirements: the caller needs one role of EACH list. */
+  roles: string[][]
   permissions: string[]
   middleware: string[]
   validator?: string
@@ -70,17 +74,37 @@ export class RpcMethodBuilder {
     this.#def = def
   }
 
+  /**
+   * Require authentication by one of `guards`. Each call adds a level, as on
+   * a route, and so does each enclosing `group({ guards })`. At least one
+   * guard must be named: an empty call would add no requirement, so it throws
+   * `E_EMPTY_GATE_REQUIREMENT`, as on a route.
+   */
   guard(...guards: string[]): this {
-    this.#def.guards.push(...guards)
+    this.#requireNamed(guards, '.guard()')
+    this.#def.guards.push([...guards])
     return this
   }
 
+  #requireNamed(names: readonly string[], call: string): void {
+    if (names.length === 0) {
+      throw new E_EMPTY_GATE_REQUIREMENT([`RPC method '${this.#def.name}'`, call])
+    }
+  }
+
+  /**
+   * Require one of `roles`. Each call adds a requirement, as on a route:
+   * `.role('a').role('b')` needs both. At least one role must be named.
+   */
   role(...roles: string[]): this {
-    this.#def.roles.push(...roles)
+    this.#requireNamed(roles, '.role()')
+    this.#def.roles.push([...roles])
     return this
   }
 
+  /** Require every one of `permissions`. At least one must be named. */
   permission(...permissions: string[]): this {
+    this.#requireNamed(permissions, '.permission()')
     this.#def.permissions.push(...permissions)
     return this
   }
@@ -272,7 +296,7 @@ async function checkRpcAuthorization(
   // and propagates to the caller's error path.
   if (def.guards.length > 0) {
     try {
-      if (!(await authenticatedByGuards(ctx.auth, def.guards))) {
+      if (!(await authenticatedByGuardLevels(ctx.auth, def.guards))) {
         return { code: -32003, message: 'Unauthorized' }
       }
     } catch (err) {
@@ -284,13 +308,10 @@ async function checkRpcAuthorization(
   if (needsAuth && !ctx.auth?.isAuthenticated) {
     return { code: -32003, message: 'Unauthorized' }
   }
-  if (def.roles.length > 0) {
-    // Warden nests roles/permissions under ctx.auth.user — mirror the HTTP path
-    // (Pipeline.ts createGuardMiddleware) so RPC role gates aren't fail-closed-dead.
-    const userRoles = ctx.auth?.roles ?? ctx.auth?.user?.roles ?? []
-    if (!def.roles.some((r: string) => userRoles.includes(r))) {
-      return { code: -32003, message: 'Insufficient role' }
-    }
+  // The same reading as the HTTP gate: every requirement, roles at the top
+  // level or under `user`.
+  if (def.roles.length > 0 && !holdsRoles(ctx.auth, def.roles)) {
+    return { code: -32003, message: 'Insufficient role' }
   }
   // A token-authenticated call also needs the token to allow each permission.
   if (def.permissions.length > 0) {
@@ -303,7 +324,7 @@ async function checkRpcAuthorization(
 
 export class RpcRouter {
   #methods: Map<string, RpcMethodDefinition> = new Map()
-  #groupConfig: { guards: string[]; roles: string[]; middleware: string[] } | null = null
+  #groupConfig: { guards: string[][]; roles: string[][]; middleware: string[] } | null = null
   #container?: RpcContainer
   readonly #contentTypes: ReadonlySet<string>
 
@@ -338,8 +359,8 @@ export class RpcRouter {
     const def: RpcMethodDefinition = {
       name,
       handler,
-      guards: [...(this.#groupConfig?.guards ?? [])],
-      roles: [...(this.#groupConfig?.roles ?? [])],
+      guards: (this.#groupConfig?.guards ?? []).map((level) => [...level]),
+      roles: (this.#groupConfig?.roles ?? []).map((oneOf) => [...oneOf]),
       permissions: [],
       middleware: [...(this.#groupConfig?.middleware ?? [])],
     }
@@ -395,10 +416,18 @@ export class RpcRouter {
     callback: (rpc: RpcRouter) => void,
   ): void {
     const prevConfig = this.#groupConfig
+    const level = [...(config.guards ?? []), ...(config.guard ? [config.guard] : [])]
+    // `guards: []` reads as a gate and names no guard: refused, as on a route.
+    if (config.guards !== undefined && level.length === 0) {
+      throw new E_EMPTY_GATE_REQUIREMENT(['RPC group', 'guards: []'])
+    }
+    // A nested group keeps the enclosing groups' guards and middleware: its
+    // own guards are one more level, so an inner group never escapes an
+    // outer one.
     this.#groupConfig = {
-      guards: [...(config.guards ?? []), ...(config.guard ? [config.guard] : [])],
-      roles: [],
-      middleware: config.middleware ?? [],
+      guards: [...(prevConfig?.guards ?? []), ...(level.length > 0 ? [level] : [])],
+      roles: [...(prevConfig?.roles ?? [])],
+      middleware: [...(prevConfig?.middleware ?? []), ...(config.middleware ?? [])],
     }
     // try/finally so a throwing callback can't leave #groupConfig stuck at the
     // group's value and leak its guards/middleware onto sibling registrations.

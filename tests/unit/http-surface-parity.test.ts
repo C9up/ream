@@ -181,7 +181,7 @@ describe('Response > cookie attributes', () => {
   })
 
   it('refuses Partitioned without Secure, which browsers would drop', () => {
-    expect(() => cookieHeader('d', '1', { partitioned: true })).toThrow(
+    expect(() => cookieHeader('d', '1', { partitioned: true, secure: false })).toThrow(
       expect.objectContaining({
         code: 'E_RESPONSE_INVALID_COOKIE',
         message: expect.stringMatching(/requires Secure/),

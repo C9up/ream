@@ -57,7 +57,7 @@ describe('napi-roundtrip > error handling', () => {
     } catch (e: unknown) {
       const error = e as Error
       const parsed = JSON.parse(error.message)
-      expect(parsed.code).toBe('RUST_PANIC')
+      expect(parsed.code).toBe('E_NATIVE_PANIC')
       expect(parsed.message).toContain('intentional panic for testing')
       expect(parsed.hint).toContain('bug in the Ream framework')
     }

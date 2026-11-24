@@ -117,6 +117,33 @@ describe('ServerWebSocket', () => {
     expect(socket.send('x')).toBe(false)
   })
 
+  it('a refused close code throws coded and leaves the socket open', () => {
+    const { backend, calls } = recordingBackend()
+    backend.webSocketClose = (_id, code, reason) => {
+      if (code === 1005) {
+        throw new Error(
+          JSON.stringify({
+            code: 'E_WEBSOCKET_CLOSE_CODE',
+            message: '1005 is not a close code an endpoint may send',
+          }),
+        )
+      }
+      calls.push(`close ${code} ${reason}`)
+      return true
+    }
+    const socket = new ServerWebSocket('a', backend, [], () => {})
+    expect(() => socket.close(1005)).toThrow(
+      expect.objectContaining({
+        code: 'E_WEBSOCKET_CLOSE_CODE',
+        message: '1005 is not a close code an endpoint may send',
+      }),
+    )
+    expect(socket.readyState).toBe('open')
+    socket.close(1000, 'done')
+    expect(calls).toEqual(['close 1000 done'])
+    expect(socket.readyState).toBe('closing')
+  })
+
   it('accepts only a subprotocol the client offered', () => {
     const { backend } = recordingBackend()
     const socket = new ServerWebSocket('a', backend, ['chat.v1', 'chat.v2'], () => {})

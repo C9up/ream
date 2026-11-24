@@ -40,8 +40,6 @@ describeIfNetwork('RpcRouter over router.ws() with comet', () => {
 
   beforeAll(async () => {
     const serverFactory = createHyperServerFactory()
-    if (serverFactory === undefined)
-      throw new Error('no prebuilt HyperServer binary for this platform')
     const rpc = new RpcRouter()
     rpc.method('echo', (_ctx, params) => params)
     rpc.method('log', (_ctx, params) => {

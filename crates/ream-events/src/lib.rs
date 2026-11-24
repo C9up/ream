@@ -17,7 +17,7 @@ pub mod retry;
 pub mod router;
 pub mod store;
 
-pub use bus::{Bus, RequestHandler};
+pub use bus::{Bus, RequestError, RequestHandler};
 pub use event::Event;
 #[cfg(feature = "redis-store")]
 pub use redis_store::RedisStore;

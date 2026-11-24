@@ -69,6 +69,31 @@ describe('security/crypto > NAPI preinstall path', () => {
     expect(calls).toContain('sign')
   })
 
+  it('delegates every call, and rethrows an engine failure under its code', async () => {
+    const failed = new Error(JSON.stringify({ code: 'E_CRYPTO_FAILED', message: 'HMAC key error' }))
+    Reflect.set(globalThis, '__reamNapi', {
+      hmacSign: () => {
+        throw failed
+      },
+      hmacVerify: () => false,
+      randomBytesBase64: (len: number) => `b${len}`,
+      randomHex: (len: number) => `h${len}`,
+      constantTimeEq: () => true,
+    })
+    vi.resetModules()
+    const mod = await import('../../src/security/crypto.js')
+    expect(() => mod.hmacSign('x', 'y')).toThrow(
+      expect.objectContaining({
+        code: 'E_CRYPTO_FAILED',
+        message: 'HMAC key error',
+        cause: failed,
+      }),
+    )
+    expect(mod.hmacVerify('x', 'sig', 'y')).toBe(false)
+    expect(mod.randomBytesBase64(4)).toBe('b4')
+    expect(mod.randomHex(4)).toBe('h4')
+  })
+
   it('ignores a malformed preinstalled NAPI (missing functions) and uses the fallback', async () => {
     Reflect.set(globalThis, '__reamNapi', { hmacSign: () => 'nope' }) // incomplete shape
     vi.resetModules()

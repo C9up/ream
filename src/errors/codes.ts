@@ -20,7 +20,7 @@ export {
 /** `app.setMode()` or `app.setEnvironment()` was called after the application booted. */
 export const E_APP_ALREADY_BOOTED = createError<[string]>('%s', 'E_APP_ALREADY_BOOTED')
 
-/** A lazily imported module (`app.importDefault()`, a lazy listener) has no default export. */
+/** A lazily imported module (`app.importDefault()`, a lazy listener, a route's lazy controller) has no default export. */
 export const E_APP_MISSING_DEFAULT_EXPORT = createError<[string]>(
   '%s',
   'E_APP_MISSING_DEFAULT_EXPORT',
@@ -289,6 +289,9 @@ export const E_CONTROLLER_METHOD_NOT_FOUND = createError<[string, string]>(
   'E_CONTROLLER_METHOD_NOT_FOUND',
 )
 
+/** A native crypto call (`hmacSign()`, `randomHex()`…) failed in the engine. */
+export const E_CRYPTO_FAILED = createError<[string]>('%s', 'E_CRYPTO_FAILED')
+
 /** Two routes declare the same method and path. */
 export const E_DUPLICATE_ROUTE = createError<[string, string]>(
   'Duplicate route found. "%s: %s" route already exists.',
@@ -301,6 +304,17 @@ export const E_DUPLICATE_ROUTE_NAME = createError<[string, string, string, strin
   'E_DUPLICATE_ROUTE_NAME',
 )
 
+/** `.guard()`, `.role()` or `.permission()` was called with nothing, a group, an RPC group or a GraphQL resolver was given an empty `guards`, `roles` or `permissions` list, or a controller action's `@Role()`, `@Permission()` or `@Guard()` names nothing. An empty requirement would protect nothing. */
+export const E_EMPTY_GATE_REQUIREMENT = Object.assign(
+  createError<[string, string]>(
+    '%s: %s names nothing to require, so it would leave what it is meant to protect open to every request.',
+    'E_EMPTY_GATE_REQUIREMENT',
+  ),
+  {
+    help: "Name at least one guard, role or permission — `.guard('jwt')`, `.role('admin')` — or remove the call. A list read from configuration must not be empty.",
+  },
+)
+
 /** `ENV_PATH` names a directory that holds none of the `.env` files. */
 export const E_ENV_PATH_NO_FILE = createError<[string, string]>(
   'ENV_PATH points at %s, which holds none of %s',
@@ -310,11 +324,20 @@ export const E_ENV_PATH_NO_FILE = createError<[string, string]>(
 /** An event assertion failed (`assertEmitted()`, `assertNotEmitted()`, on the helpers or the `FakeBus`). */
 export const E_EVENTS_ASSERTION_FAILED = createError<[string]>('%s', 'E_EVENTS_ASSERTION_FAILED')
 
+/** The native event bus failed: its task panicked or was cancelled, or an event would not serialize. */
+export const E_EVENTS_BUS_FAILED = createError<[string]>(
+  'The native event bus failed: %s',
+  'E_EVENTS_BUS_FAILED',
+)
+
 /** `FakeBus.onRequest()` was given a second handler for the same name. */
 export const E_EVENTS_DUPLICATE_REQUEST_HANDLER = createError<[string]>(
   'FakeBus.onRequest: a handler is already registered for "%s". Call reset() between registrations.',
   'E_EVENTS_DUPLICATE_REQUEST_HANDLER',
 )
+
+/** A request handler panicked, or refused the request with an error of its own. */
+export const E_EVENTS_HANDLER_FAILED = createError<[string]>('%s', 'E_EVENTS_HANDLER_FAILED')
 
 /** `onAny()` without a listener, or `waitForChain()` with no event names. */
 export const E_EVENTS_INVALID_ARGUMENT = createError<[string]>('%s', 'E_EVENTS_INVALID_ARGUMENT')
@@ -325,9 +348,9 @@ export const E_EVENTS_MISSING_LISTENER_METHOD = createError<[string, string]>(
   'E_EVENTS_MISSING_LISTENER_METHOD',
 )
 
-/** `FakeBus.request()` named a request no handler answers. */
+/** `emitter.request()` (or `FakeBus.request()`) named a request no handler answers. */
 export const E_EVENTS_NO_REQUEST_HANDLER = createError<[string]>(
-  'FakeBus: no request handler registered for "%s"',
+  'no request handler registered for "%s"',
   'E_EVENTS_NO_REQUEST_HANDLER',
 )
 
@@ -349,6 +372,15 @@ export const E_EVENTS_UNSUPPORTED_STORE = Object.assign(
   { help: "Only the in-memory store exists in this build; use store: 'memory'." },
 )
 
+/** A GraphQL resolver returned a value its field's declared type cannot hold: an object under a `String`, something that is not a list under `[Task]`, a value of an interface or union whose object type is not known. */
+export const E_GRAPHQL_INVALID_RESULT = createError<[string]>('%s', 'E_GRAPHQL_INVALID_RESULT', 500)
+
+/** The GraphQL schema (SDL) does not parse, or names a type it does not declare, so the fields its types declare cannot be read. */
+export const E_GRAPHQL_INVALID_SCHEMA = createError<[string]>(
+  'The GraphQL schema could not be read: %s',
+  'E_GRAPHQL_INVALID_SCHEMA',
+)
+
 /** The GraphQL provider was registered twice on the same container. */
 export const E_GRAPHQL_PROVIDER_ALREADY_REGISTERED = Object.assign(
   createError(
@@ -365,6 +397,9 @@ export const E_GRAPHQL_SCHEMA_NOT_FOUND = createError<[string]>(
   'GraphQL schema not found: %s',
   'E_GRAPHQL_SCHEMA_NOT_FOUND',
 )
+
+/** The native GraphQL parser could not serialize its result. */
+export const E_GRAPHQL_SERIALIZE_FAILED = createError<[string]>('%s', 'E_GRAPHQL_SERIALIZE_FAILED')
 
 /** A memory health check threshold is not a byte size, or not a percentage between 0 and 100. */
 export const E_HEALTH_INVALID_THRESHOLD = createError<[string]>('%s', 'E_HEALTH_INVALID_THRESHOLD')
@@ -435,13 +470,16 @@ export const E_INVALID_ROUTE_DOMAIN = createError<[string, string]>(
   'E_INVALID_ROUTE_DOMAIN',
 )
 
+/** A native WebSocket limit of 0 bytes. */
+export const E_INVALID_WEBSOCKET_CONFIG = createError<[string]>('%s', 'E_INVALID_WEBSOCKET_CONFIG')
+
 /** A middleware entry with no declared parameters was read as a lazy import, and it did not resolve to a module with a default export. */
 export const E_MIDDLEWARE_ENTRY = createError(
   'A middleware entry with no declared parameters was treated as a lazy import, but it did not resolve to a module with a default export. If this is an inline middleware (e.g. `handle.bind(this)` or `(...args) => …`), register it on the route or group — `router.get(...).use(fn)` — rather than in `router.use([...])`, which takes imports of middleware classes, as AdonisJS does.',
   'E_MIDDLEWARE_ENTRY',
 )
 
-/** A named middleware could not be resolved when the pipeline was built. Register it with `middleware.register()`. */
+/** A route, RPC method or GraphQL resolver names a middleware nothing declared. Declare it with `router.named()` (or `middleware.register()`). An HTTP route's names are checked when the kernel is built, at boot. */
 export const E_MIDDLEWARE_NOT_FOUND = createError<[string]>('%s', 'E_MIDDLEWARE_NOT_FOUND')
 
 /** Two providers registered a migration source under the same name. */
@@ -473,6 +511,14 @@ export const E_MULTIPART_UNSAFE_FILE_NAME = createError<[string]>(
   '%s',
   'E_MULTIPART_UNSAFE_FILE_NAME',
 )
+
+/** A Rust panic in a native binding, caught at the boundary instead of crashing the process. */
+export const E_NATIVE_PANIC = Object.assign(createError<[string]>('%s', 'E_NATIVE_PANIC'), {
+  help: 'This is a bug in Ream. Please report it with the stack trace.',
+})
+
+/** A JavaScript callback the native binding could not hold (napi refused to wrap it). */
+export const E_NATIVE_CALLBACK_FAILED = createError<[string]>('%s', 'E_NATIVE_CALLBACK_FAILED')
 
 /** `router.on(path).render()` was used and no template engine is installed. */
 export const E_NO_VIEW_ENGINE = createError<[string, string]>(
@@ -673,6 +719,9 @@ export const E_SCHEDULE_TASK_UNKNOWN = createError<[string]>(
   'E_SCHEDULE_TASK_UNKNOWN',
 )
 
+/** The native HTTP server could not bind its address (the port is taken, or the address is not local). */
+export const E_SERVER_BIND_FAILED = createError<[string]>('%s', 'E_SERVER_BIND_FAILED')
+
 /** A second gRPC handler was registered on the server. */
 export const E_SERVER_GRPC_ALREADY_SET = Object.assign(
   createError('A gRPC handler is already registered.', 'E_SERVER_GRPC_ALREADY_SET'),
@@ -683,6 +732,41 @@ export const E_SERVER_GRPC_ALREADY_SET = Object.assign(
 export const E_SERVER_GRPC_INVALID_LIMIT = createError<[string, string]>(
   '%s must be a whole number of bytes, or -1 for no limit — got %s.',
   'E_SERVER_GRPC_INVALID_LIMIT',
+)
+
+/** A body limit handed to the native server is not a byte count or a part count of zero or more. */
+export const E_SERVER_INVALID_BODY_LIMIT = createError<[string]>(
+  '%s',
+  'E_SERVER_INVALID_BODY_LIMIT',
+)
+
+/** The native server's bind address is not an IPv4 or IPv6 address, nor `localhost`. */
+export const E_SERVER_INVALID_HOST = createError<[string]>('%s', 'E_SERVER_INVALID_HOST')
+
+/** The native server's port is above 65535. */
+export const E_SERVER_INVALID_PORT = createError<[string]>('%s', 'E_SERVER_INVALID_PORT')
+
+/** A trusted-proxy entry is not an address, a CIDR range, a netmask range, a named range or `*`. */
+export const E_SERVER_INVALID_TRUSTED_PROXY = createError<[string]>(
+  '%s',
+  'E_SERVER_INVALID_TRUSTED_PROXY',
+)
+
+/** A lock of the native server was left poisoned by a panic. */
+export const E_SERVER_LOCK_POISONED = Object.assign(
+  createError<[string]>('%s', 'E_SERVER_LOCK_POISONED'),
+  {
+    help: 'This is a bug in Ream. Please report it with the stack trace.',
+  },
+)
+
+/** The native server's port was read before `listen()`. */
+export const E_SERVER_NOT_STARTED = createError('Server not started', 'E_SERVER_NOT_STARTED')
+
+/** The native server was started with no request handler. */
+export const E_SERVER_NO_HANDLER = createError(
+  'No handler registered. Call onRequest() before listen()',
+  'E_SERVER_NO_HANDLER',
 )
 
 /** A `@c9up/ream/services/*` accessor, `urlFor()` or `signedUrlFor()` was used before the application booted it. */
@@ -810,6 +894,12 @@ export const E_VALIDATOR_UNUSABLE = createError(
   'Route validator exposes none of validateResultAsync(), validateResult() or validate().',
   'E_VALIDATOR_UNUSABLE',
 )
+
+/** `socket.close()` with a code a close frame may not carry (RFC 6455 §7.4). */
+export const E_WEBSOCKET_CLOSE_CODE = createError<[string]>('%s', 'E_WEBSOCKET_CLOSE_CODE')
+
+/** A close reason over 123 bytes. */
+export const E_WEBSOCKET_CLOSE_REASON = createError<[string]>('%s', 'E_WEBSOCKET_CLOSE_REASON')
 
 /** A WebSocket route's handler ran without its socket (called outside the kernel). */
 export const E_WEBSOCKET_CONTEXT = createError<[string]>(
@@ -1121,14 +1211,17 @@ export const E_REAM_NAPI_UNSUPPORTED_PLATFORM = createError<[string]>(
   'E_REAM_NAPI_UNSUPPORTED_PLATFORM',
 )
 
-/** A native binary exists but cannot be loaded. */
+/**
+ * A native binary exists but cannot be loaded. The message names the binary
+ * and the fix; the load error, which carries paths on the host, is the `cause`.
+ */
 export const E_REAM_NAPI_LOAD_FAILED = Object.assign(
-  createError<[string, string, string]>(
-    "%s NAPI binary exists at '%s' but failed to load: %s",
+  createError<[binary: string, file: string, fix: string]>(
+    'The %s NAPI binary (%s) failed to load. Fix: %s',
     'E_REAM_NAPI_LOAD_FAILED',
   ),
   {
-    help: 'Check that the binary was built for the current platform and Node ABI. Rebuild with `pnpm --filter @c9up/ream build:rust`.',
+    help: 'Check that the binary was built for the current platform and Node ABI. Rebuild with `pnpm --filter @c9up/ream build:napi`.',
   },
 )
 

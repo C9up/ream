@@ -27,7 +27,6 @@ use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, watch, Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
-use tokio_stream::wrappers::ReceiverStream;
 
 /// Unified body type for hyper responses: either a fully buffered payload
 /// (the common request/response case) or a streamed sequence of frames
@@ -1144,8 +1143,7 @@ async fn build_streaming_response(
         builder = builder.header("x-accel-buffering", "no");
     }
 
-    let stream = ReceiverStream::new(receiver)
-        .map(|chunk| Ok::<Frame<Bytes>, Infallible>(Frame::data(chunk.bytes)));
+    let stream = receiver.map(|chunk| Ok::<Frame<Bytes>, Infallible>(Frame::data(chunk.bytes)));
     let body: ResponseBody = BodyExt::boxed(StreamBody::new(stream));
     builder.body(body).unwrap_or_else(|_| {
         Response::builder()

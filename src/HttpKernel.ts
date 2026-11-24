@@ -10,18 +10,26 @@
  * @implements FR21, FR22, FR23, FR24
  */
 
-import { parseQueryString } from './bodyparser/qsParse.js'
+// Side-effect import: the route gate reads decorator metadata through
+// `Reflect.getMetadata`, so it must not depend on something else having
+// loaded the polyfill first.
+import 'reflect-metadata'
 import type { Container } from './container/Container.js'
 import { debugHttp } from './debug.js'
 import { hotReloadCount } from './dev/hmr.js'
 import {
+  E_APP_MISSING_DEFAULT_EXPORT,
   E_CONTROLLER_METHOD_NOT_FOUND,
+  E_EMPTY_GATE_REQUIREMENT,
+  E_MIDDLEWARE_NOT_FOUND,
   E_REAM_INTERNAL,
   E_VALIDATOR_NOT_FOUND,
 } from './errors/codes.js'
 import type { Emitter } from './events/Emitter.js'
 import { E_ROUTE_NOT_FOUND, ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
+import { spoofedMethod } from './http/Request.js'
+import type { CookieOptions } from './http/Response.js'
 import { openWebSocket, type WebSocketHub } from './http/WebSocket.js'
 import type {
   MiddlewareFunction,
@@ -84,6 +92,13 @@ export interface HttpKernelConfig {
    */
   jsonpCallbackName?: string
   /**
+   * Attributes merged under every cookie a response writes (AdonisJS
+   * `http.cookie`), already merged over the framework's defaults. Without it
+   * the defaults apply: `maxAge: '2h'`, `path: '/'`, `httpOnly`, `secure`,
+   * `sameSite: 'lax'`.
+   */
+  cookie?: CookieOptions
+  /**
    * Ceiling on a buffered response body, in bytes. Default 100MB — the same the
    * Rust layer caps an incoming body at. Responses are not streamed yet, so the
    * body is held whole in memory; this is what stops a large one growing until
@@ -127,6 +142,27 @@ export interface HttpKernelRequest {
   websocket?: boolean
 }
 
+/**
+ * Every name a route gives `.middleware()` must be declared, with
+ * `router.named()` or on the registry; otherwise `E_MIDDLEWARE_NOT_FOUND`,
+ * naming the route.
+ */
+function assertNamedMiddlewareDeclared(router: Router, registry: MiddlewareRegistry): void {
+  for (const route of router.getRoutes()) {
+    for (const name of route.middleware) {
+      if (registry.get(name) !== undefined || router.getNamedMiddleware(name) !== undefined) {
+        continue
+      }
+      const known = new Set([...registry.names(), ...router.getNamedMiddlewareNames()])
+      throw new E_MIDDLEWARE_NOT_FOUND([
+        `Route ${route.method} ${route.path} uses the named middleware '${name}', which is not ` +
+          `declared. Declare it with router.named({ ${name}: () => import('…') }). ` +
+          `Registered: ${[...known].join(', ') || '(none)'}`,
+      ])
+    }
+  }
+}
+
 export function createHttpKernel(
   config: HttpKernelConfig,
 ): (request: HttpKernelRequest) => Promise<HttpKernelResponse> {
@@ -134,6 +170,13 @@ export function createHttpKernel(
   const handler = config.exceptionHandler ?? new ExceptionHandler(config.debug === true)
   const serverMw = config.serverMiddleware ?? []
   const routerMw = config.routerMiddleware ?? []
+
+  // Building the kernel is the application's boot: a route naming a middleware
+  // nothing declares stops it here, as a misspelt `middleware.auht()` stops an
+  // upstream application when its route file loads, rather than answering 500
+  // on every request to that route. A route added after this point is still
+  // refused when its pipeline is built.
+  assertNamedMiddlewareDeclared(config.router, config.middleware)
 
   // Pipeline cache: compiled middleware chain per ROUTE OBJECT (PERF-7).
   // Keyed by route identity, not `method:path` — two routes sharing a path but
@@ -152,6 +195,54 @@ export function createHttpKernel(
   // In production this is a number compared against a constant zero: nothing
   // bumps the counter when `@c9up/ream/hot` was never loaded.
   const pipelineCache = new WeakMap<RouteDefinition, { chain: MiddlewareFunction; hotAt: number }>()
+
+  // The hot-reload count each lazy controller was imported at, so a swap is
+  // followed by a fresh import (see `importController`).
+  const importedAt = new WeakMap<RouteDefinition, number>()
+
+  /** Whether the route's lazy controller is still to import, or to import again after a hot swap. */
+  const needsImport = (route: RouteDefinition): boolean =>
+    route.lazyController !== undefined &&
+    (route.controller === undefined || importedAt.get(route) !== hotReloadCount())
+
+  /**
+   * Promote a lazy or string controller (`[() => import('./x.js'), 'action']`,
+   * `'XController.action'`) to a concrete one: imported once, then reused.
+   *
+   * It runs BEFORE the request's route info and context are built. Imported
+   * from inside the handler, the controller was unknown to everything that
+   * ran earlier on that first request: `ctx.route.controller` was empty, so a
+   * middleware reading the action's decorators through it found none and
+   * took the route for a public one.
+   *
+   * A failing import is handed back, not thrown: the request still gets its
+   * context, and the error is raised where the handler would have run. The
+   * route keeps no controller, so the next request imports again.
+   */
+  const importController = async (
+    route: RouteDefinition,
+  ): Promise<{ error: unknown } | undefined> => {
+    const lazy = route.lazyController
+    if (lazy === undefined) return undefined
+    // After a hot swap the class promoted before is the stale one: dropped
+    // first, so a failing re-import does not leave it in place.
+    route.controller = undefined
+    const hotAt = hotReloadCount()
+    try {
+      const mod = await lazy.loader()
+      const target: unknown = mod.default
+      if (typeof target !== 'function') {
+        throw new E_APP_MISSING_DEFAULT_EXPORT([
+          `The lazily imported controller of ${route.method} ${route.path} has no default export, or it is not a class.`,
+        ])
+      }
+      route.controller = { target: mod.default, method: lazy.method }
+      importedAt.set(route, hotAt)
+      return undefined
+    } catch (error) {
+      return { error }
+    }
+  }
 
   // Resolve the events emitter once, only when the app registered
   // `EventsProvider`. Lazy + cached: the binding may not exist yet at kernel
@@ -266,6 +357,12 @@ export function createHttpKernel(
         match ? (match.route.name ?? match.route.path) : 'no match',
       )
     }
+    // A lazy controller is imported before anything reads the route: its
+    // class and action are on the route info from the first request on.
+    const importFailure =
+      match !== undefined && needsImport(match.route)
+        ? await importController(match.route)
+        : undefined
     const routeInfo = match
       ? {
           pattern: match.route.path,
@@ -275,7 +372,9 @@ export function createHttpKernel(
           // RouteInfo so middleware (Warden's @Guard, Photon's @Meta) can
           // read decorator metadata via Reflect. Absent for inline-arrow
           // route handlers — that's intentional, decorators only apply
-          // to controller methods.
+          // to controller methods — and for a controller whose import
+          // failed: that request ends in the import's error, never in the
+          // handler.
           controller: controllerPrototype(match.route.controller?.target),
           action: match.route.controller?.method,
         }
@@ -294,6 +393,9 @@ export function createHttpKernel(
     resolver?.bindValue(HttpContext, ctx)
     if (config.jsonpCallbackName !== undefined) {
       ctx.response.setJsonpCallbackName(config.jsonpCallbackName)
+    }
+    if (config.cookie !== undefined) {
+      ctx.response.setCookieDefaults(config.cookie)
     }
     if (config.maxResponseBytes !== undefined) {
       ctx.response.setMaxBodyBytes(config.maxResponseBytes)
@@ -335,31 +437,25 @@ export function createHttpKernel(
         if (!match) {
           throw new E_ROUTE_NOT_FOUND([method, reqData.path])
         }
+        // The controller could not be imported: the request ends here, as an
+        // error, whatever the middleware in front let through.
+        if (importFailure !== undefined) throw importFailure.error
 
         const hotAt = hotReloadCount()
         let cached = pipelineCache.get(match.route)
         if (cached !== undefined && cached.hotAt !== hotAt) {
-          // A module was swapped since this was built. Drop the pipeline AND
-          // the promoted controller, so the loader runs again and `import()`
-          // hands back what hot-hook just invalidated rather than the copy in
-          // the ESM cache.
+          // A module was swapped since this was built. Drop the pipeline: the
+          // controller was imported again above, so `import()` handed back
+          // what hot-hook just invalidated rather than the copy in the ESM
+          // cache, and the pipeline is rebuilt around it.
           pipelineCache.delete(match.route)
-          if (match.route.lazyController) match.route.controller = undefined
           cached = undefined
         }
 
         if (!cached) {
-          // Promote a lazy/string controller to a concrete controller tuple on
-          // first request (imported once, then reused). Done before handler +
-          // guard-metadata resolution so @Guard/@Role/@inject flow through the
-          // normal controller path below.
-          if (match.route.lazyController && !match.route.controller) {
-            const mod = await match.route.lazyController.loader()
-            match.route.controller = {
-              target: mod.default,
-              method: match.route.lazyController.method,
-            }
-          }
+          // The lazy/string controller was promoted before the context was
+          // built, so @Guard/@Role/@inject flow through the normal controller
+          // path below.
 
           // Resolve handler (once per route)
           let routeHandler: (typeof match.route)['handler']
@@ -377,15 +473,20 @@ export function createHttpKernel(
           let guards = [...match.route.guards]
           let roles = [...match.route.roles]
           let permissions = [...match.route.permissions]
+          let mfa = false
 
           if (match.route.controller) {
             const meta = readControllerGuardMetadata(
               match.route.controller.target,
               match.route.controller.method,
             )
-            guards = [...guards, ...meta.guards]
-            roles = [...roles, ...meta.roles]
+            // `@Guard('a', 'b')` is one level: either guard, as warden reads it.
+            guards = [...guards, ...(meta.guards.length > 0 ? [meta.guards] : [])]
+            // `@Role('a', 'b')` requires every role, as warden's middleware
+            // reads it: each one is a requirement of its own.
+            roles = [...roles, ...meta.roles.map((role) => [role])]
             permissions = [...permissions, ...meta.permissions]
+            mfa = meta.mfa
           }
 
           // Resolve route validators by name (container token `validator:<name>`).
@@ -408,7 +509,7 @@ export function createHttpKernel(
           // Compile pipeline once
           const chain = config.middleware.buildChain(
             match.route.middleware,
-            [...routerMw, ...match.route.inlineMiddleware],
+            match.route.inlineMiddleware,
             match.route.websocket === true
               ? async (c) => {
                   // Reached only once the middleware and guards have let the
@@ -418,7 +519,16 @@ export function createHttpKernel(
               : async (c) => {
                   await routeHandler(c)
                 },
-            { guards, roles, permissions, validators, onError: respondToError },
+            {
+              guards,
+              roles,
+              permissions,
+              mfa,
+              validators,
+              onError: respondToError,
+              named: config.router,
+              routerMiddleware: routerMw,
+            },
           )
 
           cached = { chain, hotAt }
@@ -516,19 +626,6 @@ function createControllerHandler(
   }
 }
 
-/**
- * The method a spoofing-enabled request is routed with — what
- * `request.method()` answers once spoofing is on: a POST carrying a non-empty
- * `_method` takes it, upper-cased. Read from the query string only, as
- * upstream does in effect: its route finder runs before the router middleware
- * that parses the body, so `_method` belongs in the form's `action` URL.
- */
-function spoofedMethod(method: string, query: string): string {
-  if (method.toUpperCase() !== 'POST') return method
-  const spoofed = parseQueryString(query)._method
-  return typeof spoofed === 'string' && spoofed !== '' ? spoofed.toUpperCase() : method
-}
-
 /** A controller class's prototype, where its decorators keep their metadata. */
 function controllerPrototype(target: AnyConstructor | undefined): object | undefined {
   const prototype: unknown = target?.prototype
@@ -536,24 +633,46 @@ function controllerPrototype(target: AnyConstructor | undefined): object | undef
 }
 
 /**
- * Read @Guard, @Role, @Permission metadata from a controller method.
- * Returns empty arrays if no decorators are present.
+ * Read the `@Guard`, `@Role`, `@Permission` and `@RequireMfa` metadata of a
+ * controller action — the decorators of the auth package, under the keys it
+ * writes them (`Symbol.for('warden:…')`), so ream does not import it.
+ *
+ * All four or none: a gate that enforced three and dropped the fourth without
+ * a word left an action declared `@RequireMfa()` reachable without the
+ * step-up on every stack that relies on this gate. Read through the prototype
+ * chain, as the auth package reads them: an inherited action keeps its
+ * parent's decorators.
+ *
+ * A decorator that names nothing — `@Role(...rolesFromConfig)` with an empty
+ * list, or a value that is not the list the decorator writes — throws
+ * `E_EMPTY_GATE_REQUIREMENT`, as `.role()` does on a route: read as "no
+ * requirement", it left the action open to every request.
  */
 function readControllerGuardMetadata(
   target: AnyConstructor,
   method: string,
-): { guards: string[]; roles: string[]; permissions: string[] } {
-  try {
-    const guards: string[] =
-      Reflect.getMetadata(Symbol.for('warden:guard'), target.prototype, method) ?? []
-    const roles: string[] =
-      Reflect.getMetadata(Symbol.for('warden:role'), target.prototype, method) ?? []
-    const permissions: string[] =
-      Reflect.getMetadata(Symbol.for('warden:permission'), target.prototype, method) ?? []
-    return { guards, roles, permissions }
-  } catch {
-    return { guards: [], roles: [], permissions: [] }
+): { guards: string[]; roles: string[]; permissions: string[]; mfa: boolean } {
+  const prototype = controllerPrototype(target)
+  if (prototype === undefined) return { guards: [], roles: [], permissions: [], mfa: false }
+  const where = `${target.name || 'controller'}.${method}`
+  const read = (key: string): unknown => Reflect.getMetadata(Symbol.for(key), prototype, method)
+  return {
+    guards: requirementList(read('warden:guard'), where, '@Guard()'),
+    roles: requirementList(read('warden:role'), where, '@Role()'),
+    permissions: requirementList(read('warden:permission'), where, '@Permission()'),
+    // Truthy, as the auth package reads it: the strictest of the two readings.
+    mfa: Boolean(read('warden:mfa')),
   }
+}
+
+/** The names a list-valued decorator stored: none when it is absent, refused when it names none. */
+function requirementList(value: unknown, where: string, decorator: string): string[] {
+  if (value === undefined) return []
+  const names = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
+  if (names.length === 0) throw new E_EMPTY_GATE_REQUIREMENT([where, decorator])
+  return names
 }
 
 async function serializeResponse(

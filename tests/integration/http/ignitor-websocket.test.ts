@@ -31,8 +31,6 @@ describeIfNetwork('Ignitor > WebSocket routes', () => {
 
   beforeAll(async () => {
     const serverFactory = createHyperServerFactory()
-    if (serverFactory === undefined)
-      throw new Error('no prebuilt HyperServer binary for this platform')
     ignitor = await new Ignitor({ port: 0, gracefulShutdown: false, serverFactory })
       .configure('app', { http: { webSocket: { maxMessageSize: '1kb', maxFrameSize: '1kb' } } })
       .routes((router) => {

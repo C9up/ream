@@ -51,6 +51,31 @@ describe('router.named — factories + by-name registration', () => {
     expect(ctx.store.get('args')).toEqual({ role: 'admin' })
   })
 
+  it('types the factories by the collection names, so a direct call compiles', async () => {
+    const router = new Router()
+    const middleware = router.named({ tag: async () => ({ default: TagMiddleware }) })
+
+    const ctx = makeCtx()
+    // No `defined()` here: the key is known, the factory is not maybe-undefined.
+    await middleware.tag({ guards: ['web'] })(ctx, async () => {})
+    expect(ctx.store.get('args')).toEqual({ guards: ['web'] })
+    expect(Object.keys(middleware)).toEqual(['tag'])
+  })
+
+  it('registers only the collection own names, never an inherited one', () => {
+    const router = new Router()
+    const inherited = { inherited: async () => ({ default: TagMiddleware }) }
+    const collection = Object.assign(Object.create(inherited), {
+      tag: async () => ({ default: TagMiddleware }),
+    })
+
+    const middleware = router.named(collection)
+
+    expect(Object.keys(middleware)).toEqual(['tag'])
+    expect(router.getNamedMiddleware('tag')).toBeDefined()
+    expect(router.getNamedMiddleware('inherited')).toBeUndefined()
+  })
+
   it('still registers the no-arg form for by-name route resolution', () => {
     const router = new Router()
     router.named({ tag: async () => ({ default: TagMiddleware }) })

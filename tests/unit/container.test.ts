@@ -215,6 +215,77 @@ describe('container > override', () => {
     expect(await container.resolve('b')).toBe(b)
   })
 
+  it('swapped() is undefined for a token that is not swapped, and after restore', () => {
+    container.singleton('db', () => ({ type: 'postgres' }))
+    expect(container.swapped('db')).toBeUndefined()
+    expect(container.swapped('never-bound')).toBeUndefined()
+
+    container.override('db', { type: 'fake' })
+    expect(container.swapped('db')).toBeTypeOf('function')
+
+    container.restore('db')
+    expect(container.swapped('db')).toBeUndefined()
+  })
+
+  it('swapped() hands back the installed factory without running it', async () => {
+    let calls = 0
+    const factory = () => {
+      calls++
+      return { type: 'fake' }
+    }
+    container.singleton('db', () => ({ type: 'postgres' }))
+    container.swap('db', factory)
+
+    expect(container.swapped('db')).toBe(factory)
+    expect(calls).toBe(0)
+    // Reading it changed nothing: the swap still answers.
+    expect((await container.resolve<{ type: string }>('db')).type).toBe('fake')
+    expect(calls).toBe(1)
+  })
+
+  it('swapped() follows the latest swap: a swap over a swap replaces it (flat, like Fold)', () => {
+    const outer = () => 'outer'
+    const inner = () => 'inner'
+    container.swap('db', outer)
+    container.swap('db', inner)
+    expect(container.swapped('db')).toBe(inner)
+
+    // `restore` stays flat: one call removes the token's swap outright.
+    container.restore('db')
+    expect(container.swapped('db')).toBeUndefined()
+  })
+
+  it('swapped() refuses a reserved token name, like every other container call', () => {
+    expect(() => container.swapped('__proto__')).toThrow(/Reserved container token name/)
+  })
+
+  it('swapped() lets a test-scoped swap put the previous swap back, then restore re-seats the original singleton', async () => {
+    let factoryCalls = 0
+    container.singleton('mailer', () => {
+      factoryCalls++
+      return { kind: 'real' }
+    })
+    const original = await container.resolve<{ kind: string }>('mailer')
+
+    // File-level fake (a beforeAll).
+    container.swap('mailer', () => ({ kind: 'file fake' }))
+
+    // A test swaps on top of it, then undoes only its own swap.
+    const previous = container.swapped('mailer')
+    container.override('mailer', { kind: 'test fake' })
+    expect((await container.resolve<{ kind: string }>('mailer')).kind).toBe('test fake')
+    if (previous === undefined) container.restore('mailer')
+    else container.swap('mailer', previous)
+
+    expect((await container.resolve<{ kind: string }>('mailer')).kind).toBe('file fake')
+
+    // The file's teardown: the snapshot taken by the FIRST swap survived the
+    // re-swaps, so the original instance comes back and the factory never re-ran.
+    container.restore('mailer')
+    expect(await container.resolve('mailer')).toBe(original)
+    expect(factoryCalls).toBe(1)
+  })
+
   it('override on a token with no prior singleton clears cleanly on restore', async () => {
     // No singleton registered → override sets the only value, restore wipes it
     container.override('orphan', 'fake')

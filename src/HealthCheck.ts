@@ -24,15 +24,46 @@ export type HealthChecker = () => Promise<HealthCheckResult> | HealthCheckResult
 const DEFAULT_CHECK_TIMEOUT = 5000
 
 /**
+ * What a check that threw reports. The thrown message is not passed on: a
+ * driver's error names internal hosts and ports (`connect ECONNREFUSED
+ * 10.0.3.17:5432`) or the database user, and this status is what a `/health`
+ * route answers. The real error goes to `onError`.
+ */
+const CHECK_FAILED_MESSAGE = 'Health check failed'
+
+export interface HealthCheckOptions {
+  /** Per-checker timeout in ms. Default 5000. */
+  checkTimeout?: number
+  /**
+   * Receives the error of a check that threw or timed out, which the status
+   * reports only as a fixed message. Default: written to stderr.
+   */
+  onError?: (name: string, error: unknown) => void
+}
+
+function logCheckError(name: string, error: unknown): void {
+  process.stderr.write(`[health] check '${name}' failed: ${String(error)}\n`)
+}
+
+/** The timeout of one check: its message is ours, and safe to answer. */
+class CheckTimeout extends Error {}
+
+/**
  * Manages health check registrations and produces aggregated status.
+ *
+ * A check that throws is reported as `Health check failed`; its error goes to
+ * `onError`. A check that returns `{ status: 'error', message }` keeps its
+ * own message: the application chose it.
  */
 export class HealthCheck {
   readonly #checkers: Map<string, HealthChecker> = new Map()
   readonly #startTime = Date.now()
   readonly #checkTimeout: number
+  readonly #onError: (name: string, error: unknown) => void
 
-  constructor(options?: { checkTimeout?: number }) {
+  constructor(options?: HealthCheckOptions) {
     this.#checkTimeout = options?.checkTimeout ?? DEFAULT_CHECK_TIMEOUT
+    this.#onError = options?.onError ?? logCheckError
   }
 
   /** Register a health checker. */
@@ -72,8 +103,7 @@ export class HealthCheck {
         Promise.resolve().then(checker),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () =>
-              reject(new Error(`Health check '${name}' timed out after ${this.#checkTimeout}ms`)),
+            () => reject(new CheckTimeout(`Health check timed out after ${this.#checkTimeout}ms`)),
             this.#checkTimeout,
           )
         }),
@@ -83,10 +113,11 @@ export class HealthCheck {
       result.latency = Date.now() - start
       return result
     } catch (err) {
+      this.#onError(name, err)
       return {
         name,
         status: 'error',
-        message: err instanceof Error ? err.message : String(err),
+        message: err instanceof CheckTimeout ? err.message : CHECK_FAILED_MESSAGE,
         latency: Date.now() - start,
       }
     } finally {

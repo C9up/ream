@@ -29,3 +29,5 @@ function loadNativeModule() {
 const native = loadNativeModule()
 
 export const HyperServer = native.HyperServer
+export const graphqlSchemaTypes = native.graphqlSchemaTypes
+export const hmacVerify = native.hmacVerify

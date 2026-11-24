@@ -100,12 +100,14 @@ describe('Scheduler (wrapper)', () => {
   it('rethrows any other native failure as E_SCHEDULER_NATIVE_ERROR', () => {
     const { native, scheduler } = build()
     native.register.mockImplementationOnce(() => {
-      throw new Error(JSON.stringify({ code: 'RUST_PANIC', message: 'Rust panic caught: boom' }))
+      throw new Error(
+        JSON.stringify({ code: 'E_NATIVE_PANIC', message: 'Rust panic caught: boom' }),
+      )
     })
     expect(() => scheduler.register('p', '*/1 * * * *', () => {})).toThrow(
       expect.objectContaining({
         code: 'E_SCHEDULER_NATIVE_ERROR',
-        message: 'ream-scheduler NAPI call failed: [RUST_PANIC] Rust panic caught: boom',
+        message: 'ream-scheduler NAPI call failed: [E_NATIVE_PANIC] Rust panic caught: boom',
       }),
     )
     native.register.mockImplementationOnce(() => {
@@ -113,6 +115,26 @@ describe('Scheduler (wrapper)', () => {
     })
     expect(() => scheduler.register('q', '*/1 * * * *', () => {})).toThrow(
       expect.objectContaining({ code: 'E_SCHEDULER_NATIVE_ERROR' }),
+    )
+  })
+
+  it('rethrows a callback napi could not hold under its own code', () => {
+    const { native, scheduler } = build()
+    const nativeError = new Error(
+      JSON.stringify({
+        code: 'E_NATIVE_CALLBACK_FAILED',
+        message: 'Could not hold the JavaScript callback: InvalidArg',
+      }),
+    )
+    native.register.mockImplementationOnce(() => {
+      throw nativeError
+    })
+    expect(() => scheduler.register('b', '*/1 * * * *', () => {})).toThrow(
+      expect.objectContaining({
+        code: 'E_NATIVE_CALLBACK_FAILED',
+        message: 'Could not hold the JavaScript callback: InvalidArg',
+        cause: nativeError,
+      }),
     )
   })
 

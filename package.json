@@ -187,10 +187,6 @@
       "types": "./src/events/helix/helpers.ts",
       "import": "./src/events/helix/helpers.ts"
     },
-    "./events/configure": {
-      "types": "./src/events/configure.ts",
-      "import": "./src/events/configure.ts"
-    },
     "./tsconfig.app.json": "./tsconfig.app.json",
     "./swcrc.app.json": "./swcrc.app.json",
     "./tsconfig.package.json": "./tsconfig.package.json",
@@ -222,12 +218,10 @@
   },
   "files": [
     "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
     "README.md",
     "dist",
     "stubs",
-    "index.*.node",
-    "scheduler.*.node",
-    "events.*.node",
     "src",
     "swcrc.app.json",
     "tsconfig.app.json",
@@ -245,6 +239,8 @@
     "test:rust": "cargo test --all",
     "lint": "biome check src/ tests/",
     "test:coverage": "vitest run --coverage",
+    "platforms:sync": "node scripts/platform-packages.mjs",
+    "platforms:check": "node scripts/platform-packages.mjs --check",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
@@ -252,6 +248,13 @@
     "@c9up/flare": "^0.1.0",
     "@c9up/lumen": "^0.1.2",
     "reflect-metadata": "^0.2.2"
+  },
+  "optionalDependencies": {
+    "@c9up/ream-linux-x64-gnu": "0.2.32",
+    "@c9up/ream-linux-arm64-gnu": "0.2.32",
+    "@c9up/ream-darwin-x64": "0.2.32",
+    "@c9up/ream-darwin-arm64": "0.2.32",
+    "@c9up/ream-win32-x64-msvc": "0.2.32"
   },
   "peerDependencies": {
     "@c9up/comet": "^0.1.0",
@@ -467,10 +470,6 @@
       "./events/helix": {
         "types": "./dist/events/helix/helpers.d.ts",
         "import": "./dist/events/helix/helpers.js"
-      },
-      "./events/configure": {
-        "types": "./dist/events/configure.d.ts",
-        "import": "./dist/events/configure.js"
       },
       "./tsconfig.app.json": "./tsconfig.app.json",
       "./swcrc.app.json": "./swcrc.app.json",

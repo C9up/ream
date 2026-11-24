@@ -33,7 +33,7 @@ where
         Ok(result) => result,
         Err(panic_payload) => {
             let message = extract_panic_message(&panic_payload);
-            let err = ReamError::new("RUST_PANIC", format!("Rust panic caught: {}", message))
+            let err = ReamError::new("E_NATIVE_PANIC", format!("Rust panic caught: {}", message))
                 .with_hint(
                     "This is a bug in the Ream framework. Please report it at https://github.com/c9up/ream/issues",
                 );
@@ -57,7 +57,7 @@ where
         Ok(value) => Ok(value),
         Err(panic_payload) => {
             let message = extract_panic_message(&panic_payload);
-            let err = ReamError::new("RUST_PANIC", format!("Rust panic caught: {}", message))
+            let err = ReamError::new("E_NATIVE_PANIC", format!("Rust panic caught: {}", message))
                 .with_hint(
                     "This is a bug in the Ream framework. Please report it at https://github.com/c9up/ream/issues",
                 );
@@ -105,7 +105,7 @@ mod tests {
         let result: napi::Result<i32> = catch_unwind_napi(|| panic!("boom"));
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.reason.contains("RUST_PANIC"));
+        assert!(err.reason.contains("E_NATIVE_PANIC"));
         assert!(err.reason.contains("boom"));
     }
 

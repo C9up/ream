@@ -8,21 +8,20 @@
  *     import { createHyperServerFactory } from '@c9up/ream/bootstrap'
  *     new Ignitor(APP_ROOT, {
  *       port: 3000,
- *       serverFactory: await createHyperServerFactory(),
+ *       serverFactory: createHyperServerFactory(),
  *     })
  *
- * Returns `undefined` when no prebuilt binary matches the host platform —
- * callers can branch on that to fall back to a JS-only server in tests.
+ * The binary is `index.<platform>.node`, found by the shared loader: at the
+ * package root in a checkout, otherwise in the platform package
+ * `@c9up/ream-<platform>` that ream installs as an optional dependency.
  *
- * Binary lives at the package root (`./index.<platform>.node`),
- * matching the @c9up/chronos / @c9up/sigil convention.
+ * There is no JavaScript HTTP server to fall back to, so a binary that is
+ * missing, unloadable or not the HTTP server stops the app here with the
+ * loader's coded error, rather than surfacing later as an app with no server.
  */
 
-import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
-import { arch, platform } from 'node:process'
-import { fileURLToPath } from 'node:url'
-import { NAPI_PLATFORM_MAP } from '../helpers/napi-loader.js'
+import { E_REAM_NAPI_LOAD_FAILED } from '../errors/codes.js'
+import { loadNapi } from '../helpers/napi-loader.js'
 import type { HyperServerLike } from '../Ignitor.js'
 
 interface HyperServerCtor {
@@ -43,30 +42,23 @@ function isHyperServerNapi(value: unknown): value is HyperServerNapiModule {
 }
 
 /**
- * Resolve the prebuilt HyperServer NAPI binary for the current platform.
- * Returns a `serverFactory` compatible with `IgnitorConfig`, or `undefined`
- * when no binary is available (unsupported platform / missing build).
+ * Resolve the prebuilt HyperServer NAPI binary for the current platform and
+ * return a `serverFactory` compatible with `IgnitorConfig`.
+ *
+ * Throws `E_REAM_NAPI_UNSUPPORTED_PLATFORM` on a host no binary is built for,
+ * `E_REAM_NAPI_NOT_FOUND` when the binary is nowhere (its `help` names the
+ * platform package to install), and `E_REAM_NAPI_LOAD_FAILED` when it is there
+ * but does not load or does not export the HTTP server.
  */
-export function createHyperServerFactory():
-  | ((port: number, host?: string) => HyperServerLike)
-  | undefined {
-  const suffix = NAPI_PLATFORM_MAP[`${platform}-${arch}`]
-  if (!suffix) return undefined
-
-  const require2 = createRequire(import.meta.url)
-  const here = dirname(fileURLToPath(import.meta.url))
-  // bootstrap/hyper-server.ts lives at src/bootstrap/, so the package root
-  // is two directories up.
-  const binaryPath = join(here, '..', '..', `index.${suffix}.node`)
-
-  let mod: unknown
-  try {
-    mod = require2(binaryPath)
-  } catch {
-    return undefined
+export function createHyperServerFactory(): (port: number, host?: string) => HyperServerLike {
+  const mod = loadNapi<unknown>({ binaryName: 'index', callerMetaUrl: import.meta.url })
+  if (!isHyperServerNapi(mod)) {
+    throw new E_REAM_NAPI_LOAD_FAILED([
+      'index',
+      'index.<platform>.node',
+      'it exports no HyperServer class, so it is not the HTTP server ream builds: rebuild it (pnpm --filter @c9up/ream build:napi) or reinstall @c9up/ream.',
+    ])
   }
-
-  if (!isHyperServerNapi(mod)) return undefined
 
   const Ctor = mod.HyperServer
   return (port: number, host?: string) => new Ctor(port, host)

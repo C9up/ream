@@ -1,10 +1,14 @@
 /**
  * Shared NAPI binary loader. Every `.node` file distributed with
  * `@c9up/ream` uses the same platform-suffix convention and lookup
- * strategy — extracting this helper avoids drift between the three
- * call sites (HyperServer, Scheduler, and future NAPI consumers) and
- * matches the codex review's "stop duplicating native loaders"
- * guidance.
+ * strategy — extracting this helper avoids drift between the call sites
+ * (HyperServer, GraphQL, Scheduler, event bus).
+ *
+ * A checkout builds the binaries at the package root (`pnpm build:napi`). A
+ * published `@c9up/ream` carries none: each platform's three binaries ship in
+ * their own npm package, `@c9up/ream-<suffix>`, an optional dependency pinned
+ * to ream's exact version, and the package manager installs the one matching
+ * the host.
  */
 
 import { createRequire } from 'node:module'
@@ -28,12 +32,20 @@ import { errorCode } from './errors.js'
  * Linux binaries target GLIBC. musl (Alpine) is not a supported target, and the
  * loader says so rather than reporting a bare "not found".
  */
-export const NAPI_PLATFORM_MAP: Record<string, string> = {
+const NAPI_PLATFORM_MAP: Record<string, string> = {
   'linux-x64': 'linux-x64-gnu',
   'linux-arm64': 'linux-arm64-gnu',
   'darwin-x64': 'darwin-x64',
   'darwin-arm64': 'darwin-arm64',
   'win32-x64': 'win32-x64-msvc',
+}
+
+/**
+ * The npm package that carries the binaries of the platform `suffix`, an
+ * optional dependency of `@c9up/ream` pinned to its exact version.
+ */
+function napiPlatformPackage(suffix: string): string {
+  return `@c9up/ream-${suffix}`
 }
 
 export interface LoadNapiOptions {
@@ -48,7 +60,11 @@ export interface LoadNapiOptions {
    * relative to the caller's module location.
    */
   callerMetaUrl: string
-  /** Hint appended to the "not found" error (typically a build command). */
+  /**
+   * What a checkout should do about a missing binary (typically a build
+   * command), in place of `pnpm build:napi` at the end of the "not found"
+   * error's `help`, after the platform package to install.
+   */
   notFoundHint?: string
 }
 
@@ -61,10 +77,13 @@ export interface LoadNapiOptions {
  *   1. `<caller>/../../<binaryName>.<suffix>.node`
  *   2. `<caller>/../<binaryName>.<suffix>.node`
  *   3. `<caller>/<binaryName>.<suffix>.node`
+ *   4. `@c9up/ream-<suffix>/<binaryName>.<suffix>.node`, the platform package
  *
- * The three-level fallback matches the layout where the compiled
- * `.node` sits either at the package root, a subdirectory, or next to
- * the calling module.
+ * The three local paths match the layout where the compiled `.node` sits
+ * either at the package root, a subdirectory, or next to the calling module:
+ * a checkout runs the Rust it just built. The platform package is asked for
+ * only when none of them exists. A local file that exists but fails to load is
+ * a broken build, reported as is rather than papered over by the package.
  */
 export function loadNapi<T>(options: LoadNapiOptions): T {
   const { binaryName, callerMetaUrl } = options
@@ -75,40 +94,86 @@ export function loadNapi<T>(options: LoadNapiOptions): T {
 
   const req = createRequire(callerMetaUrl)
   const dir = dirname(fileURLToPath(callerMetaUrl))
-  const candidates = [
-    join(dir, '..', '..', `${binaryName}.${suffix}.node`),
-    join(dir, '..', `${binaryName}.${suffix}.node`),
-    join(dir, `${binaryName}.${suffix}.node`),
-  ]
+  const file = `${binaryName}.${suffix}.node`
+  const candidates = [join(dir, '..', '..', file), join(dir, '..', file), join(dir, file)]
 
   for (const path of candidates) {
     try {
-      return req(path) as T
+      return req(path)
     } catch (e) {
       const code = errorCode(e)
       if (code === 'MODULE_NOT_FOUND') continue
       // Any other error (SyntaxError, ABI mismatch, permissions,
       // corrupt binary) means the file exists but cannot load. Surface
-      // the real cause rather than a generic "not found".
+      // the real cause rather than a generic "not found"; it names paths on
+      // the host, so it travels as the `cause`, out of the message.
       throw new E_REAM_NAPI_LOAD_FAILED(
-        [binaryName, path, e instanceof Error ? e.message : String(e)],
-        {
-          cause: e,
-        },
+        [binaryName, `${file}, the local build`, localBuildFix(options.notFoundHint)],
+        { cause: e },
       )
     }
   }
 
-  // On a musl host the glibc binary is present but never loads, so "not found"
-  // sends the reader looking for a missing file that is right there. Name the
-  // real reason instead.
-  const muslHint = suffix.endsWith('-gnu')
+  // No local build: the binary of an installed ream is in its platform
+  // package. The package has no `exports`, so the file resolves as a subpath,
+  // from the caller (inside ream) as from ream itself: npm's flat layout and
+  // pnpm's `.pnpm/<pkg>/node_modules` siblings alike.
+  const platformPackage = napiPlatformPackage(suffix)
+  const packaged = `${platformPackage}/${file}`
+  try {
+    return req(packaged)
+  } catch (e) {
+    if (errorCode(e) !== 'MODULE_NOT_FOUND') {
+      throw new E_REAM_NAPI_LOAD_FAILED(
+        [binaryName, packaged, platformPackageFix(platformPackage, suffix)],
+        { cause: e },
+      )
+    }
+    // The load error names paths on the host: it travels as the `cause`.
+    throw Object.assign(
+      new E_REAM_NAPI_NOT_FOUND(
+        [binaryName, `${file} at the package root or in ${platformPackage}`],
+        {
+          cause: e,
+        },
+      ),
+      { help: notFoundHelp(platformPackage, suffix, options.notFoundHint) },
+    )
+  }
+}
+
+/** The build command a checkout runs, unless the caller named its own. */
+const BUILD_COMMAND = 'pnpm --filter @c9up/ream build:napi'
+
+/**
+ * On a musl host the glibc binary never loads: an older package manager that
+ * ignores `libc` installs it anyway, and "not found" or "failed to load" then
+ * sends the reader after the file rather than the libc. Name the real reason.
+ */
+function muslHint(suffix: string): string {
+  return suffix.endsWith('-gnu')
     ? ' If you are on Alpine/musl, note the prebuilt Linux binaries target glibc — musl is not a supported target.'
     : ''
-  throw Object.assign(new E_REAM_NAPI_NOT_FOUND([binaryName, `${binaryName}.${suffix}.node`]), {
-    help: `${
-      options.notFoundHint ??
-      "Run 'pnpm --filter @c9up/ream build:rust' to build the native module."
-    }${muslHint}`,
-  })
+}
+
+/** What to do about a binary found nowhere, phrased for whoever has to fix it. */
+function notFoundHelp(platformPackage: string, suffix: string, hint: string | undefined): string {
+  return (
+    `Install ${platformPackage} at the exact version of @c9up/ream: it is the optional dependency that carries the ${suffix} binaries, ` +
+    'and an install that omits optional dependencies (--no-optional, --omit=optional) skips it. ' +
+    `${hint ?? `In a checkout of ream, build them instead: ${BUILD_COMMAND}.`}${muslHint(suffix)}`
+  )
+}
+
+/** What to do about a local build that exists but does not load. */
+function localBuildFix(hint: string | undefined): string {
+  return hint ?? `rebuild it for this platform and Node version: ${BUILD_COMMAND}.`
+}
+
+/** What to do about an installed platform package whose binary does not load. */
+function platformPackageFix(platformPackage: string, suffix: string): string {
+  return (
+    `reinstall ${platformPackage} at the exact version of @c9up/ream, on the machine that runs the app ` +
+    `(a node_modules copied from another platform or Node version carries the wrong binary).${muslHint(suffix)}`
+  )
 }

@@ -17,6 +17,10 @@
 //!   (`1001`) after all of it;
 //! * a bound on what waits to be written to a client that reads slowly: past
 //!   it the connection is closed (`1013`), never buffered further;
+//! * a bound on a write the client does not take: every write races the kill
+//!   signal, a requested close (carried out within [`CLOSE_TIMEOUT`] of the
+//!   request) and the idle timeout (a write that makes no progress for that
+//!   long ends the connection, `1001`);
 //! * a bound on what waits for JavaScript: past it the socket is not read
 //!   until JavaScript catches up, so the client is slowed by TCP itself.
 //!
@@ -30,9 +34,14 @@ use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -179,6 +188,11 @@ struct Socket {
     /// Set when the connection must be torn down without waiting for writes.
     kill: Notify,
     kill_code: Mutex<Option<(u16, String)>>,
+    /// When `close()` was asked, and with what: the connection is over
+    /// [`CLOSE_TIMEOUT`] later whatever waits to be written.
+    close_asked: Mutex<Option<(Instant, u16, String)>>,
+    /// Wakes a blocked write so it sees `close_asked`.
+    close_signal: Notify,
     inbound: Arc<InboundBudget>,
     registered_at: std::time::Instant,
 }
@@ -193,6 +207,8 @@ impl Socket {
             closing: AtomicBool::new(false),
             kill: Notify::new(),
             kill_code: Mutex::new(None),
+            close_asked: Mutex::new(None),
+            close_signal: Notify::new(),
             inbound: Arc::new(InboundBudget::default()),
             registered_at: std::time::Instant::now(),
         }
@@ -209,6 +225,13 @@ impl Socket {
         }
         drop(slot);
         self.kill.notify_one();
+    }
+
+    /// The moment a requested close must be over by, and its code.
+    fn close_deadline(&self) -> Option<(Instant, u16, String)> {
+        lock(&self.close_asked)
+            .as_ref()
+            .map(|(at, code, reason)| (*at + CLOSE_TIMEOUT, *code, reason.clone()))
     }
 }
 
@@ -328,6 +351,10 @@ impl WebSocketRegistry {
         if socket.closing.swap(true, Ordering::AcqRel) {
             return false;
         }
+        *lock(&socket.close_asked) = Some((Instant::now(), code, reason.clone()));
+        // A write blocked on a client that does not read would otherwise keep
+        // the close queued behind it for ever.
+        socket.close_signal.notify_one();
         socket.outbound.send(Outbound::Close(code, reason)).is_ok()
     }
 
@@ -655,15 +682,168 @@ pub(crate) async fn run(
         // What tungstenite may hold beyond the socket: one message past its
         // write target. The application's backlog is bounded before it.
         .max_write_buffer_size(128 * 1024 + limits.max_message_size.max(limits.max_buffered_bytes));
-    let stream =
-        WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, Some(config)).await;
-    let (code, reason) = drive(&registry, &id, &socket, stream, &mut outbound, &limits).await;
+    let progress = WriteProgress::new();
+    let io = Tracked {
+        inner: TokioIo::new(upgraded),
+        progress: progress.clone(),
+    };
+    let stream = WebSocketStream::from_raw_socket(io, Role::Server, Some(config)).await;
+    let (code, reason) = drive(
+        &registry,
+        &id,
+        &socket,
+        stream,
+        &mut outbound,
+        &limits,
+        &progress,
+    )
+    .await;
     socket.closing.store(true, Ordering::Release);
     registry.finish(&id, code, reason);
 }
 
 /// How the connection ended, as reported to the application.
 type Ending = (u16, String);
+
+/// When bytes last left for the client.
+#[derive(Clone)]
+struct WriteProgress {
+    base: Instant,
+    /// Milliseconds after `base`.
+    last: Arc<AtomicU64>,
+}
+
+impl WriteProgress {
+    fn new() -> Self {
+        Self {
+            base: Instant::now(),
+            last: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn touch(&self) {
+        let elapsed = u64::try_from(self.base.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.last.fetch_max(elapsed, Ordering::AcqRel);
+    }
+
+    fn last(&self) -> Instant {
+        self.base + Duration::from_millis(self.last.load(Ordering::Acquire))
+    }
+}
+
+/// The connection's byte stream, noting every write that moved bytes, so a
+/// write that is slow can be told from one the client does not take at all.
+struct Tracked<S> {
+    inner: S,
+    progress: WriteProgress,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Tracked<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Tracked<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let polled = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if matches!(polled, Poll::Ready(Ok(n)) if n > 0) {
+            self.progress.touch();
+        }
+        polled
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let polled = Pin::new(&mut self.inner).poll_write_vectored(cx, bufs);
+        if matches!(polled, Poll::Ready(Ok(n)) if n > 0) {
+            self.progress.touch();
+        }
+        polled
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// How a guarded write ended.
+enum Written {
+    /// The frame went out, or the stream failed.
+    Done(Result<(), WsError>),
+    /// The socket was killed meanwhile; the kill is left pending for the loop.
+    Killed,
+    /// Nothing moved for the idle period.
+    Stalled,
+    /// A requested close ran out of time: it ends the connection now.
+    CloseExpired(u16, String),
+}
+
+/// Run one write to the client, raced against everything that must still be
+/// able to end the connection while the client does not read: the kill, a
+/// requested close (over [`CLOSE_TIMEOUT`] after it was asked), and the idle
+/// timeout, counted from the last byte the client took.
+async fn guarded_write<F>(
+    write: F,
+    socket: &Socket,
+    progress: &WriteProgress,
+    idle: Option<Duration>,
+) -> Written
+where
+    F: Future<Output = Result<(), WsError>>,
+{
+    let started = Instant::now();
+    let mut write = std::pin::pin!(write);
+    loop {
+        let close = socket.close_deadline();
+        let stall_at = idle.map(|idle| progress.last().max(started) + idle);
+        let deadline = match (close.as_ref().map(|(at, _, _)| *at), stall_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        tokio::select! {
+            biased;
+            _ = socket.kill.notified() => {
+                socket.kill.notify_one();
+                return Written::Killed;
+            }
+            result = &mut write => return Written::Done(result),
+            _ = socket.close_signal.notified() => {}
+            _ = sleep_until(deadline), if deadline.is_some() => {
+                let now = Instant::now();
+                if let Some((at, code, reason)) = close {
+                    if now >= at {
+                        return Written::CloseExpired(code, reason);
+                    }
+                }
+                if let Some(idle) = idle {
+                    if progress.last().max(started) + idle <= now {
+                        return Written::Stalled;
+                    }
+                }
+            }
+        }
+    }
+}
 
 async fn drive<S>(
     registry: &WebSocketRegistry,
@@ -672,9 +852,10 @@ async fn drive<S>(
     stream: WebSocketStream<S>,
     outbound: &mut mpsc::UnboundedReceiver<Outbound>,
     limits: &WebSocketLimits,
+    progress: &WriteProgress,
 ) -> Ending
 where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     let (mut sink, mut incoming) = stream.split();
     let mut last_seen = Instant::now();
@@ -730,15 +911,13 @@ where
                         (frame, 0)
                     }
                 };
-                // A write to a client that does not read blocks here; a kill
-                // (backlog past its bound, shutdown) still gets through.
-                let written = tokio::select! {
-                    biased;
-                    _ = socket.kill.notified() => {
-                        socket.kill.notify_one();
-                        continue;
-                    }
-                    result = sink.send(frame) => result,
+                // A write to a client that does not read blocks here; the
+                // kill, a requested close and the idle bound still get through.
+                let written = match guarded_write(sink.send(frame), socket, progress, limits.idle_timeout).await {
+                    Written::Done(result) => result,
+                    Written::Killed => continue,
+                    Written::Stalled => return (1001, "idle timeout".into()),
+                    Written::CloseExpired(code, reason) => return (code, reason),
                 };
                 socket.buffered.fetch_sub(cost, Ordering::AcqRel);
                 if written.is_err() {
@@ -775,11 +954,12 @@ where
                                     None => (1005, String::new()),
                                 };
                             }
-                            // Pings are answered by tungstenite; flush the pong.
-                            Message::Ping(_) => {
-                                let _ = sink.flush().await;
-                            }
-                            Message::Pong(_) | Message::Frame(_) => {}
+                            // Pings are answered by tungstenite, which writes
+                            // the pong with the next read or write without
+                            // blocking on it and keeps only the latest one. A
+                            // flush here would wait for a client that does
+                            // not read, with nothing else watched.
+                            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                         }
                     }
                     Some(Err(error)) => {
@@ -823,13 +1003,11 @@ where
                     return (1001, "idle timeout".into());
                 }
                 pinged = true;
-                let ping = tokio::select! {
-                    biased;
-                    _ = socket.kill.notified() => {
-                        socket.kill.notify_one();
-                        continue;
-                    }
-                    result = sink.send(Message::Ping(Vec::new().into())) => result,
+                let ping = match guarded_write(sink.send(Message::Ping(Vec::new().into())), socket, progress, limits.idle_timeout).await {
+                    Written::Done(result) => result,
+                    Written::Killed => continue,
+                    Written::Stalled => return (1001, "idle timeout".into()),
+                    Written::CloseExpired(code, reason) => return (code, reason),
                 };
                 if ping.is_err() {
                     return (1006, String::new());
@@ -956,6 +1134,150 @@ mod tests {
             registry.send_text("missing", "x".into()),
             Err(SendError::Closed)
         );
+    }
+
+    /// A socket driven over an in-memory pipe whose client end is handed back
+    /// unread: with a 1 KiB pipe, any write larger than that blocks.
+    async fn pinned(
+        limits: WebSocketLimits,
+    ) -> (
+        WebSocketRegistry,
+        tokio::io::DuplexStream,
+        tokio::task::JoinHandle<Ending>,
+    ) {
+        let registry = WebSocketRegistry::new();
+        registry.configure(limits.clone());
+        assert!(registry.register("a".into()));
+        let socket = registry.get("a").unwrap();
+        let mut outbound = lock(&socket.receiver).take().unwrap();
+        let (server, client) = tokio::io::duplex(1024);
+        let progress = WriteProgress::new();
+        let io = Tracked {
+            inner: server,
+            progress: progress.clone(),
+        };
+        let task = {
+            let registry = registry.clone();
+            tokio::spawn(async move {
+                let stream = WebSocketStream::from_raw_socket(io, Role::Server, None).await;
+                drive(
+                    &registry,
+                    "a",
+                    &socket,
+                    stream,
+                    &mut outbound,
+                    &limits,
+                    &progress,
+                )
+                .await
+            })
+        };
+        (registry, client, task)
+    }
+
+    async fn ending_within(task: tokio::task::JoinHandle<Ending>, bound: Duration) -> Ending {
+        tokio::time::timeout(bound, task)
+            .await
+            .expect("the connection ends in time")
+            .unwrap()
+    }
+
+    /// A masked ping from the client, the largest a control frame carries.
+    fn masked_ping() -> Vec<u8> {
+        let mut frame = vec![0x89, 0x80 | 125, 0, 0, 0, 0];
+        frame.extend(std::iter::repeat_n(b'A', 125));
+        frame
+    }
+
+    #[tokio::test]
+    async fn a_ping_flood_from_a_client_that_does_not_read_still_ends_on_the_idle_timeout() {
+        use tokio::io::AsyncWriteExt;
+        let (_registry, mut client, task) = pinned(WebSocketLimits {
+            idle_timeout: Some(Duration::from_millis(300)),
+            ..WebSocketLimits::default()
+        })
+        .await;
+        // Far more pongs than the pipe holds: the server's pong writes block.
+        for _ in 0..64 {
+            client.write_all(&masked_ping()).await.unwrap();
+        }
+        let ending = ending_within(task, Duration::from_secs(3)).await;
+        assert_eq!(ending, (1001, "idle timeout".into()));
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_data_write_ends_on_the_idle_timeout() {
+        let (registry, client, task) = pinned(WebSocketLimits {
+            idle_timeout: Some(Duration::from_millis(300)),
+            ..WebSocketLimits::default()
+        })
+        .await;
+        registry.send_text("a", "x".repeat(64 * 1024)).unwrap();
+        let ending = ending_within(task, Duration::from_secs(3)).await;
+        assert_eq!(ending, (1001, "idle timeout".into()));
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn a_close_asked_while_a_write_is_blocked_is_carried_out_in_time() {
+        let (registry, client, task) = pinned(WebSocketLimits {
+            idle_timeout: None,
+            ..WebSocketLimits::default()
+        })
+        .await;
+        registry.send_text("a", "x".repeat(64 * 1024)).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let asked = Instant::now();
+        assert!(registry.close("a", 1008, "signed out".into()));
+        let ending = ending_within(task, CLOSE_TIMEOUT + Duration::from_secs(2)).await;
+        assert_eq!(ending, (1008, "signed out".into()));
+        assert!(asked.elapsed() >= CLOSE_TIMEOUT - Duration::from_millis(50));
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn a_kill_while_a_write_is_blocked_tears_the_connection_down() {
+        let (registry, client, task) = pinned(WebSocketLimits {
+            idle_timeout: None,
+            max_buffered_bytes: 100 * 1024,
+            ..WebSocketLimits::default()
+        })
+        .await;
+        registry.send_text("a", "x".repeat(64 * 1024)).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            registry.send_text("a", "x".repeat(64 * 1024)),
+            Err(SendError::Overflow)
+        );
+        let ending = ending_within(task, CLOSE_TIMEOUT + Duration::from_secs(2)).await;
+        assert_eq!(ending, (1013, "send buffer full".into()));
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn a_slow_reader_that_keeps_taking_bytes_is_not_cut_off() {
+        use tokio::io::AsyncReadExt;
+        let (registry, mut client, task) = pinned(WebSocketLimits {
+            idle_timeout: Some(Duration::from_millis(300)),
+            ..WebSocketLimits::default()
+        })
+        .await;
+        // 8 KiB through a 1 KiB pipe, 1 KiB every 100 ms: the write takes
+        // well over the idle timeout, yet bytes move all along, so the whole
+        // frame (4 header bytes and the payload) arrives.
+        registry.send_text("a", "x".repeat(8 * 1024)).unwrap();
+        let frame = 4 + 8 * 1024;
+        let mut received = 0;
+        let mut chunk = [0u8; 1024];
+        while received < frame {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let read = client.read(&mut chunk).await.unwrap();
+            assert!(read > 0, "cut off after {received} bytes");
+            received += read;
+        }
+        drop(client);
+        ending_within(task, Duration::from_secs(3)).await;
     }
 
     #[test]

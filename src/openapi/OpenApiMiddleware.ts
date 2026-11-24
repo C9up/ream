@@ -61,18 +61,28 @@ export class OpenApiMiddleware {
     const path = ctx.request.path()
 
     if (path === this.#specPath && ctx.request.method() === 'GET') {
-      ctx.response.header('Content-Type', 'application/json')
-      ctx.response.status(200).send(this.#resolveSpec().json)
+      this.sendSpec(ctx)
       return
     }
 
     if (path === this.#docsPath && ctx.request.method() === 'GET') {
-      ctx.response.header('Content-Type', 'text/html')
-      ctx.response.status(200).send(this.#renderSwaggerUi())
+      this.sendDocs(ctx)
       return
     }
 
     return next()
+  }
+
+  /** Answer with the JSON spec — what a route mounted on `specPath` calls. */
+  sendSpec(ctx: HttpContext): void {
+    ctx.response.header('Content-Type', 'application/json')
+    ctx.response.status(200).send(this.#resolveSpec().json)
+  }
+
+  /** Answer with the Swagger UI page — what a route mounted on `docsPath` calls. */
+  sendDocs(ctx: HttpContext): void {
+    ctx.response.header('Content-Type', 'text/html')
+    ctx.response.status(200).send(this.#renderSwaggerUi())
   }
 
   /**

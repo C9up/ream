@@ -2,7 +2,29 @@
 
 Rust-powered Node.js application framework. Convention over configuration with native performance.
 
-`@c9up/ream` ships as a single package containing both the TypeScript framework and prebuilt Rust (NAPI) binaries — consumers never compile anything.
+`@c9up/ream` ships the TypeScript framework; its prebuilt Rust (NAPI) binaries come in one npm package per platform, so consumers never compile anything.
+
+## Installation
+
+```bash
+pnpm add @c9up/ream
+```
+
+Each platform's three binaries (HTTP server, scheduler, event bus) are one npm package, which `@c9up/ream` lists as an optional dependency at its exact version:
+
+| Platform | Package |
+|---|---|
+| Linux x64 (glibc) | `@c9up/ream-linux-x64-gnu` |
+| Linux arm64 (glibc) | `@c9up/ream-linux-arm64-gnu` |
+| macOS x64 | `@c9up/ream-darwin-x64` |
+| macOS arm64 | `@c9up/ream-darwin-arm64` |
+| Windows x64 | `@c9up/ream-win32-x64-msvc` |
+
+Your package manager installs only the one that matches the machine (`os`, `cpu` and `libc` fields), so an install downloads one platform's binaries and needs no Rust toolchain. Do not install with optional dependencies omitted (`--no-optional`, `--omit=optional`): that skips it. Linux binaries target glibc; musl (Alpine) is not supported.
+
+When the binary is missing, loading it throws `E_REAM_NAPI_NOT_FOUND`. Its `help` names the package to install; the load error is the exception's `cause`.
+
+In a checkout of this repository, `pnpm build:napi` builds `index.<platform>.node`, `scheduler.<platform>.node` and `events.<platform>.node` at the package root, and ream loads those files before looking for the platform package. After a version bump, `node scripts/platform-packages.mjs` rewrites the platform packages' manifests (`npm/<platform>/package.json`) and the optional dependencies; CI fails when they are stale.
 
 ## Features
 

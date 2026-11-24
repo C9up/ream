@@ -194,6 +194,8 @@ export interface GraphqlParseOptions {
   maxDepth?: number
   /** Most fields — and most fragment expansions — allowed (default 1000). */
   maxComplexity?: number
+  /** Most validation errors collected before the parse stops (default 100). */
+  maxErrors?: number
 }
 
 /**
@@ -232,7 +234,11 @@ export declare class EventBus {
   /** Register a request handler. */
   onRequest(
     name: string,
-    callback: (eventJson: string, reply: (response: string) => void) => void,
+    callback: (
+      eventJson: string,
+      reply: (response: string) => void,
+      fail: (message: string) => void,
+    ) => void,
   ): void
   /**
    * Send a request and get a response (async with timeout).
@@ -478,11 +484,13 @@ export declare function randomHex(len: number): string
 
 /**
  * Parse a GraphQL query using the Rust graphql-parser crate.
- * Returns JSON: { operation_type, operation_name, fields, variables, errors }.
+ * Returns JSON: { operation_type, operation_name, fields, variables,
+ * type_names, type_conditions, errors }.
  * Invalid queries are rejected here — they never reach the TypeScript resolver layer.
  *
  * The limits are applied while fragments are expanded, so a small document
- * of nested spreads cannot build a tree of millions of fields first.
+ * of nested spreads cannot build a tree of millions of fields first, and the
+ * errors stop at `maxErrors`.
  */
 
 export declare function graphqlParse(
@@ -495,11 +503,13 @@ export declare function graphqlParse(
 export declare function graphqlValidate(query: string): string
 
 /**
- * Extract the declared arguments of every object field from a GraphQL SDL schema.
- * Returns JSON: `{ "Type.field": { "argName": { type, named_type, required,
- * default_value } } }` — what the TypeScript engine coerces argument values
- * with and refuses undeclared or missing arguments by. Throws when the SDL
- * does not parse.
+ * Extract the types of a GraphQL SDL schema.
+ * Returns JSON: `{ "Type": { kind, fields: { "field": { type, named_type,
+ * args: { "argName": { type, named_type, required, default_value } } } },
+ * interfaces, members } }` — what the TypeScript engine checks every
+ * selection against, coerces argument values with and reads a resolver's
+ * result by. Throws when the SDL does not parse or names a type it does not
+ * declare.
  */
 
-export declare function graphqlSchemaArgTypes(sdl: string): string
+export declare function graphqlSchemaTypes(sdl: string): string

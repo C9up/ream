@@ -8,9 +8,12 @@
  *   projected from the resolver's return value, not independently resolved —
  *   so they carry no per-field guard; don't return guarded data from an
  *   unguarded resolver and rely on a nested field guard to hide it).
- * - The response is pruned to the client's selection set, so a resolver may
- *   safely return a rich object (e.g. an ORM entity): fields the client did
- *   not select are dropped before serialization.
+ * - Every selection, at every depth, is checked against the schema before any
+ *   resolver runs, and the response is read by the schema: of what a resolver
+ *   returns, only the fields that are selected AND declared by the value's
+ *   type go out. A field the schema does not declare cannot be selected, and
+ *   an object cannot be asked for whole. What the schema declares is public
+ *   to whoever may call the resolver: declare only what a client may read.
  * - Zero non-null assertions — types guaranteed by schema validation
  *
  * Usage:
@@ -23,7 +26,12 @@
 
 import * as fs from 'node:fs'
 import { currentNodeEnv } from '../env/nodeEnv.js'
-import { E_GRAPHQL_SCHEMA_NOT_FOUND } from '../errors/codes.js'
+import {
+  E_EMPTY_GATE_REQUIREMENT,
+  E_GRAPHQL_SCHEMA_NOT_FOUND,
+  E_MIDDLEWARE_NOT_FOUND,
+} from '../errors/codes.js'
+import { callNative, fromNativeError } from '../errors/native.js'
 import { loadNapi } from '../helpers/napi-loader.js'
 import type { HttpContext } from '../http/HttpContext.js'
 import {
@@ -31,7 +39,21 @@ import {
   holdsPermissions,
   isUnauthorizedError,
 } from '../http/permissions.js'
+import type { MiddlewareRegistry } from '../middleware/Pipeline.js'
+import { composeMiddleware } from '../middleware/Pipeline.js'
 import { safeJsonParse } from '../utils/safeJsonParse.js'
+import {
+  GraphQLSchema,
+  isSchemaTypes,
+  overlaps,
+  type ProjectionContext,
+  projectValue,
+  type SchemaArg,
+  type SchemaField,
+  type TypeConditionLink,
+  TypeConditions,
+  type TypeResolver,
+} from './schema.js'
 
 /** Rust parser output (the `ream-graphql` crate via the `index` NAPI binary). */
 interface RustParsedField {
@@ -39,6 +61,8 @@ interface RustParsedField {
   alias: string | null
   args: Record<string, unknown>
   sub_fields: RustParsedField[]
+  /** Index into `type_conditions`, for a field expanded from a fragment. */
+  condition: number | null
 }
 /** A variable the selected operation declares. */
 interface RustVariable {
@@ -54,29 +78,70 @@ interface RustParseResult {
   operation_name: string | null
   fields: RustParsedField[]
   variables: RustVariable[]
+  /** The distinct type names the fragments condition on. */
+  type_names: string[]
+  type_conditions: TypeConditionLink[]
   errors: string[]
 }
-/** One declared argument of a schema field. */
-interface SchemaArg {
-  /** As written: `Int!`, `[ID!]`. */
-  type: string
-  /** Under the list / non-null wrappers — what coercion keys on. */
-  named_type: string
-  /** Non-null with no default: a call must pass it. */
-  required: boolean
-  default_value: unknown
-}
-type SchemaArgMap = Record<string, Record<string, SchemaArg>>
 interface GraphqlNative {
   graphqlParse(
     query: string,
-    options?: { operationName?: string; maxDepth?: number; maxComplexity?: number },
+    options?: {
+      operationName?: string
+      maxDepth?: number
+      maxComplexity?: number
+      maxErrors?: number
+    },
   ): string
   /**
-   * `{ "Type.field": { "argName": SchemaArg } }` for every object field of the
-   * SDL. Throws when the SDL does not parse.
+   * `{ "Type": { kind, fields, interfaces, members } }` for every type of the
+   * SDL. Throws when the SDL does not parse, or names a type it does not
+   * declare.
    */
-  graphqlSchemaArgTypes(sdl: string): string
+  graphqlSchemaTypes(sdl: string): string
+}
+
+/** What graphql-js answers once `maxErrors` validation errors are collected. */
+const TOO_MANY_ERRORS = 'Too many validation errors, error limit reached. Validation aborted.'
+
+/**
+ * The validation errors of one request: each message once, and no more than
+ * the limit. A request is small; what it can be made to say is not — one
+ * field takes as many undeclared arguments as its bytes allow.
+ */
+class ValidationErrors {
+  readonly #messages: string[] = []
+  readonly #seen = new Set<string>()
+  readonly #max: number
+  #full = false
+
+  constructor(max: number) {
+    this.#max = Math.max(1, max)
+  }
+
+  add(message: string): void {
+    if (this.#full || this.#seen.has(message)) return
+    if (this.#messages.length >= this.#max) {
+      this.#messages.push(TOO_MANY_ERRORS)
+      this.#full = true
+      return
+    }
+    this.#seen.add(message)
+    this.#messages.push(message)
+  }
+
+  /** The limit is reached: nothing more is worth checking. */
+  get full(): boolean {
+    return this.#full
+  }
+
+  get isEmpty(): boolean {
+    return this.#messages.length === 0
+  }
+
+  toErrors(): Array<{ message: string }> {
+    return this.#messages.map((message) => ({ message }))
+  }
 }
 
 /**
@@ -187,6 +252,7 @@ function mapRustField(f: RustParsedField): SelectionField {
     alias: f.alias ?? undefined,
     args: f.args,
     selection: f.sub_fields.map(mapRustField),
+    ...(f.condition === null ? {} : { condition: f.condition }),
   }
 }
 
@@ -214,6 +280,27 @@ export interface GraphQLConfig {
    */
   maxComplexity?: number
   /**
+   * Stop validating a query after this many errors, and say so (default: 100,
+   * as graphql-js `maxErrors`). Without it one small query naming thousands
+   * of unknown things is answered with thousands of messages.
+   */
+  maxErrors?: number
+  /**
+   * Most times ONE root field may be selected in a single request — aliases
+   * are how a client repeats it (default: 10). A rate limit in front of the
+   * endpoint counts requests, not resolver calls: this is what bounds how
+   * many calls one request is worth. {@link ResolverOptions.maxRepeats}
+   * overrides it for one resolver.
+   */
+  maxFieldRepeats?: number
+  /**
+   * The same bound for the root fields of a mutation (default: 1): repeating
+   * a mutation under aliases is how one request guesses a thousand passwords
+   * or one-time codes. Raise it, or set `maxRepeats` on the resolver, for a
+   * mutation meant to be batched.
+   */
+  maxMutationRepeats?: number
+  /**
    * Echo the message of any error a resolver throws to the client. Default:
    * only when NODE_ENV is development. Otherwise only a client error (status
    * below 500) or an error flagged `expose: true` keeps its message; anything else reads "Internal server
@@ -228,6 +315,20 @@ export interface ResolverOptions {
   role?: string
   roles?: string[]
   permissions?: string[]
+  /**
+   * Named middleware (from the shared `'middleware'` registry) run before
+   * EACH call of the resolver, after its guards — once per alias, where a
+   * middleware on the endpoint's route runs once per request. This is where a
+   * throttle that must count attempts goes. They refuse by throwing; the
+   * response is shared by every field of the request, so a middleware that
+   * writes it or does not call `next()` is not supported.
+   */
+  middleware?: string[]
+  /**
+   * Most times this field may be selected in one request, instead of the
+   * engine's `maxFieldRepeats` / `maxMutationRepeats`.
+   */
+  maxRepeats?: number
 }
 
 interface ResolverEntry {
@@ -250,41 +351,72 @@ export interface SelectionField {
   alias?: string
   args: Record<string, unknown>
   selection: SelectionField[]
+  /**
+   * For a field written inside a fragment: which type condition it sits
+   * under (`... on User { name }`), as the parser numbers them.
+   */
+  condition?: number
+}
+
+/** Subset of the IoC container the engine needs. */
+interface GraphQLContainer {
+  make<T>(target: abstract new (...args: never[]) => T): Promise<T>
+  /** With `resolve`: where the named middleware of a resolver are looked up. */
+  has?(token: string): boolean
+  resolve?<T>(token: string): Promise<T>
+}
+
+/** A root field that passed validation: what to call, and with what. */
+interface ResolverCall {
+  field: SelectionField
+  args: Record<string, unknown>
+  /** The field's declared return type; undefined for `__typename`. */
+  definition: SchemaField | undefined
 }
 
 export class GraphQLEngine {
   #schemaSource: string
   #resolvers: Map<string, ResolverEntry> = new Map()
-  #container?: { make<T>(target: abstract new (...args: never[]) => T): Promise<T> }
+  #container?: GraphQLContainer
+  readonly #typeResolvers = new Map<string, TypeResolver>()
   readonly path: string
   #playground: boolean
   readonly #debug: boolean
   #maxQueryBytes: number
   #maxDepth: number
   #maxComplexity: number
-  /** Lazily-parsed `Type.field → argName → SchemaArg` map, or why it could not be read. */
-  #argTypes?: { ok: true; args: SchemaArgMap } | { ok: false; error: string }
+  readonly #maxErrors: number
+  readonly #maxFieldRepeats: number
+  readonly #maxMutationRepeats: number
+  /** The lazily-parsed schema, or why it could not be read. */
+  #schema?: { ok: true; schema: GraphQLSchema } | { ok: false; error: string }
 
   /**
-   * Parse (once) the schema's fields and their declared arguments from the
-   * SDL. When it cannot be read, every query is refused: an engine that cannot
-   * tell which arguments a field declares must not pass on whatever a client
-   * sends. It used to fall back to an empty map, which only disabled coercion.
+   * Parse (once) the schema's types from the SDL: the fields each declares,
+   * their return types and their arguments. When it cannot be read, every
+   * query is refused: an engine that cannot tell which fields a type has must
+   * not pass on whatever a client selects. That includes a schema naming a
+   * type it does not declare — the engine could not tell an object, to read
+   * field by field, from a scalar, to send as it is.
    */
-  #schemaArgTypes(): { ok: true; args: SchemaArgMap } | { ok: false; error: string } {
-    if (this.#argTypes === undefined) {
+  #readSchema(): { ok: true; schema: GraphQLSchema } | { ok: false; error: string } {
+    if (this.#schema === undefined) {
       try {
-        const parsed: unknown = JSON.parse(
-          graphqlNative().graphqlSchemaArgTypes(this.#schemaSource),
-        )
-        this.#argTypes = isSchemaArgMap(parsed)
-          ? { ok: true, args: parsed }
-          : { ok: false, error: 'Unreadable schema argument map' }
+        const parsed: unknown = JSON.parse(graphqlNative().graphqlSchemaTypes(this.#schemaSource))
+        this.#schema = isSchemaTypes(parsed)
+          ? { ok: true, schema: new GraphQLSchema(parsed) }
+          : { ok: false, error: 'Unreadable schema type map' }
       } catch (err) {
-        this.#argTypes = { ok: false, error: err instanceof Error ? err.message : String(err) }
+        // The native refusal is `E_GRAPHQL_INVALID_SCHEMA`; its message, not
+        // the JSON it crossed the boundary in, is what the log shows.
+        const error = fromNativeError(err)
+        this.#schema = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
       }
     }
-    return this.#argTypes
+    return this.#schema
   }
 
   constructor(config: GraphQLConfig) {
@@ -297,14 +429,25 @@ export class GraphQLEngine {
     this.#maxQueryBytes = config.maxQueryBytes ?? 100_000
     this.#maxDepth = config.maxDepth ?? 12
     this.#maxComplexity = config.maxComplexity ?? 1000
+    this.#maxErrors = config.maxErrors ?? 100
+    this.#maxFieldRepeats = config.maxFieldRepeats ?? 10
+    this.#maxMutationRepeats = config.maxMutationRepeats ?? 1
     this.#debug = config.debug ?? currentNodeEnv() === 'development'
   }
 
   /** Set IoC container for resolver instantiation. */
-  useContainer(container: {
-    make<T>(target: abstract new (...args: never[]) => T): Promise<T>
-  }): void {
+  useContainer(container: GraphQLContainer): void {
     this.#container = container
+  }
+
+  /**
+   * Say which object type a value of an interface or a union is, when the
+   * values do not carry `__typename` themselves (graphql-js `resolveType`).
+   * The engine reads a value by its object type's fields, so one it cannot
+   * name is refused.
+   */
+  resolveType(abstractType: string, resolver: TypeResolver): void {
+    this.#typeResolvers.set(abstractType, resolver)
   }
 
   /** Register a resolver for a type.field. */
@@ -316,6 +459,15 @@ export class GraphQLEngine {
     options?: ResolverOptions,
   ): void {
     const key = `${typeName}.${fieldName}`
+    // An empty list reads as a gate and requires nothing: refused here, so a
+    // list that came out of configuration empty is found at boot.
+    const emptyOption =
+      (options?.guards?.length === 0 && options.guard === undefined && 'guards') ||
+      (options?.roles?.length === 0 && options.role === undefined && 'roles') ||
+      (options?.permissions?.length === 0 && 'permissions')
+    if (emptyOption) {
+      throw new E_EMPTY_GATE_REQUIREMENT([`GraphQL resolver '${key}'`, `${emptyOption}: []`])
+    }
     this.#resolvers.set(key, {
       typeName,
       fieldName,
@@ -402,33 +554,43 @@ export class GraphQLEngine {
     }
 
     // Validation, before ANY resolver runs (a mutation must not half-run):
-    // the operation's variables, then each top-level field's arguments
-    // against what the schema declares for it.
-    const schema = this.#schemaArgTypes()
+    // the operation's variables, then every field of the selection — its
+    // type, its sub-selection and its arguments — against the schema.
+    const schema = this.#readSchema()
     if (!schema.ok) {
       ctx.logger.error('GraphQL schema could not be read', { message: schema.error })
       return { errors: [{ message: 'GraphQL schema could not be read' }] }
     }
-    const variables = coerceVariableValues(parsed.variables, request.variables ?? {})
-    if (!variables.ok) return { errors: variables.errors.map((message) => ({ message })) }
-    const calls: Array<{ field: SelectionField; args: Record<string, unknown> }> = []
-    const validationErrors: string[] = []
-    for (const field of parsed.fields) {
-      const outcome = coerceArgumentValues(field, parsed.typeName, schema.args, variables.values)
-      if (outcome.ok) calls.push({ field, args: outcome.args })
-      else validationErrors.push(...outcome.errors)
-    }
-    if (validationErrors.length > 0) {
-      return { errors: validationErrors.map((message) => ({ message })) }
-    }
+    const validationErrors = new ValidationErrors(this.#maxErrors)
+    const variables = coerceVariableValues(
+      parsed.variables,
+      request.variables ?? {},
+      validationErrors,
+    )
+    if (!validationErrors.isEmpty) return { errors: validationErrors.toErrors() }
+    const conditions = new TypeConditions(schema.schema, parsed.typeNames, parsed.typeConditions)
+    const calls: ResolverCall[] = []
+    validateSelection(
+      parsed.fields,
+      parsed.typeName,
+      { schema: schema.schema, conditions, variables, errors: validationErrors },
+      calls,
+    )
+    this.#checkRepeats(calls, parsed.typeName, validationErrors)
+    if (!validationErrors.isEmpty) return { errors: validationErrors.toErrors() }
 
+    const projection: ProjectionContext = {
+      schema: schema.schema,
+      conditions,
+      typeResolvers: this.#typeResolvers,
+    }
     const data: Record<string, unknown> = {}
     const errors: Array<{ message: string; path?: string[] }> = []
 
-    for (const { field, args } of calls) {
-      const outcome = await this.#resolveField(field, parsed.typeName, args, ctx)
+    for (const call of calls) {
+      const outcome = await this.#resolveField(call, parsed.typeName, projection, ctx)
       if (outcome.ok) {
-        data[field.alias ?? field.name] = outcome.value
+        data[call.field.alias ?? call.field.name] = outcome.value
       } else {
         errors.push(outcome.error)
       }
@@ -440,15 +602,66 @@ export class GraphQLEngine {
     }
   }
 
-  /** Resolve one selection field: lookup → guards → invoke → prune. */
+  /**
+   * How many times each root field is selected, against its limit. One
+   * request runs every alias: without a bound, a limiter that counts requests
+   * lets through as many attempts as a query has fields.
+   */
+  #checkRepeats(calls: ResolverCall[], typeName: string, errors: ValidationErrors): void {
+    const counts = new Map<string, number>()
+    for (const { field } of calls) {
+      counts.set(field.name, (counts.get(field.name) ?? 0) + 1)
+    }
+    const fallback = typeName === 'Mutation' ? this.#maxMutationRepeats : this.#maxFieldRepeats
+    for (const [name, count] of counts) {
+      const limit = this.#resolvers.get(`${typeName}.${name}`)?.options.maxRepeats ?? fallback
+      if (count > limit) {
+        errors.add(
+          `Field "${typeName}.${name}" is selected ${count} times in this request; at most ${limit} allowed.`,
+        )
+      }
+    }
+  }
+
+  /**
+   * Run a resolver's named middleware (from the shared `'middleware'`
+   * registry) before one call of it. They refuse by throwing; an unknown
+   * name, or no registry to look it up in, is an error and the resolver does
+   * not run.
+   */
+  async #runMiddleware(ctx: HttpContext, names: string[]): Promise<void> {
+    const container = this.#container
+    const registry =
+      container?.has?.('middleware') === true
+        ? await container.resolve?.<MiddlewareRegistry>('middleware')
+        : undefined
+    if (!registry) {
+      throw new E_MIDDLEWARE_NOT_FOUND([
+        `GraphQL middleware [${names.join(', ')}] is declared but no middleware registry is wired into the GraphQLEngine.`,
+      ])
+    }
+    const fns = names.map((name) => {
+      const mw = registry.get(name)
+      if (!mw) {
+        throw new E_MIDDLEWARE_NOT_FOUND([`Named middleware '${name}' is not registered.`])
+      }
+      return mw
+    })
+    await composeMiddleware(fns)(ctx, async () => {})
+  }
+
+  /** Resolve one root field: lookup → guards → middleware → invoke → project. */
   async #resolveField(
-    field: SelectionField,
+    call: ResolverCall,
     typeName: string,
-    args: Record<string, unknown>,
+    projection: ProjectionContext,
     ctx: HttpContext,
   ): Promise<
     { ok: true; value: unknown } | { ok: false; error: { message: string; path?: string[] } }
   > {
+    const { field, args, definition } = call
+    // `__typename` is the one field every type has without declaring it.
+    if (definition === undefined) return { ok: true, value: typeName }
     const key = `${typeName}.${field.name}`
     const entry = this.#resolvers.get(key)
     if (!entry) {
@@ -464,6 +677,9 @@ export class GraphQLEngine {
     }
 
     try {
+      const middleware = entry.options.middleware ?? []
+      if (middleware.length > 0) await this.#runMiddleware(ctx, middleware)
+
       // Resolve handler via IoC or direct instantiation.
       // `Reflect.construct`, not `new`: the resolver may be an abstract class,
       // which the runtime builds happily and `new` refuses at compile time.
@@ -483,10 +699,12 @@ export class GraphQLEngine {
       }
 
       const result = await handler.call(instance, null, args, ctx)
-      // Prune to the client's selection set: a resolver returning a rich
-      // object (ORM entity, etc.) must not leak fields the client did not
-      // ask for. Empty selection (scalar field) returns the value as-is.
-      return { ok: true, value: pruneToSelection(result, field.selection) }
+      // Read by the schema: of a rich object (an ORM entity), only the
+      // fields the client selected and the value's type declares go out.
+      return {
+        ok: true,
+        value: projectValue(result, definition.type, field.selection, projection, key),
+      }
     } catch (err) {
       return { ok: false, error: { message: this.#publicMessage(err, ctx), path: [field.name] } }
     }
@@ -561,24 +779,30 @@ export class GraphQLEngine {
     typeName: string
     fields: SelectionField[]
     variables: RustVariable[]
+    typeNames: string[]
+    typeConditions: TypeConditionLink[]
     errors?: Array<{ message: string }>
   } {
     // Full-Rust: the spec-compliant `ream-graphql` parser (graphql-parser
     // crate) rejects invalid queries before any resolver runs. No TS fallback —
     // ream ships the native binary, so when Rust exists the engine is Rust.
     // `safeJsonParse`: a client's object literal may name a key `__proto__`.
+    const options = {
+      ...(operationName === undefined ? {} : { operationName }),
+      maxDepth: this.#maxDepth,
+      maxComplexity: this.#maxComplexity,
+      maxErrors: this.#maxErrors,
+    }
     const raw: unknown = safeJsonParse(
-      graphqlNative().graphqlParse(query, {
-        ...(operationName === undefined ? {} : { operationName }),
-        maxDepth: this.#maxDepth,
-        maxComplexity: this.#maxComplexity,
-      }),
+      callNative(() => graphqlNative().graphqlParse(query, options)),
     )
     if (!isRustParseResult(raw)) {
       return {
         typeName: 'Query',
         fields: [],
         variables: [],
+        typeNames: [],
+        typeConditions: [],
         errors: [{ message: 'Unreadable parse result' }],
       }
     }
@@ -588,10 +812,18 @@ export class GraphQLEngine {
         typeName,
         fields: [],
         variables: [],
+        typeNames: [],
+        typeConditions: [],
         errors: raw.errors.map((message) => ({ message })),
       }
     }
-    return { typeName, fields: raw.fields.map(mapRustField), variables: raw.variables }
+    return {
+      typeName,
+      fields: raw.fields.map(mapRustField),
+      variables: raw.variables,
+      typeNames: raw.type_names,
+      typeConditions: raw.type_conditions,
+    }
   }
 
   /**
@@ -685,7 +917,19 @@ function isRustParseResult(value: unknown): value is RustParseResult {
     Array.isArray(value.fields) &&
     value.fields.every(isRustParsedField) &&
     Array.isArray(value.variables) &&
-    value.variables.every(isRustVariable)
+    value.variables.every(isRustVariable) &&
+    Array.isArray(value.type_names) &&
+    value.type_names.every((name) => typeof name === 'string') &&
+    Array.isArray(value.type_conditions) &&
+    value.type_conditions.every(isTypeConditionLink)
+  )
+}
+
+function isTypeConditionLink(value: unknown): value is TypeConditionLink {
+  return (
+    isRecord(value) &&
+    typeof value.name === 'number' &&
+    (value.parent === null || typeof value.parent === 'number')
   )
 }
 
@@ -699,23 +943,6 @@ function isRustVariable(value: unknown): value is RustVariable {
   )
 }
 
-function isSchemaArgMap(value: unknown): value is SchemaArgMap {
-  return (
-    isRecord(value) &&
-    Object.values(value).every(
-      (args) =>
-        isRecord(args) &&
-        Object.values(args).every(
-          (arg) =>
-            isRecord(arg) &&
-            typeof arg.type === 'string' &&
-            typeof arg.named_type === 'string' &&
-            typeof arg.required === 'boolean',
-        ),
-    )
-  )
-}
-
 /**
  * The operation's variable values (graphql-js `coerceVariableValues`): one per
  * variable the operation DECLARES — a request variable it does not declare is
@@ -725,15 +952,16 @@ function isSchemaArgMap(value: unknown): value is SchemaArgMap {
 function coerceVariableValues(
   definitions: RustVariable[],
   inputs: Record<string, unknown>,
-): { ok: true; values: Record<string, unknown> } | { ok: false; errors: string[] } {
+  errors: ValidationErrors,
+): Record<string, unknown> {
   const values: Record<string, unknown> = {}
-  const errors: string[] = []
   for (const definition of definitions) {
+    if (errors.full) break
     if (!Object.hasOwn(inputs, definition.name)) {
       if (definition.default_value !== null && definition.default_value !== undefined) {
         values[definition.name] = coerceScalar(definition.default_value, definition.named_type)
       } else if (definition.non_null) {
-        errors.push(
+        errors.add(
           `Variable "$${definition.name}" of required type "${definition.type}" was not provided.`,
         )
       }
@@ -741,14 +969,14 @@ function coerceVariableValues(
     }
     const value = inputs[definition.name]
     if (value === null && definition.non_null) {
-      errors.push(
+      errors.add(
         `Variable "$${definition.name}" of non-null type "${definition.type}" must not be null.`,
       )
       continue
     }
     values[definition.name] = coerceScalar(value, definition.named_type)
   }
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, values }
+  return values
 }
 
 /** `{ "$var": "name" }` — a variable reference the parser left in an argument value. */
@@ -783,11 +1011,104 @@ function substituteVariables(value: unknown, variables: Record<string, unknown>)
   return value
 }
 
+/** What a selection is validated with. */
+interface ValidationContext {
+  schema: GraphQLSchema
+  conditions: TypeConditions
+  variables: Record<string, unknown>
+  errors: ValidationErrors
+}
+
+/**
+ * Check a selection set against the schema, at every depth (the graphql-js
+ * rules FieldsOnCorrectType, ScalarLeafs, KnownTypeNames,
+ * FragmentsOnCompositeTypes, PossibleFragmentSpreads, KnownArgumentNames and
+ * ProvidedRequiredArguments, with their messages).
+ *
+ * `parentType` is the type the selection is on. A field is looked up on it,
+ * or on the type its fragment conditions on. It must be declared there; one
+ * whose type has fields must select some, and one whose type has none must
+ * not. Only the root level was checked once: below it a client named any
+ * property of what a resolver returned, or no property at all and got the
+ * object whole.
+ *
+ * `calls` collects the fields that passed, with their coerced arguments: the
+ * root fields, which are the ones a resolver runs for.
+ */
+function validateSelection(
+  fields: SelectionField[],
+  parentType: string,
+  context: ValidationContext,
+  calls?: ResolverCall[],
+): void {
+  const { schema, errors } = context
+  for (const field of fields) {
+    if (errors.full) return
+    let scoped = parentType
+    if (field.condition !== undefined) {
+      const condition = context.conditions.get(field.condition)
+      if (condition === undefined) {
+        errors.add('Unreadable type condition')
+        continue
+      }
+      if (condition.error !== undefined) {
+        errors.add(condition.error)
+        continue
+      }
+      if (!overlaps(schema.possibleTypes(parentType), condition.types)) {
+        errors.add(
+          `Fragment cannot be spread here as objects of type "${parentType}" can never be of type "${condition.name}".`,
+        )
+        continue
+      }
+      scoped = condition.name
+    }
+    if (field.name === '__typename' && schema.isComposite(scoped)) {
+      for (const name of Object.keys(field.args)) {
+        errors.add(`Unknown argument "${name}" on field "${scoped}.__typename".`)
+      }
+      if (field.selection.length > 0) {
+        errors.add(
+          'Field "__typename" must not have a selection since type "String!" has no subfields.',
+        )
+      }
+      calls?.push({ field, args: {}, definition: undefined })
+      continue
+    }
+    const definition = schema.field(scoped, field.name)
+    if (definition === undefined) {
+      errors.add(`Cannot query field "${field.name}" on type "${scoped}".`)
+      continue
+    }
+    const args = coerceArgumentValues(
+      field,
+      `${scoped}.${field.name}`,
+      definition.args,
+      context.variables,
+      errors,
+    )
+    if (schema.isComposite(definition.named_type)) {
+      if (field.selection.length === 0) {
+        errors.add(
+          `Field "${field.name}" of type "${definition.type}" must have a selection of subfields. Did you mean "${field.name} { ... }"?`,
+        )
+      } else {
+        validateSelection(field.selection, definition.named_type, context)
+      }
+    } else if (field.selection.length > 0) {
+      errors.add(
+        `Field "${field.name}" must not have a selection since type "${definition.type}" has no subfields.`,
+      )
+    }
+    calls?.push({ field, args, definition })
+  }
+}
+
 /**
  * The arguments a resolver receives (graphql-js `getArgumentValues`, with the
  * KnownArgumentNames and ProvidedRequiredArguments checks): only those the
- * schema declares for `Type.field`, variables substituted, defaults applied,
- * scalars coerced to their declared types.
+ * schema declares for the field at `coordinate` (`Type.field`), variables
+ * substituted, defaults applied, scalars coerced to their declared types.
  *
  * Built from the declaration, never from what the client sent: an argument
  * the field does not declare is refused instead of reaching a resolver that
@@ -795,19 +1116,15 @@ function substituteVariables(value: unknown, variables: Record<string, unknown>)
  */
 function coerceArgumentValues(
   field: SelectionField,
-  typeName: string,
-  schema: SchemaArgMap,
+  coordinate: string,
+  declared: Record<string, SchemaArg>,
   variables: Record<string, unknown>,
-): { ok: true; args: Record<string, unknown> } | { ok: false; errors: string[] } {
-  const coordinate = `${typeName}.${field.name}`
-  const declared = Object.hasOwn(schema, coordinate) ? schema[coordinate] : undefined
-  if (declared === undefined) {
-    return { ok: false, errors: [`Cannot query field "${field.name}" on type "${typeName}".`] }
-  }
-  const errors: string[] = []
+  errors: ValidationErrors,
+): Record<string, unknown> {
   for (const name of Object.keys(field.args)) {
+    if (errors.full) break
     if (!Object.hasOwn(declared, name)) {
-      errors.push(`Unknown argument "${name}" on field "${coordinate}".`)
+      errors.add(`Unknown argument "${name}" on field "${coordinate}".`)
     }
   }
   const args: Record<string, unknown> = {}
@@ -816,7 +1133,7 @@ function coerceArgumentValues(
     const hasDefault = definition.default_value !== null && definition.default_value !== undefined
     if (!Object.hasOwn(field.args, name)) {
       if (definition.required) {
-        errors.push(`${label} of type "${definition.type}" is required, but it was not provided.`)
+        errors.add(`${label} of type "${definition.type}" is required, but it was not provided.`)
       } else if (hasDefault) {
         args[name] = coerceScalar(definition.default_value, definition.named_type)
       }
@@ -827,7 +1144,7 @@ function coerceArgumentValues(
     if (reference !== undefined && !Object.hasOwn(variables, reference)) {
       // The variable has no runtime value: the argument's default, if any.
       if (definition.required) {
-        errors.push(
+        errors.add(
           `${label} of required type "${definition.type}" was provided the variable "$${reference}" which was not provided a runtime value.`,
         )
       } else if (hasDefault) {
@@ -837,14 +1154,14 @@ function coerceArgumentValues(
     }
     const value = substituteVariables(literal, variables)
     if (value === null && definition.type.endsWith('!')) {
-      errors.push(
+      errors.add(
         `${label} has invalid value: Expected value of non-null type "${definition.type}" not to be null.`,
       )
       continue
     }
     args[name] = coerceScalar(value, definition.named_type)
   }
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, args }
+  return args
 }
 
 function isRustParsedField(value: unknown): value is RustParsedField {
@@ -854,30 +1171,11 @@ function isRustParsedField(value: unknown): value is RustParsedField {
     (value.alias === null || typeof value.alias === 'string') &&
     isRecord(value.args) &&
     Array.isArray(value.sub_fields) &&
-    value.sub_fields.every(isRustParsedField)
+    value.sub_fields.every(isRustParsedField) &&
+    (value.condition === null || typeof value.condition === 'number')
   )
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
-/**
- * Project a resolver result onto the client's selection set. A field with an
- * empty selection (a scalar leaf) is returned untouched; an object is reduced
- * to only the selected keys (recursing into nested selections); an array maps
- * the projection over its items. This is what stops a resolver that returns a
- * rich object (ORM entity, etc.) from leaking unselected fields.
- */
-export function pruneToSelection(value: unknown, selection: SelectionField[]): unknown {
-  if (selection.length === 0) return value
-  if (Array.isArray(value)) return value.map((v) => pruneToSelection(v, selection))
-  if (!isRecord(value)) return value
-  const out: Record<string, unknown> = {}
-  for (const field of selection) {
-    if (field.name in value) {
-      out[field.alias ?? field.name] = pruneToSelection(value[field.name], field.selection)
-    }
-  }
-  return out
 }

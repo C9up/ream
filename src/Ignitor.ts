@@ -21,12 +21,14 @@ import type { Console } from './console/Console.js'
 import type { CommandLoader, Kernel as ConsoleKernelInstance } from './console/Kernel.js'
 import { type CommandClass, isCommandClass } from './console/types.js'
 import { hmrClientScript, hmrEndpoint } from './dev/hmr.js'
+import { devHostGuard } from './dev/hostGuard.js'
 import { devServerUrl, inDevServer, printReadyBanner } from './dev/readyBanner.js'
 import { installShortcuts } from './dev/shortcuts.js'
 import type { DirectoriesNode } from './directories.js'
 import type { ErrorEvent } from './ErrorBoundary.js'
 import { ErrorBoundary } from './ErrorBoundary.js'
 import { loadEnvFiles } from './env/loadEnvFiles.js'
+import { callNative, callNativeAsync } from './errors/native.js'
 import { prettyPrintError } from './errors/prettyPrintError.js'
 import type { Emitter } from './events/Emitter.js'
 import type { ShutdownHandle } from './GracefulShutdown.js'
@@ -37,6 +39,7 @@ import { createHttpKernel } from './HttpKernel.js'
 import { ExceptionHandler } from './http/Exception.js'
 import { type ChildLoggerSource, HttpContext } from './http/HttpContext.js'
 import { RequestValidator } from './http/RequestValidator.js'
+import { cookieDefaultsFromConfig } from './http/Response.js'
 import { type WebSocketEvent, WebSocketHub } from './http/WebSocket.js'
 import type { MiddlewareFunction } from './middleware/Pipeline.js'
 import { MiddlewareRegistry } from './middleware/Pipeline.js'
@@ -449,6 +452,14 @@ export interface IgnitorConfig {
    * that boot many Ignitors in one process).
    */
   gracefulShutdown?: boolean
+  /**
+   * Host names the development pages (`/__ream/…`: the profiler, its toolbar,
+   * the reload stream) answer besides IP literals, `localhost`, `.localhost`
+   * names and the bind host — Vite's `server.allowedHosts`. A leading `.`
+   * allows a domain and its subdomains. `true` allows any host, which leaves
+   * those pages open to DNS rebinding. Development only.
+   */
+  allowedHosts?: string[] | true
 }
 
 /**
@@ -522,7 +533,9 @@ export class Ignitor {
     this.#app = new Application({ importer: this.#config.importer })
     this.#router = new Router()
     this.#server = new Server(this.#router)
-    this.#middleware = new MiddlewareRegistry()
+    // Over the router: a name `router.named()` declared resolves on routes,
+    // RPC methods and GraphQL resolvers alike.
+    this.#middleware = new MiddlewareRegistry(this.#router)
     this.#migrations = new MigrationRegistry()
     this.#errorBoundary = new ErrorBoundary((event) => this.#handleError(event), this.isDevMode())
 
@@ -970,6 +983,8 @@ export class Ignitor {
         },
         // AdonisJS `config/app.ts` → `http: { allowMethodSpoofing: true }`.
         allowMethodSpoofing: this.#app.config.get<boolean>('app.http.allowMethodSpoofing') === true,
+        // AdonisJS `config/app.ts` → `http: { cookie: { … } }`, over its defaults.
+        cookie: cookieDefaultsFromConfig(this.#app.config.get<unknown>('app.http.cookie')),
         streamBackend: () => {
           const server = this.#_httpServer
           if (
@@ -1017,51 +1032,54 @@ export class Ignitor {
         : await findAvailablePort(desiredPort)
       this.#host =
         this.#config.host ?? process.env.HOST ?? (this.#app.inProduction ? '0.0.0.0' : 'localhost')
-      this.#_httpServer = this.#config.serverFactory(availablePort, this.#host)
-      this.#_httpServer.onRequest(kernel)
+      // Every call into the native server below goes through `callNative`, so
+      // a refusal (a bad host, a trusted proxy that is not one, a taken port)
+      // surfaces as its coded ream error rather than as the native JSON.
+      const factory = this.#config.serverFactory
+      const host = this.#host
+      const httpServer = callNative(() => factory(availablePort, host))
+      this.#_httpServer = httpServer
+      httpServer.onRequest(kernel)
       webSocketHub = webSocketHubFor(this.#_httpServer, (error) => {
         this.#errorBoundary.serviceError('WebSocket', error)
       })
       this.#server.reportWebSocketSupport(webSocketHub !== undefined)
       // AdonisJS `config/app.ts` → `http` has no WebSocket block (no core
       // WebSocket upstream); `http.webSocket` sits next to the timeouts.
-      if (typeof this.#_httpServer.configureWebSockets === 'function') {
-        this.#_httpServer.configureWebSockets(
-          nativeWebSocketConfig(this.#app.config.get<unknown>('app.http')),
-        )
+      if (typeof httpServer.configureWebSockets === 'function') {
+        const config = nativeWebSocketConfig(this.#app.config.get<unknown>('app.http'))
+        callNative(() => httpServer.configureWebSockets?.(config))
       }
       const grpc = this.#server.getGrpcHandler()
       if (grpc) {
-        if (typeof this.#_httpServer.onGrpc !== 'function') {
+        if (typeof httpServer.onGrpc !== 'function') {
           throw new E_IGNITOR_GRPC_UNSUPPORTED()
         }
         const calls = cancellableGrpc(grpc)
-        this.#_httpServer.onGrpcCancel?.(calls.onCancel)
-        this.#_httpServer.onGrpc(calls.onCall, this.#server.getGrpcLimits())
+        const limits = this.#server.getGrpcLimits()
+        callNative(() => httpServer.onGrpcCancel?.(calls.onCancel))
+        callNative(() => httpServer.onGrpc?.(calls.onCall, limits))
       }
       // Pre-resolve client IPs in Rust from the trusted-proxy CIDRs before
       // listen. Security filtering itself lives in @c9up/blackhole.
       const trustedProxies = this.#server.getTrustedProxies()
-      if (
-        trustedProxies.length > 0 &&
-        typeof this.#_httpServer.configureTrustedProxies === 'function'
-      ) {
-        this.#_httpServer.configureTrustedProxies([...trustedProxies])
+      if (trustedProxies.length > 0 && typeof httpServer.configureTrustedProxies === 'function') {
+        callNative(() => httpServer.configureTrustedProxies?.([...trustedProxies]))
       }
       // Body limits from `config/bodyparser.ts`, enforced while the native
       // server reads a body: nothing past them is ever buffered.
       const bodyparser = this.#app.config.get<BodyParserConfig>('bodyparser')
-      if (bodyparser && typeof this.#_httpServer.configureBodyLimits === 'function') {
-        this.#_httpServer.configureBodyLimits(nativeBodyLimits(bodyparser))
+      if (bodyparser && typeof httpServer.configureBodyLimits === 'function') {
+        const limits = nativeBodyLimits(bodyparser)
+        callNative(() => httpServer.configureBodyLimits?.(limits))
       }
       // AdonisJS `config/app.ts` → `http: { headersTimeout, requestTimeout,
       // keepAliveTimeout }`, plus `maxConnections`.
-      if (typeof this.#_httpServer.configureConnections === 'function') {
-        this.#_httpServer.configureConnections(
-          nativeConnectionConfig(this.#app.config.get<unknown>('app.http')),
-        )
+      if (typeof httpServer.configureConnections === 'function') {
+        const config = nativeConnectionConfig(this.#app.config.get<unknown>('app.http'))
+        callNative(() => httpServer.configureConnections?.(config))
       }
-      await this.#_httpServer.listen()
+      await callNativeAsync(() => httpServer.listen())
 
       // Whoever opened the socket closes it. `app.terminate()` runs the
       // `terminating` hooks in reverse before shutting the providers down, so
@@ -1165,8 +1183,9 @@ export class Ignitor {
     // this sticker when the child reports ready; here the child prints it,
     // because a port found by scanning past a taken 3000 is known only to the
     // process that bound it.
-    if (inDevServer() && this.#host !== undefined && this.#_httpServer !== undefined) {
-      const port = await this.#_httpServer.port()
+    const bound = this.#_httpServer
+    if (inDevServer() && this.#host !== undefined && bound !== undefined) {
+      const port = await callNativeAsync(() => bound.port())
       printReadyBanner({
         host: this.#host,
         port,
@@ -1405,7 +1424,8 @@ export class Ignitor {
   // ─── Accessors ────────────────────────────────────────────
 
   async port(): Promise<number> {
-    return this.#_httpServer ? this.#_httpServer.port() : 0
+    const server = this.#_httpServer
+    return server ? callNativeAsync(() => server.port()) : 0
   }
 
   /**
@@ -1564,9 +1584,15 @@ export class Ignitor {
    */
   #frameworkServerMiddleware(): MiddlewareFunction[] {
     if (!this.isDevMode()) return []
+    // First of all: the pages below answer only a host this server is meant to
+    // be reached by (DNS rebinding).
+    const guard = devHostGuard({
+      allowedHosts: this.#config.allowedHosts,
+      bindHost: () => this.#host,
+    })
     const profiler = this.#profiler
-    if (profiler === undefined) return [hmrEndpoint()]
-    return [profilerEndpoint(profiler), hmrEndpoint(), profileRequest(profiler)]
+    if (profiler === undefined) return [guard, hmrEndpoint()]
+    return [guard, profilerEndpoint(profiler), hmrEndpoint(), profileRequest(profiler)]
   }
 
   getPhase(): string {

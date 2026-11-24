@@ -16,6 +16,8 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { E_REAM_STUB_UNSAFE_PATH } from '../../errors/codes.js'
+import { existingInside, pathPresent } from '../../pathContainment.js'
 
 /** One file a generator intends to write. */
 export interface PlannedFile {
@@ -44,12 +46,16 @@ export type FlushOutcome =
       warnings: string[]
     }
 
-/** `exists` is read now, not at write time: a plan describes one moment. */
+/**
+ * `exists` is read now, not at write time: a plan describes one moment. A
+ * link counts as something there even when its target does not exist, so it
+ * is skipped without `--force` and refused with it.
+ */
 export function plannedFile(destination: string, content: string, cwd: string): PlannedFile {
   return {
     path: destination,
     content,
-    exists: fs.existsSync(path.resolve(cwd, destination)),
+    exists: pathPresent(path.resolve(cwd, destination)),
   }
 }
 
@@ -75,11 +81,20 @@ export function flush(
         continue
       }
       const target = path.resolve(options.cwd, entry.path)
-      const prior = entry.exists ? fs.readFileSync(target) : undefined
+      // A destination that is a link out of the project, or to nothing, is
+      // refused: writing through it would create the file wherever it points.
+      const exists = existingInside(
+        options.cwd,
+        target,
+        (reason) =>
+          new E_REAM_STUB_UNSAFE_PATH([`[make] refusing to write ${entry.path}: ${reason}`]),
+      )
+      const prior = exists ? fs.readFileSync(target) : undefined
       fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, entry.content)
+      // `wx` for a new file: a link planted since the check fails the open.
+      fs.writeFileSync(target, entry.content, exists ? undefined : { flag: 'wx' })
       rollbacks.push({ path: target, prior })
-      if (entry.exists) modifiedFiles.push(entry.path)
+      if (exists) modifiedFiles.push(entry.path)
       else createdFiles.push(entry.path)
     }
   } catch (error) {

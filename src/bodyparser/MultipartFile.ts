@@ -65,7 +65,7 @@ import { errorCode } from '../helpers/errors.js'
 import { Macroable } from '../utils/Macroable.js'
 import { parseSize } from './parseSize.js'
 import { parseFormFields, type QsParseOptions } from './qsParse.js'
-import { sniffableExtensions, sniffFileType } from './sniff.js'
+import { type SniffBudget, sniffableExtensions, sniffFileType } from './sniff.js'
 
 export interface FileValidationOptions {
   /** Largest accepted size: bytes, or a value such as `'2mb'` or `'1.5 mb'`. */
@@ -224,9 +224,13 @@ export class MultipartFile extends Macroable {
    * dependency. Call once after construction (the BodyParser middleware does
    * this for every uploaded file). Content without a signature (text formats)
    * leaves the client extension in force — same fallback AdonisJS uses.
+   *
+   * Only the first bytes are read. Pass the request's {@link SniffBudget} so
+   * the files of one body share one bound; a file detected past it keeps the
+   * client's extension (`typeSource` is `'claimed'`).
    */
-  async detectType(): Promise<void> {
-    const result = await sniffFileType(this.content)
+  async detectType(budget?: SniffBudget): Promise<void> {
+    const result = await sniffFileType(this.content, budget)
     if (result) this.#detected = { ext: result.ext, mime: result.mime }
     this.#detectionRan = true
   }

@@ -165,3 +165,52 @@ describe('ream > SignedUrl > purpose binding', () => {
     expect(su.verify(stripped)).toBe(false)
   })
 })
+
+describe('ream > SignedUrl > verifies the exact bytes received', () => {
+  const su = new SignedUrl({ secret: SECRET })
+  const signed = su.make('/users/5/verify-email', { expiresIn: '1h' })
+  const query = signed.slice(signed.indexOf('?') + 1)
+
+  it('refuses a path a URL parser would normalise back to the signed one', () => {
+    for (const path of [
+      '/users/7\\..\\5/verify-email',
+      '/users/7/../5/verify-email',
+      '/users/7/%2e%2e/5/verify-email',
+      '/users/7/%2E%2E/5/verify-email',
+      '/users/./5/verify-email',
+      '//evil.test/users/5/verify-email',
+      '/users/%35/verify-email',
+      '/users\\5/verify-email',
+    ]) {
+      expect(su.verify(`${path}?${query}`), path).toBe(false)
+    }
+    expect(su.verify(signed)).toBe(true)
+  })
+
+  it('refuses a second signature, a second expires or purpose, a non-numeric expiry and a fragment', () => {
+    const signature = query.slice(query.indexOf('signature='))
+    expect(su.verify(`${signed}&${signature}`)).toBe(false)
+    expect(su.verify(`${signed}&expires=99999999999`)).toBe(false)
+    expect(su.verify(`${signed}#frag`)).toBe(false)
+    const forged = new SignedUrl({ secret: SECRET }).make('/p?expires=soon')
+    expect(su.verify(forged)).toBe(false)
+  })
+
+  it('refuses a query reordered or re-encoded after signing', () => {
+    const withQs = su.make('/search?a=1&b=2')
+    expect(su.verify(withQs)).toBe(true)
+    expect(su.verify(withQs.replace('a=1&b=2', 'b=2&a=1'))).toBe(false)
+    expect(su.verify(withQs.replace('a=1', 'a=%31'))).toBe(false)
+  })
+
+  it('does not read a `?signature` parameter as the signature', () => {
+    const bare = su.make('/x')
+    expect(su.verify(bare.replace('?signature=', '??signature='))).toBe(false)
+  })
+
+  it('verifies what it returned when the input query needed encoding', () => {
+    const odd = su.make('/x?a=b c&d=é')
+    expect(odd).toContain('a=b+c')
+    expect(su.verify(odd)).toBe(true)
+  })
+})

@@ -18,12 +18,12 @@ describe('HealthCheck > timeout timers', () => {
 
   it('clears the timer of a check that rejects', async () => {
     vi.useFakeTimers()
-    const health = new HealthCheck({ checkTimeout: 3000 })
+    const health = new HealthCheck({ checkTimeout: 3000, onError: () => {} })
     health.register('db', async () => {
       throw new Error('down')
     })
     const status = await health.check()
-    expect(status.checks[0]?.message).toBe('down')
+    expect(status.checks[0]?.message).toBe('Health check failed')
     expect(vi.getTimerCount()).toBe(0)
   })
 

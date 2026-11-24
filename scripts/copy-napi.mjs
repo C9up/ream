@@ -8,17 +8,18 @@
 //     ...
 //
 // The TS loader walks two upper directories from each `loadNapi` caller
-// to find these files, so the binaries MUST live at the package root
-// (not under target/) to be discovered at runtime.
+// to find these files, so a local build MUST put them at the package root
+// (not under target/) for them to be loaded before the platform package.
 //
 // Usage:
 //
 //     pnpm --filter @c9up/ream build:rust     # cargo build --release
 //     pnpm --filter @c9up/ream build:napi     # build:rust + this script
 //
-// The package.json script chains both steps. CI / npm publish runs
-// `build:napi` once per platform during the matrix build — every
-// crate listed in `NAPI_CRATES` ships in the tarball.
+// The package.json script chains both steps. CI runs `build:napi` once
+// per platform during the matrix build, and the publish job moves every
+// crate listed in `NAPI_CRATES` into that platform's npm package,
+// `@c9up/ream-<suffix>` (see scripts/platform-packages.mjs).
 
 import { copyFileSync, existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'

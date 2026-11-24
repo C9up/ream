@@ -23,7 +23,6 @@ multer = "3"
 futures-core = "0.3"
 cookie = "0.18"
 futures-util = "0.3"
-tokio-stream = "0.1"
 tonic = { version = "0.14", default-features = false, features = ["server", "codegen"] }
 # WebSocket framing (RFC 6455): masking, fragmentation, control frames, UTF-8
 # validation, the close handshake. The handshake itself goes through hyper;

@@ -9,19 +9,20 @@
 //! What is checked here, against the document alone (graphql-js rule names):
 //! UniqueFragmentNames, KnownFragmentNames, NoFragmentCycles,
 //! UniqueVariableNames, NoUndefinedVariables, and the operation selection of
-//! `getOperation` (operationName). The checks that need the schema — known
-//! arguments, required arguments — run in the TypeScript engine against the
-//! argument map [`parse_schema_arg_types`] extracts.
+//! `getOperation` (operationName). The checks that need the schema — fields on
+//! the right type, leaf selections, known and required arguments — run in the
+//! TypeScript engine against the type map [`parse_schema_types`] extracts.
 //!
 //! Expansion of fragment spreads is bounded WHILE it runs (see
 //! [`ParseLimits`]): a few hundred bytes of nested spreads used to expand to
-//! 2^n fields before any limit looked at the result.
+//! 2^n fields before any limit looked at the result. The errors collected are
+//! bounded too: validation stops at `max_errors`, as graphql-js does.
 //!
 //! @implements MISS-28
 
 use graphql_parser::query::{
     parse_query, Definition, Document, FragmentDefinition, OperationDefinition, Selection,
-    SelectionSet, Type, Value, VariableDefinition as QueryVariableDefinition,
+    SelectionSet, Type, TypeCondition, Value, VariableDefinition as QueryVariableDefinition,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -44,6 +45,25 @@ pub struct ParsedField {
     /// argument error is reported in must not change from one run to the next.
     pub args: serde_json::Map<String, serde_json::Value>,
     pub sub_fields: Vec<ParsedField>,
+    /// The type condition of the fragment the field was expanded from, as an
+    /// index into [`ParseResult::type_conditions`]; `None` for a field written
+    /// directly in its selection set.
+    pub condition: Option<usize>,
+}
+
+/// One fragment type condition (`... on User`, `fragment F on User`) a field
+/// was expanded under.
+///
+/// Fragments are inlined, so the condition is what is left to say which type
+/// a field was selected on. Both members are indexes, never the name itself:
+/// a fragment spread a thousand times would otherwise copy its type name a
+/// thousand times into the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TypeConditionLink {
+    /// The type named, as an index into [`ParseResult::type_names`].
+    pub name: usize,
+    /// The condition of the fragment this one sits in, when there is one.
+    pub parent: Option<usize>,
 }
 
 /// A variable the selected operation declares (`query Q($id: ID! = 1)`).
@@ -67,6 +87,10 @@ pub struct ParseResult {
     pub operation_name: Option<String>,
     pub fields: Vec<ParsedField>,
     pub variables: Vec<ParsedVariable>,
+    /// The distinct type names the fragments condition on.
+    pub type_names: Vec<String>,
+    /// The type conditions [`ParsedField::condition`] points into.
+    pub type_conditions: Vec<TypeConditionLink>,
     pub errors: Vec<String>,
 }
 
@@ -77,6 +101,8 @@ impl ParseResult {
             operation_name: None,
             fields: vec![],
             variables: vec![],
+            type_names: vec![],
+            type_conditions: vec![],
             errors,
         }
     }
@@ -94,14 +120,107 @@ pub struct ParseLimits {
     /// expanded, so a chain that doubles spreads without adding fields is
     /// bounded too.
     pub max_fields: usize,
+    /// Most validation errors collected before the parse stops (graphql-js
+    /// `maxErrors`). One argument naming thousands of undeclared variables
+    /// costs one field: without this bound the reply held one message per
+    /// variable.
+    pub max_errors: usize,
 }
 
 impl Default for ParseLimits {
-    /// The GraphQL engine's defaults (`maxDepth`, `maxComplexity`).
+    /// The GraphQL engine's defaults (`maxDepth`, `maxComplexity`,
+    /// `maxErrors`).
     fn default() -> Self {
         Self {
             max_depth: 12,
             max_fields: 1000,
+            max_errors: 100,
+        }
+    }
+}
+
+/// What graphql-js answers once `maxErrors` is reached.
+pub const TOO_MANY_ERRORS: &str =
+    "Too many validation errors, error limit reached. Validation aborted.";
+
+/// Why the parse stopped before the operation was expanded in full.
+enum Stop {
+    /// A [`ParseLimits`] budget is spent: only this message is reported.
+    Limit(String),
+    /// The document is invalid, or the error limit is reached: the messages
+    /// are in the [`ErrorSink`].
+    Invalid,
+}
+
+/// The validation errors of one parse: each message once, and no more than
+/// the limit.
+///
+/// A set tells whether a message was already reported. Scanning the list for
+/// it made N distinct errors cost N²/2 string comparisons on the thread that
+/// serves every request.
+struct ErrorSink {
+    messages: Vec<String>,
+    seen: HashSet<String>,
+    max: usize,
+}
+
+impl ErrorSink {
+    fn new(max: usize) -> Self {
+        Self {
+            messages: Vec::new(),
+            seen: HashSet::new(),
+            max: max.max(1),
+        }
+    }
+
+    /// Record `message`. `Err` once the limit is reached: the caller stops
+    /// validating, and the last message says so.
+    fn push(&mut self, message: String) -> Result<(), Stop> {
+        if self.seen.contains(&message) {
+            return Ok(());
+        }
+        if self.messages.len() >= self.max {
+            self.messages.push(TOO_MANY_ERRORS.to_string());
+            return Err(Stop::Invalid);
+        }
+        self.seen.insert(message.clone());
+        self.messages.push(message);
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+}
+
+/// The type conditions met while expanding, each stored once.
+#[derive(Default)]
+struct ConditionTable {
+    names: Vec<String>,
+    name_index: HashMap<String, usize>,
+    links: Vec<TypeConditionLink>,
+    link_index: HashMap<TypeConditionLink, usize>,
+}
+
+impl ConditionTable {
+    /// The index of the condition `on`, under `parent`.
+    fn enter(&mut self, on: &str, parent: Option<usize>) -> usize {
+        let name = match self.name_index.get(on) {
+            Some(index) => *index,
+            None => {
+                self.names.push(on.to_string());
+                self.name_index.insert(on.to_string(), self.names.len() - 1);
+                self.names.len() - 1
+            }
+        };
+        let link = TypeConditionLink { name, parent };
+        match self.link_index.get(&link) {
+            Some(index) => *index,
+            None => {
+                self.links.push(link);
+                self.link_index.insert(link, self.links.len() - 1);
+                self.links.len() - 1
+            }
         }
     }
 }
@@ -128,18 +247,35 @@ pub fn parse_graphql_operation(
         Err(e) => return ParseResult::failed(vec![format!("Parse error: {}", e)]),
     };
 
-    let fragments = match collect_fragments(&doc) {
-        Ok(fragments) => fragments,
-        Err(errors) => return ParseResult::failed(errors),
-    };
-    let fragment_errors = check_fragment_spreads(&fragments);
-    if !fragment_errors.is_empty() {
-        return ParseResult::failed(fragment_errors);
+    let mut errors = ErrorSink::new(limits.max_errors);
+    match expand_operation(&doc, operation_name, limits, &mut errors) {
+        Ok(mut result) => {
+            result.errors = errors.messages;
+            result
+        }
+        // A limit stops everything: what was expanded so far is dropped.
+        Err(Stop::Limit(limit)) => ParseResult::failed(vec![limit]),
+        Err(Stop::Invalid) => ParseResult::failed(errors.messages),
     }
+}
 
-    let operation = match select_operation(&doc, operation_name) {
+/// The operation `operation_name` picks, expanded. Every error goes to
+/// `errors`; `Err` when the parse cannot or must not go on.
+fn expand_operation<'d>(
+    doc: &'d Document<'d, String>,
+    operation_name: Option<&str>,
+    limits: ParseLimits,
+    errors: &mut ErrorSink,
+) -> Result<ParseResult, Stop> {
+    let fragments = collect_fragments(doc, errors)?;
+    check_fragment_spreads(&fragments, errors)?;
+
+    let operation = match select_operation(doc, operation_name) {
         Ok(operation) => operation,
-        Err(error) => return ParseResult::failed(vec![error]),
+        Err(error) => {
+            errors.push(error)?;
+            return Err(Stop::Invalid);
+        }
     };
     let (operation_type, name, variable_definitions, selection_set) = match operation {
         OperationDefinition::Query(q) => (
@@ -163,8 +299,7 @@ pub fn parse_graphql_operation(
         OperationDefinition::SelectionSet(ss) => ("query", None, &[][..], ss),
     };
 
-    let mut errors = Vec::new();
-    let variables = parse_variable_definitions(variable_definitions, &mut errors);
+    let variables = parse_variable_definitions(variable_definitions, errors)?;
     let declared: HashSet<&str> = variables.iter().map(|v| v.name.as_str()).collect();
 
     let mut expander = Expander {
@@ -174,43 +309,43 @@ pub fn parse_graphql_operation(
         limits,
         field_count: 0,
         fragment_count: 0,
-        errors: &mut errors,
+        conditions: ConditionTable::default(),
+        errors,
     };
-    let fields = match expander.expand(selection_set, 1) {
-        Ok(fields) => fields,
-        // A limit stops everything: what was expanded so far is dropped.
-        Err(limit) => return ParseResult::failed(vec![limit]),
-    };
+    let fields = expander.expand(selection_set, 1, None)?;
+    let conditions = expander.conditions;
 
-    ParseResult {
+    Ok(ParseResult {
         operation_type: operation_type.to_string(),
         operation_name: name,
         fields,
         variables,
-        errors,
-    }
+        type_names: conditions.names,
+        type_conditions: conditions.links,
+        errors: Vec::new(),
+    })
 }
 
 /// Named fragments by name (UniqueFragmentNames).
 fn collect_fragments<'d>(
     doc: &'d Document<'d, String>,
-) -> Result<HashMap<String, &'d FragmentDefinition<'d, String>>, Vec<String>> {
+    errors: &mut ErrorSink,
+) -> Result<HashMap<String, &'d FragmentDefinition<'d, String>>, Stop> {
     let mut fragments: HashMap<String, &FragmentDefinition<String>> = HashMap::new();
-    let mut errors = Vec::new();
     for def in &doc.definitions {
         if let Definition::Fragment(frag) = def {
             if fragments.insert(frag.name.clone(), frag).is_some() {
                 errors.push(format!(
                     "There can be only one fragment named \"{}\".",
                     frag.name
-                ));
+                ))?;
             }
         }
     }
     if errors.is_empty() {
         Ok(fragments)
     } else {
-        Err(errors)
+        Err(Stop::Invalid)
     }
 }
 
@@ -228,15 +363,20 @@ fn spreads_of<'a>(selection_set: &'a SelectionSet<String>, out: &mut Vec<&'a str
 /// KnownFragmentNames and NoFragmentCycles, over every fragment of the
 /// document, each visited once. Iterative, so a long chain of fragments cannot
 /// exhaust the stack.
-fn check_fragment_spreads(fragments: &HashMap<String, &FragmentDefinition<String>>) -> Vec<String> {
-    let mut errors = Vec::new();
+fn check_fragment_spreads(
+    fragments: &HashMap<String, &FragmentDefinition<String>>,
+    errors: &mut ErrorSink,
+) -> Result<(), Stop> {
     let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (name, frag) in fragments {
+    // By name, so the errors kept under the limit are the same on every run.
+    let mut by_name: Vec<(&String, &&FragmentDefinition<String>)> = fragments.iter().collect();
+    by_name.sort_unstable_by_key(|(name, _)| *name);
+    for (name, frag) in by_name {
         let mut spreads = Vec::new();
         spreads_of(&frag.selection_set, &mut spreads);
         for spread in &spreads {
             if !fragments.contains_key(*spread) {
-                errors.push(format!("Unknown fragment \"{spread}\"."));
+                errors.push(format!("Unknown fragment \"{spread}\"."))?;
             }
         }
         spreads.retain(|spread| fragments.contains_key(*spread));
@@ -266,11 +406,9 @@ fn check_fragment_spreads(fragments: &HashMap<String, &FragmentDefinition<String
                     *next += 1;
                     match marks.get(target) {
                         Some(Mark::OnPath) => {
-                            let message =
-                                format!("Cannot spread fragment \"{target}\" within itself.");
-                            if !errors.contains(&message) {
-                                errors.push(message);
-                            }
+                            errors.push(format!(
+                                "Cannot spread fragment \"{target}\" within itself."
+                            ))?;
                         }
                         Some(Mark::Done) => {}
                         None => {
@@ -286,7 +424,11 @@ fn check_fragment_spreads(fragments: &HashMap<String, &FragmentDefinition<String
             }
         }
     }
-    errors
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Stop::Invalid)
+    }
 }
 
 /// The operation to run (graphql-js `getOperation`).
@@ -330,8 +472,8 @@ fn operation_name_of<'a>(op: &'a OperationDefinition<String>) -> Option<&'a str>
 /// converted.
 fn parse_variable_definitions(
     definitions: &[QueryVariableDefinition<String>],
-    errors: &mut Vec<String>,
-) -> Vec<ParsedVariable> {
+    errors: &mut ErrorSink,
+) -> Result<Vec<ParsedVariable>, Stop> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for def in definitions {
@@ -339,16 +481,19 @@ fn parse_variable_definitions(
             errors.push(format!(
                 "There can be only one variable named \"${}\".",
                 def.name
-            ));
+            ))?;
             continue;
         }
-        let default_value = def.default_value.as_ref().and_then(|value| {
-            graphql_value_to_json(value, false)
-                .map_err(|error| {
-                    errors.push(format!("Variable \"${}\" default value: {error}", def.name))
-                })
-                .ok()
-        });
+        let default_value = match &def.default_value {
+            Some(value) => match graphql_value_to_json(value, false) {
+                Ok(json) => Some(json),
+                Err(error) => {
+                    errors.push(format!("Variable \"${}\" default value: {error}", def.name))?;
+                    None
+                }
+            },
+            None => None,
+        };
         out.push(ParsedVariable {
             name: def.name.clone(),
             var_type: type_to_string(&def.var_type),
@@ -357,7 +502,7 @@ fn parse_variable_definitions(
             default_value,
         });
     }
-    out
+    Ok(out)
 }
 
 fn type_to_string(t: &Type<String>) -> String {
@@ -384,7 +529,8 @@ struct Expander<'a, 'd> {
     limits: ParseLimits,
     field_count: usize,
     fragment_count: usize,
-    errors: &'a mut Vec<String>,
+    conditions: ConditionTable,
+    errors: &'a mut ErrorSink,
 }
 
 impl Expander<'_, '_> {
@@ -398,49 +544,60 @@ impl Expander<'_, '_> {
     /// Spend one fragment expansion. A fragment spread twice by the fragment
     /// above it is expanded twice — that is what selecting it twice means —
     /// so the count, not a "visited" set, is what bounds a doubling chain.
-    fn spend_fragment(&mut self) -> Result<(), String> {
+    fn spend_fragment(&mut self) -> Result<(), Stop> {
         self.fragment_count += 1;
         if self.fragment_count > self.limits.max_fields {
-            return Err(self.too_complex());
+            return Err(Stop::Limit(self.too_complex()));
         }
         Ok(())
     }
 
+    /// `condition` is the type condition of the fragment `selection_set`
+    /// belongs to, when it is a fragment's.
     fn expand(
         &mut self,
         selection_set: &SelectionSet<String>,
         depth: usize,
-    ) -> Result<Vec<ParsedField>, String> {
+        condition: Option<usize>,
+    ) -> Result<Vec<ParsedField>, Stop> {
         let mut fields = Vec::new();
         for sel in &selection_set.items {
             match sel {
                 Selection::Field(f) => {
                     if depth > self.limits.max_depth {
-                        return Err(format!(
+                        return Err(Stop::Limit(format!(
                             "Query is too deep (max depth {})",
                             self.limits.max_depth
-                        ));
+                        )));
                     }
                     self.field_count += 1;
                     if self.field_count > self.limits.max_fields {
-                        return Err(self.too_complex());
+                        return Err(Stop::Limit(self.too_complex()));
                     }
                     let mut args = serde_json::Map::new();
                     for (name, value) in &f.arguments {
-                        self.check_variables(value);
-                        let json = graphql_value_to_json(value, true).unwrap_or_else(|error| {
-                            self.errors
-                                .push(format!("Argument \"{name}\" of \"{}\": {error}", f.name));
-                            serde_json::Value::Null
-                        });
+                        self.check_variables(value)?;
+                        let json = match graphql_value_to_json(value, true) {
+                            Ok(json) => json,
+                            Err(error) => {
+                                self.errors.push(format!(
+                                    "Argument \"{name}\" of \"{}\": {error}",
+                                    f.name
+                                ))?;
+                                serde_json::Value::Null
+                            }
+                        };
                         args.insert(name.clone(), json);
                     }
-                    let sub_fields = self.expand(&f.selection_set, depth + 1)?;
+                    // A field's own selection set is on the field's type: the
+                    // fragment the field sits in says nothing about it.
+                    let sub_fields = self.expand(&f.selection_set, depth + 1, None)?;
                     fields.push(ParsedField {
                         name: f.name.clone(),
                         alias: f.alias.clone(),
                         args,
                         sub_fields,
+                        condition,
                     });
                 }
                 Selection::FragmentSpread(spread) => {
@@ -450,20 +607,27 @@ impl Expander<'_, '_> {
                     // fragment were too; one in the operation is caught here.
                     match self.fragments.get(&spread.fragment_name) {
                         Some(frag) => {
-                            let mut expanded = self.expand(&frag.selection_set, depth)?;
+                            let TypeCondition::On(on) = &frag.type_condition;
+                            let inner = self.conditions.enter(on, condition);
+                            let mut expanded =
+                                self.expand(&frag.selection_set, depth, Some(inner))?;
                             fields.append(&mut expanded);
                         }
                         None => {
-                            let message = format!("Unknown fragment \"{}\".", spread.fragment_name);
-                            if !self.errors.contains(&message) {
-                                self.errors.push(message);
-                            }
+                            self.errors
+                                .push(format!("Unknown fragment \"{}\".", spread.fragment_name))?;
                         }
                     }
                 }
                 Selection::InlineFragment(inline) => {
                     self.spend_fragment()?;
-                    let mut expanded = self.expand(&inline.selection_set, depth)?;
+                    // `... { a }` has no condition of its own: the enclosing
+                    // one still applies.
+                    let inner = match &inline.type_condition {
+                        Some(TypeCondition::On(on)) => Some(self.conditions.enter(on, condition)),
+                        None => condition,
+                    };
+                    let mut expanded = self.expand(&inline.selection_set, depth, inner)?;
                     fields.append(&mut expanded);
                 }
             }
@@ -473,7 +637,7 @@ impl Expander<'_, '_> {
 
     /// NoUndefinedVariables: every `$name` an argument uses is declared by the
     /// operation.
-    fn check_variables(&mut self, value: &Value<String>) {
+    fn check_variables(&mut self, value: &Value<String>) -> Result<(), Stop> {
         match value {
             Value::Variable(name) => {
                 if !self.declared.contains(name.as_str()) {
@@ -483,15 +647,22 @@ impl Expander<'_, '_> {
                         }
                         None => format!("Variable \"${name}\" is not defined."),
                     };
-                    if !self.errors.contains(&message) {
-                        self.errors.push(message);
-                    }
+                    self.errors.push(message)?;
                 }
             }
-            Value::List(items) => items.iter().for_each(|item| self.check_variables(item)),
-            Value::Object(obj) => obj.values().for_each(|item| self.check_variables(item)),
+            Value::List(items) => {
+                for item in items {
+                    self.check_variables(item)?;
+                }
+            }
+            Value::Object(obj) => {
+                for item in obj.values() {
+                    self.check_variables(item)?;
+                }
+            }
             _ => {}
         }
+        Ok(())
     }
 }
 
@@ -576,28 +747,80 @@ pub struct SchemaArg {
     pub default_value: Option<serde_json::Value>,
 }
 
-/// Extract the declared arguments of every object field from a GraphQL SDL
-/// schema, `type` definitions and `extend type` alike.
+/// One field an object or interface type declares.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct SchemaField {
+    /// The declared return type as written: `[Task!]!`, `User`.
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// The named type under the list / non-null wrappers.
+    pub named_type: String,
+    /// Ordered by name, so the errors about them come in a stable order.
+    pub args: BTreeMap<String, SchemaArg>,
+}
+
+/// What a named type of the schema is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TypeKind {
+    Object,
+    Interface,
+    Union,
+    Scalar,
+    Enum,
+    Input,
+}
+
+/// One named type of the schema.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct SchemaType {
+    pub kind: TypeKind,
+    /// Object and interface types: the fields they declare.
+    pub fields: BTreeMap<String, SchemaField>,
+    /// Object and interface types: the interfaces they implement.
+    pub interfaces: Vec<String>,
+    /// Union types: their member types.
+    pub members: Vec<String>,
+}
+
+impl SchemaType {
+    fn new(kind: TypeKind) -> Self {
+        Self {
+            kind,
+            fields: BTreeMap::new(),
+            interfaces: Vec::new(),
+            members: Vec::new(),
+        }
+    }
+}
+
+/// The scalars every schema has without declaring them.
+const BUILT_IN_SCALARS: [&str; 5] = ["Int", "Float", "String", "Boolean", "ID"];
+
+/// Extract the types of a GraphQL SDL schema: every object, interface and
+/// union type with the fields it declares (their return types and arguments),
+/// and the scalar, enum and input types by name. `extend` definitions are
+/// merged into the type they extend.
 ///
-/// Returns `{ "Type.field": { "argName": SchemaArg } }`, with an entry for
-/// every field — one declaring no argument maps to an empty object — so the
-/// TypeScript engine can both coerce argument values to their declared types
-/// and refuse an argument the field does not declare. `Err` when the SDL does
-/// not parse: an engine that cannot tell which arguments exist must not guess.
-pub fn parse_schema_arg_types(
-    sdl: &str,
-) -> Result<HashMap<String, BTreeMap<String, SchemaArg>>, String> {
+/// This is what the TypeScript engine checks a selection against at every
+/// depth, coerces argument values with, and reads a resolver's result by: a
+/// field no type declares is neither accepted nor copied out.
+///
+/// `Err` when the SDL does not parse, declares a type twice, or names a type
+/// it does not declare where the engine has to know what it is (a field's
+/// return type, a union member, an implemented interface): an engine that
+/// cannot tell an object from a scalar must not guess which fields it has.
+pub fn parse_schema_types(sdl: &str) -> Result<BTreeMap<String, SchemaType>, String> {
     use graphql_parser::schema::{
         parse_schema, Definition as SchemaDef, Field, TypeDefinition, TypeExtension,
     };
 
     fn add_fields(
-        out: &mut HashMap<String, BTreeMap<String, SchemaArg>>,
+        target: &mut SchemaType,
         type_name: &str,
         fields: &[Field<String>],
     ) -> Result<(), String> {
         for field in fields {
-            // Ordered by name, so the errors about them come in a stable order.
             let mut args = BTreeMap::new();
             for arg in &field.arguments {
                 let default_value = match &arg.default_value {
@@ -620,25 +843,157 @@ pub fn parse_schema_arg_types(
                     },
                 );
             }
-            out.insert(format!("{type_name}.{}", field.name), args);
+            target.fields.insert(
+                field.name.clone(),
+                SchemaField {
+                    field_type: type_to_string(&field.field_type),
+                    named_type: named_type(&field.field_type),
+                    args,
+                },
+            );
         }
         Ok(())
     }
 
+    fn define<'t>(
+        types: &'t mut BTreeMap<String, SchemaType>,
+        name: &str,
+        kind: TypeKind,
+    ) -> Result<&'t mut SchemaType, String> {
+        if types.contains_key(name) {
+            return Err(format!("There can be only one type named \"{name}\"."));
+        }
+        Ok(types
+            .entry(name.to_string())
+            .or_insert_with(|| SchemaType::new(kind)))
+    }
+
+    /// The type an `extend` adds to. One that extends a type the document
+    /// does not define is taken as its definition.
+    fn extend<'t>(
+        types: &'t mut BTreeMap<String, SchemaType>,
+        name: &str,
+        kind: TypeKind,
+    ) -> Result<&'t mut SchemaType, String> {
+        let target = types
+            .entry(name.to_string())
+            .or_insert_with(|| SchemaType::new(kind));
+        if target.kind != kind {
+            return Err(format!(
+                "Cannot extend \"{name}\" as a different kind of type."
+            ));
+        }
+        Ok(target)
+    }
+
     let doc = parse_schema::<String>(sdl).map_err(|e| format!("Schema parse error: {e}"))?;
-    let mut out: HashMap<String, BTreeMap<String, SchemaArg>> = HashMap::new();
+    let mut types: BTreeMap<String, SchemaType> = BTreeMap::new();
+    // Definitions first: an `extend` may come before the type it extends.
     for def in &doc.definitions {
-        match def {
-            SchemaDef::TypeDefinition(TypeDefinition::Object(obj)) => {
-                add_fields(&mut out, &obj.name, &obj.fields)?
+        if let SchemaDef::TypeDefinition(definition) = def {
+            match definition {
+                TypeDefinition::Object(obj) => {
+                    let target = define(&mut types, &obj.name, TypeKind::Object)?;
+                    target
+                        .interfaces
+                        .extend(obj.implements_interfaces.iter().cloned());
+                    add_fields(target, &obj.name, &obj.fields)?;
+                }
+                TypeDefinition::Interface(interface) => {
+                    let target = define(&mut types, &interface.name, TypeKind::Interface)?;
+                    target
+                        .interfaces
+                        .extend(interface.implements_interfaces.iter().cloned());
+                    add_fields(target, &interface.name, &interface.fields)?;
+                }
+                TypeDefinition::Union(union) => {
+                    let target = define(&mut types, &union.name, TypeKind::Union)?;
+                    target.members.extend(union.types.iter().cloned());
+                }
+                TypeDefinition::Scalar(scalar) => {
+                    define(&mut types, &scalar.name, TypeKind::Scalar)?;
+                }
+                TypeDefinition::Enum(en) => {
+                    define(&mut types, &en.name, TypeKind::Enum)?;
+                }
+                TypeDefinition::InputObject(input) => {
+                    define(&mut types, &input.name, TypeKind::Input)?;
+                }
             }
-            SchemaDef::TypeExtension(TypeExtension::Object(ext)) => {
-                add_fields(&mut out, &ext.name, &ext.fields)?
-            }
-            _ => {}
         }
     }
-    Ok(out)
+    for def in &doc.definitions {
+        if let SchemaDef::TypeExtension(extension) = def {
+            match extension {
+                TypeExtension::Object(ext) => {
+                    let target = extend(&mut types, &ext.name, TypeKind::Object)?;
+                    target
+                        .interfaces
+                        .extend(ext.implements_interfaces.iter().cloned());
+                    add_fields(target, &ext.name, &ext.fields)?;
+                }
+                TypeExtension::Interface(ext) => {
+                    let target = extend(&mut types, &ext.name, TypeKind::Interface)?;
+                    target
+                        .interfaces
+                        .extend(ext.implements_interfaces.iter().cloned());
+                    add_fields(target, &ext.name, &ext.fields)?;
+                }
+                TypeExtension::Union(ext) => {
+                    let target = extend(&mut types, &ext.name, TypeKind::Union)?;
+                    target.members.extend(ext.types.iter().cloned());
+                }
+                TypeExtension::Scalar(ext) => {
+                    extend(&mut types, &ext.name, TypeKind::Scalar)?;
+                }
+                TypeExtension::Enum(ext) => {
+                    extend(&mut types, &ext.name, TypeKind::Enum)?;
+                }
+                TypeExtension::InputObject(ext) => {
+                    extend(&mut types, &ext.name, TypeKind::Input)?;
+                }
+            }
+        }
+    }
+
+    // Every name the engine has to resolve is declared, and is of a kind that
+    // can stand there.
+    let kind_of = |name: &str| -> Option<TypeKind> {
+        match types.get(name) {
+            Some(found) => Some(found.kind),
+            None if BUILT_IN_SCALARS.contains(&name) => Some(TypeKind::Scalar),
+            None => None,
+        }
+    };
+    for (type_name, definition) in &types {
+        for (field_name, field) in &definition.fields {
+            match kind_of(&field.named_type) {
+                None => return Err(format!("Unknown type \"{}\".", field.named_type)),
+                Some(TypeKind::Input) => {
+                    return Err(format!(
+                        "The type of {type_name}.{field_name} must be an output type, not the input type \"{}\".",
+                        field.named_type
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
+        for interface in &definition.interfaces {
+            if kind_of(interface) != Some(TypeKind::Interface) {
+                return Err(format!(
+                    "Type {type_name} can only implement interface types, and \"{interface}\" is not one."
+                ));
+            }
+        }
+        for member in &definition.members {
+            if kind_of(member) != Some(TypeKind::Object) {
+                return Err(format!(
+                    "Union type {type_name} can only include object types, and \"{member}\" is not one."
+                ));
+            }
+        }
+    }
+    Ok(types)
 }
 
 #[cfg(test)]
@@ -933,8 +1288,8 @@ mod tests {
         // only once the budget is gone, so it is the fragment count that stops it.
         let doc = doubling_chain(30);
         let limits = ParseLimits {
-            max_depth: 12,
             max_fields: 50,
+            ..ParseLimits::default()
         };
         let result = parse_graphql_operation(&doc, None, limits);
         assert_eq!(
@@ -955,7 +1310,7 @@ mod tests {
     fn depth_is_bounded_while_expanding() {
         let limits = ParseLimits {
             max_depth: 2,
-            max_fields: 1000,
+            ..ParseLimits::default()
         };
         let deep = parse_graphql_operation("{ a { b { c } } }", None, limits);
         assert_eq!(
@@ -973,31 +1328,234 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_arg_types_are_extracted() {
-        let sdl = "type Query { task(id: Int!, tag: String, size: Int! = 10): Task count(ids: [ID!]): Int } type Task { id: Int } extend type Query { me: Task }";
-        let types = parse_schema_arg_types(sdl).expect("schema parses");
-        let task = types.get("Query.task").expect("Query.task args");
-        let id = task.get("id").expect("id");
+    fn test_schema_types_are_extracted() {
+        let sdl = "type Query { task(id: Int!, tag: String, size: Int! = 10): Task count(ids: [ID!]): Int tasks: [Task!]! } type Task { id: Int } extend type Query { me: Task }";
+        let types = parse_schema_types(sdl).expect("schema parses");
+        let query = types.get("Query").expect("Query");
+        assert_eq!(query.kind, TypeKind::Object);
+        let task = query.fields.get("task").expect("Query.task");
+        assert_eq!(task.field_type, "Task");
+        let id = task.args.get("id").expect("id");
         assert_eq!(id.named_type, "Int");
         assert_eq!(id.arg_type, "Int!");
         assert!(id.required);
-        assert!(!task.get("tag").expect("tag").required);
+        assert!(!task.args.get("tag").expect("tag").required);
         // Non-null with a default is not required (graphql-js isRequiredArgument).
-        let size = task.get("size").expect("size");
+        let size = task.args.get("size").expect("size");
         assert!(!size.required);
         assert_eq!(size.default_value, Some(serde_json::json!(10)));
         // List + NonNull are unwrapped to the underlying named type.
-        let count = types.get("Query.count").expect("Query.count args");
-        assert_eq!(count.get("ids").expect("ids").named_type, "ID");
+        let count = query.fields.get("count").expect("Query.count");
+        assert_eq!(count.args.get("ids").expect("ids").named_type, "ID");
+        // The return type is kept as written, next to its named type.
+        let tasks = query.fields.get("tasks").expect("Query.tasks");
+        assert_eq!(tasks.field_type, "[Task!]!");
+        assert_eq!(tasks.named_type, "Task");
         // A field with no arguments is listed with none, so an argument sent
         // to it can be refused.
-        assert_eq!(types.get("Task.id").map(BTreeMap::len), Some(0));
+        let task_type = types.get("Task").expect("Task");
+        assert_eq!(task_type.fields.get("id").map(|f| f.args.len()), Some(0));
         // `extend type` fields are included.
-        assert!(types.contains_key("Query.me"));
+        assert!(query.fields.contains_key("me"));
+    }
+
+    #[test]
+    fn abstract_types_and_leaf_types_are_listed_by_kind() {
+        let sdl = "scalar Date enum Status { OPEN DONE } input Filter { status: Status } \
+            interface Node { id: ID! } \
+            type User implements Node { id: ID! name: String joined: Date } \
+            type Task implements Node { id: ID! status: Status } \
+            union Result = User | Task \
+            type Query { node: Node search(filter: Filter): [Result!] } \
+            extend union Result = Query";
+        let types = parse_schema_types(sdl).expect("schema parses");
+        assert_eq!(types["Date"].kind, TypeKind::Scalar);
+        assert_eq!(types["Status"].kind, TypeKind::Enum);
+        assert_eq!(types["Filter"].kind, TypeKind::Input);
+        assert_eq!(types["Node"].kind, TypeKind::Interface);
+        assert!(types["Node"].fields.contains_key("id"));
+        assert_eq!(types["User"].interfaces, vec!["Node".to_string()]);
+        assert_eq!(types["Result"].kind, TypeKind::Union);
+        assert_eq!(
+            types["Result"].members,
+            vec!["User".to_string(), "Task".to_string(), "Query".to_string()]
+        );
+        // What crosses to the engine is lower-case.
+        let json = serde_json::to_value(&types["Result"]).expect("serializes");
+        assert_eq!(json["kind"], "union");
     }
 
     #[test]
     fn an_unparseable_schema_is_an_error() {
-        assert!(parse_schema_arg_types("type Query {").is_err());
+        assert!(parse_schema_types("type Query {").is_err());
+    }
+
+    #[test]
+    fn a_schema_naming_a_type_it_does_not_declare_is_an_error() {
+        // The engine could not tell whether `owner` is an object to project
+        // or a scalar to send whole.
+        assert_eq!(
+            parse_schema_types("type Query { owner: Usr }"),
+            Err("Unknown type \"Usr\".".to_string())
+        );
+        assert!(parse_schema_types("type Query { a: Int } union U = Query | Missing").is_err());
+        assert!(parse_schema_types("type Query implements Missing { a: Int }").is_err());
+        // An input type is not something a field can return.
+        assert!(parse_schema_types("input In { a: Int } type Query { a: In }").is_err());
+        assert_eq!(
+            parse_schema_types("type Query { a: Int } type Query { b: Int }"),
+            Err("There can be only one type named \"Query\".".to_string())
+        );
+        assert!(parse_schema_types("type Query { a: Int } extend union Query = Query").is_err());
+    }
+
+    #[test]
+    fn a_field_carries_the_type_condition_of_its_fragment() {
+        let result = parse_graphql_query(
+            "{ node { id ... on User { name ... on Node { id } } ...T ... { plain } } } \
+             fragment T on Task { title owner { id } }",
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.type_names, vec!["User", "Node", "Task"]);
+        assert_eq!(
+            result.type_conditions,
+            vec![
+                TypeConditionLink {
+                    name: 0,
+                    parent: None
+                },
+                TypeConditionLink {
+                    name: 1,
+                    parent: Some(0)
+                },
+                TypeConditionLink {
+                    name: 2,
+                    parent: None
+                },
+            ]
+        );
+        let conditions: Vec<(&str, Option<usize>)> = result.fields[0]
+            .sub_fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.condition))
+            .collect();
+        assert_eq!(
+            conditions,
+            vec![
+                ("id", None),
+                ("name", Some(0)),
+                ("id", Some(1)),
+                ("title", Some(2)),
+                ("owner", Some(2)),
+                // `... { plain }` has no condition of its own.
+                ("plain", None),
+            ]
+        );
+        // A field's own selection starts again from the field's type.
+        let owner = &result.fields[0].sub_fields[4];
+        assert_eq!(owner.sub_fields[0].condition, None);
+    }
+
+    #[test]
+    fn a_fragment_spread_many_times_stores_its_condition_once() {
+        let spreads = "...F ".repeat(200);
+        let result = parse_graphql_query(&format!(
+            "{{ node {{ {spreads} }} }} fragment F on User {{ id }}"
+        ));
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.fields[0].sub_fields.len(), 200);
+        assert_eq!(result.type_names.len(), 1);
+        assert_eq!(result.type_conditions.len(), 1);
+    }
+
+    /// `{ f(a: [$v0 $v1 … ]) }`: one field, `n` undeclared variables.
+    fn undeclared_variables(n: usize) -> String {
+        let names: Vec<String> = (0..n).map(|i| format!("$v{i}")).collect();
+        format!("{{ f(a: [{}]) }}", names.join(" "))
+    }
+
+    #[test]
+    fn validation_stops_at_the_error_limit() {
+        let result = parse_graphql_query(&undeclared_variables(250));
+        // The first 100, then the notice: nothing past it is looked at.
+        assert_eq!(result.errors.len(), 101);
+        assert_eq!(result.errors[0], "Variable \"$v0\" is not defined.");
+        assert_eq!(result.errors[99], "Variable \"$v99\" is not defined.");
+        assert_eq!(result.errors[100], TOO_MANY_ERRORS);
+        assert!(result.fields.is_empty());
+
+        let under = parse_graphql_query(&undeclared_variables(100));
+        assert_eq!(under.errors.len(), 100);
+        assert!(!under.errors.contains(&TOO_MANY_ERRORS.to_string()));
+    }
+
+    #[test]
+    fn the_error_limit_is_a_parse_limit() {
+        let limits = ParseLimits {
+            max_errors: 3,
+            ..ParseLimits::default()
+        };
+        let result = parse_graphql_operation(&undeclared_variables(10), None, limits);
+        assert_eq!(result.errors.len(), 4);
+        assert_eq!(result.errors[3], TOO_MANY_ERRORS);
+    }
+
+    #[test]
+    fn the_error_limit_covers_every_kind_of_error() {
+        let limits = ParseLimits {
+            max_errors: 2,
+            ..ParseLimits::default()
+        };
+        // Unknown fragments spread by the operation.
+        let unknown = parse_graphql_operation("{ ...A ...B ...C ...D }", None, limits);
+        assert_eq!(unknown.errors.len(), 3);
+        assert_eq!(unknown.errors[2], TOO_MANY_ERRORS);
+        // Unknown fragments spread by a fragment.
+        let nested = parse_graphql_operation(
+            "{ ...F } fragment F on Query { ...A ...B ...C ...D }",
+            None,
+            limits,
+        );
+        assert_eq!(
+            nested.errors.last().map(String::as_str),
+            Some(TOO_MANY_ERRORS)
+        );
+        // Duplicate fragment names.
+        let duplicates = parse_graphql_operation(
+            "{ a } fragment A on Q { a } fragment A on Q { a } fragment B on Q { a } \
+             fragment B on Q { a } fragment C on Q { a } fragment C on Q { a }",
+            None,
+            limits,
+        );
+        assert_eq!(duplicates.errors.len(), 3);
+        // Fragment cycles.
+        let cycles = parse_graphql_operation(
+            "{ a } fragment A on Q { ...A } fragment B on Q { ...B } fragment C on Q { ...C }",
+            None,
+            limits,
+        );
+        assert_eq!(cycles.errors.len(), 3);
+        assert_eq!(cycles.errors[2], TOO_MANY_ERRORS);
+        // Duplicate variables, and literals out of range.
+        let variables = parse_graphql_operation(
+            "query($a: Int $a: Int $b: Int $b: Int $c: Int $c: Int) { a }",
+            None,
+            limits,
+        );
+        assert_eq!(variables.errors.len(), 3);
+        let literals = parse_graphql_operation("{ f(a: 1e400, b: 1e400, c: 1e400) }", None, limits);
+        assert_eq!(literals.errors.len(), 3);
+    }
+
+    #[test]
+    fn a_repeated_error_is_reported_once() {
+        let result = parse_graphql_query("{ a(x: $v) b(x: $v) c(x: [$v $v]) ...M ...M }");
+        assert_eq!(
+            result.errors,
+            vec![
+                "Variable \"$v\" is not defined.".to_string(),
+                "Unknown fragment \"M\".".to_string()
+            ]
+        );
     }
 }

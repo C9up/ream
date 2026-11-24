@@ -23,6 +23,7 @@ import {
   E_EVENTS_INVALID_ARGUMENT,
   E_EVENTS_MISSING_LISTENER_METHOD,
 } from '../errors/codes.js'
+import { callNativeAsync, fromNativeError } from '../errors/native.js'
 import { safeJsonParse } from '../utils/safeJsonParse.js'
 import { type BufferedEventName, EventsBuffer } from './EventsBuffer.js'
 import type { EventBus } from './native.js'
@@ -298,7 +299,9 @@ export class Emitter {
     const ids = [...this.#anySubscriptions.values()].flatMap((set) => [...set])
     this.#anySubscriptions.clear()
     for (const id of ids) {
-      void this.#bus.unsubscribe(id).catch((err: unknown) => this.#emitError('emitter:offAny', err))
+      void this.#bus
+        .unsubscribe(id)
+        .catch((err: unknown) => this.#emitError('emitter:offAny', fromNativeError(err)))
     }
   }
 
@@ -495,7 +498,7 @@ export class Emitter {
       return
     }
     void this.#bus.emit(event, payload, correlationStorage.getStore()).catch((err: unknown) => {
-      this.#emitError(event, err)
+      this.#emitError(event, fromNativeError(err))
     })
   }
 
@@ -675,7 +678,7 @@ export class Emitter {
    */
   async offAny(listenerOrId: number | AnyListener): Promise<this> {
     if (typeof listenerOrId === 'number') {
-      await this.#bus.unsubscribe(listenerOrId)
+      await callNativeAsync(() => this.#bus.unsubscribe(listenerOrId))
       for (const ids of this.#anySubscriptions.values()) ids.delete(listenerOrId)
       return this
     }
@@ -683,7 +686,7 @@ export class Emitter {
     const ids = this.#anySubscriptions.get(listenerOrId)
     if (!ids) return this
     this.#anySubscriptions.delete(listenerOrId)
-    await Promise.all([...ids].map((id) => this.#bus.unsubscribe(id)))
+    await Promise.all([...ids].map((id) => callNativeAsync(() => this.#bus.unsubscribe(id))))
     return this
   }
 
@@ -703,11 +706,10 @@ export class Emitter {
    * responder registered with {@link onRequest} runs under it.
    */
   async request<T = unknown>(name: string, data: unknown, timeoutMs = 5000): Promise<T> {
-    const result = await this.#bus.request(
-      name,
-      JSON.stringify(data),
-      timeoutMs,
-      correlationStorage.getStore(),
+    // A request no handler answers, or that times out, rejects with its
+    // coded error (E_EVENTS_NO_REQUEST_HANDLER, E_EVENTS_TIMEOUT…).
+    const result = await callNativeAsync(() =>
+      this.#bus.request(name, JSON.stringify(data), timeoutMs, correlationStorage.getStore()),
     )
     try {
       return JSON.parse(result) as T
@@ -726,15 +728,37 @@ export class Emitter {
    *
    * The handler runs with the requester's correlation id
    * (`getCorrelationId()`).
+   *
+   * A handler that throws or rejects ends the request at once: the
+   * requester's `request()` rejects with `E_EVENTS_HANDLER_FAILED` (carrying
+   * the handler's message) and the failure is reported like a listener's
+   * (`onError` / `emitter:error`). It never leaves through the native
+   * callback, where it would be an uncaught exception that ends the process.
    */
   onRequest(
     name: string,
     handler: (eventJson: string, reply: (response: string) => void) => void,
   ): void {
-    this.#bus.onRequest(name, (eventJson: string, reply: (response: string) => void) => {
-      const { correlationId } = readDelivery(eventJson, name)
-      correlationStorage.run(correlationId, () => handler(eventJson, reply))
-    })
+    this.#bus.onRequest(
+      name,
+      (eventJson: string, reply: (response: string) => void, fail: (message: string) => void) => {
+        const refuse = (err: unknown): void => {
+          this.#emitError(name, err)
+          fail(`Request handler for '${name}' failed: ${errorMessage(err)}`)
+        }
+        const { correlationId } = readDelivery(eventJson, name)
+        correlationStorage.run(correlationId, () => {
+          let outcome: unknown
+          try {
+            outcome = handler(eventJson, reply)
+          } catch (err) {
+            refuse(err)
+            return
+          }
+          if (isThenable(outcome)) outcome.then(undefined, refuse)
+        })
+      },
+    )
   }
 
   // ─── Correlation context ──────────────────────────────────
@@ -766,7 +790,7 @@ export class Emitter {
 
   /** Get the number of Rust-side subscriptions. */
   async subscriptionCount(): Promise<number> {
-    return this.#bus.subscriptionCount()
+    return callNativeAsync(() => this.#bus.subscriptionCount())
   }
 }
 
@@ -894,6 +918,10 @@ async function importDefault(importer: LazyListenerImport): Promise<AnyListenerC
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {

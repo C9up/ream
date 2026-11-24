@@ -9,6 +9,7 @@
  * @implements MISS-22
  */
 
+import { guardsOfEveryLevel } from '../http/permissions.js'
 import type { RouteDefinition, Router } from '../router/Router.js'
 
 export interface OpenApiConfig {
@@ -199,8 +200,10 @@ export class OpenApiGenerator {
     }
 
     if (route.guards.length > 0) {
-      operation.security = route.guards.map((g) => ({ [g]: [] }))
-      for (const g of route.guards) securitySchemesUsed.add(g)
+      // The alternatives OpenAPI lists are the guards every level accepts.
+      const guards = guardsOfEveryLevel(route.guards)
+      operation.security = guards.map((g) => ({ [g]: [] }))
+      for (const g of guards) securitySchemesUsed.add(g)
     }
 
     if (route.validators.length > 0 && ['post', 'put', 'patch'].includes(method)) {

@@ -15,6 +15,7 @@
 import { performance } from 'node:perf_hooks'
 import type { Exception } from '@c9up/flare'
 import {
+  E_NATIVE_CALLBACK_FAILED,
   E_SCHEDULE_INVALID_CALLBACK,
   E_SCHEDULE_INVALID_ERROR_REPORTER,
   E_SCHEDULE_INVALID_EVENT_SINK,
@@ -28,6 +29,7 @@ import {
   E_SCHEDULER_INVALID_CRON,
   E_SCHEDULER_NATIVE_ERROR,
 } from '../errors/codes.js'
+import { readNativePayload } from '../errors/native.js'
 import { loadNapi } from '../helpers/napi-loader.js'
 import type { LockBackend } from './locks/LockBackend.js'
 import type { ErrorReporter } from './observability/ErrorReporter.js'
@@ -155,47 +157,30 @@ const NATIVE_ERRORS = {
   INVALID_CRON: E_SCHEDULER_INVALID_CRON,
   CRON_NO_FIRE: E_SCHEDULER_CRON_NO_FIRE,
   DUPLICATE_TASK: E_SCHEDULER_DUPLICATE_TASK,
+  E_NATIVE_CALLBACK_FAILED,
 } as const
 
 function isNativeErrorCode(code: unknown): code is keyof typeof NATIVE_ERRORS {
   return typeof code === 'string' && Object.hasOwn(NATIVE_ERRORS, code)
 }
 
-/** The fields of the JSON payload `ream_napi_core::ReamError` ships in a message. */
-function readNativePayload(message: string): { code: unknown; message: unknown; hint: unknown } {
-  try {
-    const parsed: unknown = JSON.parse(message)
-    if (typeof parsed !== 'object' || parsed === null)
-      return { code: undefined, message, hint: undefined }
-    return {
-      code: Reflect.get(parsed, 'code'),
-      message: Reflect.get(parsed, 'message'),
-      hint: Reflect.get(parsed, 'hint'),
-    }
-  } catch {
-    return { code: undefined, message, hint: undefined }
-  }
-}
-
 /**
  * Rethrow a native error as the scheduler error it means. The Rust side
  * ships `{ code, message, hint }` as JSON in the message; a refused cron
  * expression, one that never fires and a duplicate task name each have their
- * own code, and anything else (a poisoned lock, a caught panic, a message that
- * is not that JSON) is `E_SCHEDULER_NATIVE_ERROR`. The native error is the
- * `cause`.
+ * own code, a callback napi could not hold has the shared native one, and
+ * anything else (a poisoned lock, a caught panic, a message that is not that
+ * JSON) is `E_SCHEDULER_NATIVE_ERROR`. The native error is the `cause`.
  */
 function translateNativeError(e: unknown): Exception {
-  const raw = e instanceof Error ? e.message : String(e)
-  const payload = readNativePayload(raw)
-  const text = typeof payload.message === 'string' ? payload.message : raw
+  const payload = readNativePayload(e)
   const error = isNativeErrorCode(payload.code)
-    ? new NATIVE_ERRORS[payload.code]([text], { cause: e })
+    ? new NATIVE_ERRORS[payload.code]([payload.message], { cause: e })
     : new E_SCHEDULER_NATIVE_ERROR(
-        [typeof payload.code === 'string' ? `[${payload.code}] ${text}` : text],
+        [payload.code === undefined ? payload.message : `[${payload.code}] ${payload.message}`],
         { cause: e },
       )
-  if (typeof payload.hint === 'string') error.help = payload.hint
+  if (payload.hint !== undefined) error.help = payload.hint
   return error
 }
 

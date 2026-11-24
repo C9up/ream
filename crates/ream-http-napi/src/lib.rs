@@ -14,7 +14,7 @@ use ream_http::{
     ReamServer, SendError, ShieldConfig, ShieldFilter, StreamRegistry, TrustedProxies,
     WebSocketEvent, WebSocketLimits, WebSocketRegistry,
 };
-use ream_napi_core::callback::FatalThreadsafeFunction;
+use ream_napi_core::callback::{callback_failed, FatalThreadsafeFunction};
 use ream_napi_core::catch_unwind_napi;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -131,6 +131,18 @@ pub struct NapiGrpcLimits {
     pub max_send_message_length: Option<f64>,
 }
 
+/// `E_SERVER_GRPC_INVALID_LIMIT`, with the option and the value as context:
+/// the TypeScript class takes both.
+fn invalid_grpc_limit(name: &str, value: f64) -> napi::Error {
+    ream_napi_core::ReamError::new(
+        "E_SERVER_GRPC_INVALID_LIMIT",
+        format!("`{name}` must be a whole number of bytes, or -1 for no limit, got {value}"),
+    )
+    .with_context("name", name)
+    .with_context("value", value.to_string())
+    .into()
+}
+
 /// A byte count, or `-1` for no bound — a JS number, so NaN, infinities and
 /// fractions are refused rather than truncated.
 fn grpc_limit(name: &str, value: Option<f64>, default: usize) -> napi::Result<usize> {
@@ -139,14 +151,9 @@ fn grpc_limit(name: &str, value: Option<f64>, default: usize) -> napi::Result<us
         None => Ok(default),
         Some(-1.0) => Ok(usize::MAX),
         Some(v) if v.is_finite() && v.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&v) => {
-            usize::try_from(v as u64).map_err(|_| {
-                invalid_config("INVALID_GRPC_LIMIT", format!("`{name}` is too large: {v}"))
-            })
+            usize::try_from(v as u64).map_err(|_| invalid_grpc_limit(name, v))
         }
-        Some(v) => Err(invalid_config(
-            "INVALID_GRPC_LIMIT",
-            format!("`{name}` must be a whole number of bytes, or -1 for no limit, got {v}"),
-        )),
+        Some(v) => Err(invalid_grpc_limit(name, v)),
     }
 }
 
@@ -212,8 +219,15 @@ pub struct NapiConnectionConfig {
     pub max_connections: Option<u32>,
 }
 
-fn invalid_config(code: &str, message: String) -> napi::Error {
-    ream_napi_core::ream_error!(code, message).into()
+/// A refusal under its code, as ream's JSON error: the TypeScript side reads
+/// the code back and raises the matching `errors` class.
+fn coded(code: &str, message: impl Into<String>) -> napi::Error {
+    ream_napi_core::ReamError::new(code, message).into()
+}
+
+/// A lock a panic left poisoned: `E_SERVER_LOCK_POISONED`.
+fn poisoned(what: &str) -> napi::Error {
+    coded("E_SERVER_LOCK_POISONED", format!("{what} mutex poisoned"))
 }
 
 fn merge_body_limit(
@@ -227,8 +241,8 @@ fn merge_body_limit(
     let limit = match given.limit {
         None => base.limit,
         Some(bytes) => u64::try_from(bytes).map_err(|_| {
-            invalid_config(
-                "INVALID_BODY_LIMIT",
+            coded(
+                "E_SERVER_INVALID_BODY_LIMIT",
                 format!("`{section}.limit` must be a byte count of zero or more, got {bytes}"),
             )
         })?,
@@ -244,8 +258,8 @@ fn part_count(name: &str, given: Option<i64>, default: usize) -> napi::Result<us
     match given {
         None => Ok(default),
         Some(count) => usize::try_from(count).map_err(|_| {
-            invalid_config(
-                "INVALID_BODY_LIMIT",
+            coded(
+                "E_SERVER_INVALID_BODY_LIMIT",
                 format!("`multipart.{name}` must be a count of zero or more, got {count}"),
             )
         }),
@@ -308,7 +322,7 @@ pub struct NapiWebSocketEvent {
 fn websocket_size(name: &str, value: Option<u32>, default: usize) -> napi::Result<usize> {
     match value {
         None => Ok(default),
-        Some(0) => Err(invalid_config(
+        Some(0) => Err(coded(
             "E_INVALID_WEBSOCKET_CONFIG",
             format!("`{name}` must be at least 1 byte"),
         )),
@@ -360,11 +374,10 @@ impl HyperServer {
         catch_unwind_napi(|| {
             let port_val = port.unwrap_or(0);
             if port_val > 65535 {
-                return Err(ream_napi_core::ream_error!(
-                    "INVALID_PORT",
-                    format!("Port {} exceeds maximum 65535", port_val)
-                )
-                .into());
+                return Err(coded(
+                    "E_SERVER_INVALID_PORT",
+                    format!("Port {} exceeds maximum 65535", port_val),
+                ));
             }
             let port = port_val as u16;
             let host = match host.as_deref() {
@@ -372,14 +385,13 @@ impl HyperServer {
                 Some(h) => match parse_bind_host(h) {
                     Some(addr) => addr,
                     None => {
-                        return Err(ream_napi_core::ream_error!(
-                            "INVALID_HOST",
+                        return Err(coded(
+                            "E_SERVER_INVALID_HOST",
                             format!(
                                 "Invalid host '{}' — expected an IPv4 or IPv6 address or 'localhost'",
                                 h
-                            )
-                        )
-                        .into());
+                            ),
+                        ));
                     }
                 },
             };
@@ -438,7 +450,8 @@ impl HyperServer {
             .build_callback(|ctx: ThreadsafeCallContext<serde_json::Value>| {
                 // Convert serde Value directly to JsObject (no JSON string intermediate)
                 Ok(ctx.env.to_js_value(&ctx.value)?.value().value)
-            })?;
+            })
+            .map_err(callback_failed)?;
 
         let tsfn = Arc::new(tsfn);
 
@@ -466,9 +479,7 @@ impl HyperServer {
         });
 
         // Store handler directly — std::sync::Mutex, no async needed
-        let mut guard = self.handler.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "Handler mutex poisoned")
-        })?;
+        let mut guard = self.handler.lock().map_err(|_| poisoned("Handler"))?;
         *guard = Some(handler);
 
         Ok(())
@@ -503,9 +514,10 @@ impl HyperServer {
                 )?,
             },
         };
-        *self.grpc_limits.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "gRPC limits mutex poisoned")
-        })? = limits;
+        *self
+            .grpc_limits
+            .lock()
+            .map_err(|_| poisoned("gRPC limits"))? = limits;
         let tsfn: FatalThreadsafeFunction<(i64, GrpcCall), NapiGrpcCall, Promise<NapiGrpcReply>> =
             callback
                 .build_threadsafe_function::<(i64, GrpcCall)>()
@@ -519,7 +531,8 @@ impl HyperServer {
                         message: Uint8Array::from(call.message.to_vec()),
                         ip: call.ip,
                     })
-                })?;
+                })
+                .map_err(callback_failed)?;
         let tsfn = Arc::new(tsfn);
         let cancel_slot = self.grpc_cancel.clone();
         // Ids are taken and queued under one lock, so JavaScript receives the
@@ -565,9 +578,10 @@ impl HyperServer {
             })
         });
 
-        let mut guard = self.grpc_handler.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "gRPC handler mutex poisoned")
-        })?;
+        let mut guard = self
+            .grpc_handler
+            .lock()
+            .map_err(|_| poisoned("gRPC handler"))?;
         *guard = Some(handler);
         Ok(())
     }
@@ -580,10 +594,12 @@ impl HyperServer {
         let tsfn: GrpcCancel = callback
             .build_threadsafe_function::<i64>()
             .callee_handled::<false>()
-            .build_callback(|ctx: ThreadsafeCallContext<i64>| Ok(ctx.value))?;
-        *self.grpc_cancel.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "gRPC cancel mutex poisoned")
-        })? = Some(Arc::new(tsfn));
+            .build_callback(|ctx: ThreadsafeCallContext<i64>| Ok(ctx.value))
+            .map_err(callback_failed)?;
+        *self
+            .grpc_cancel
+            .lock()
+            .map_err(|_| poisoned("gRPC cancel"))? = Some(Arc::new(tsfn));
         Ok(())
     }
 
@@ -596,13 +612,11 @@ impl HyperServer {
     #[napi]
     pub fn configure_trusted_proxies(&self, cidrs: Vec<String>) -> napi::Result<()> {
         let compiled = TrustedProxies::compile(&cidrs)
-            .map_err(|error| invalid_config("INVALID_TRUSTED_PROXY", error.to_string()))?;
-        let mut guard = self.trusted_proxies.lock().map_err(|_| {
-            napi::Error::new(
-                napi::Status::GenericFailure,
-                "Trusted-proxies mutex poisoned",
-            )
-        })?;
+            .map_err(|error| coded("E_SERVER_INVALID_TRUSTED_PROXY", error.to_string()))?;
+        let mut guard = self
+            .trusted_proxies
+            .lock()
+            .map_err(|_| poisoned("Trusted-proxies"))?;
         *guard = compiled;
         Ok(())
     }
@@ -638,9 +652,10 @@ impl HyperServer {
             multipart,
             multipart_counts,
         };
-        let mut guard = self.body_limits.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "Body-limits mutex poisoned")
-        })?;
+        let mut guard = self
+            .body_limits
+            .lock()
+            .map_err(|_| poisoned("Body-limits"))?;
         *guard = limits;
         Ok(())
     }
@@ -661,12 +676,10 @@ impl HyperServer {
                 .max_connections
                 .map_or(defaults.max_connections, |max| max as usize),
         };
-        let mut guard = self.connection_limits.lock().map_err(|_| {
-            napi::Error::new(
-                napi::Status::GenericFailure,
-                "Connection-limits mutex poisoned",
-            )
-        })?;
+        let mut guard = self
+            .connection_limits
+            .lock()
+            .map_err(|_| poisoned("Connection-limits"))?;
         *guard = limits;
         Ok(())
     }
@@ -675,9 +688,10 @@ impl HyperServer {
     /// disable. Must be called BEFORE `listen()`.
     #[napi]
     pub fn configure_rate_limit(&self, config: Option<NapiRateLimitConfig>) -> napi::Result<()> {
-        let mut guard = self.rate_limiter.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "Rate-limiter mutex poisoned")
-        })?;
+        let mut guard = self
+            .rate_limiter
+            .lock()
+            .map_err(|_| poisoned("Rate-limiter"))?;
         *guard = config.map(|c| {
             Arc::new(RateLimiter::new(RateLimitConfig {
                 max: c.max,
@@ -692,10 +706,7 @@ impl HyperServer {
     /// when the server starts. Calling after `listen()` has no effect.
     #[napi]
     pub fn configure_shield(&self, config: NapiShieldConfig) -> napi::Result<()> {
-        let mut guard = self
-            .shield
-            .lock()
-            .map_err(|_| napi::Error::new(napi::Status::GenericFailure, "Shield mutex poisoned"))?;
+        let mut guard = self.shield.lock().map_err(|_| poisoned("Shield"))?;
         *guard = Some(ShieldConfig {
             path_traversal: config.path_traversal,
             param_pollution: config.param_pollution,
@@ -707,12 +718,10 @@ impl HyperServer {
     #[napi]
     pub async fn listen(&self) -> napi::Result<()> {
         let handler = {
-            let guard = self.handler.lock().map_err(|_| {
-                napi::Error::new(napi::Status::GenericFailure, "Handler mutex poisoned")
-            })?;
+            let guard = self.handler.lock().map_err(|_| poisoned("Handler"))?;
             guard.clone().ok_or_else(|| {
-                napi::Error::new(
-                    napi::Status::GenericFailure,
+                coded(
+                    "E_SERVER_NO_HANDLER",
                     "No handler registered. Call onRequest() before listen()",
                 )
             })?
@@ -728,17 +737,19 @@ impl HyperServer {
         let mut srv = ReamServer::new(port).with_host(self.host);
         srv.on_request(handler);
         let grpc_handler = {
-            let guard = self.grpc_handler.lock().map_err(|_| {
-                napi::Error::new(napi::Status::GenericFailure, "gRPC handler mutex poisoned")
-            })?;
+            let guard = self
+                .grpc_handler
+                .lock()
+                .map_err(|_| poisoned("gRPC handler"))?;
             guard.clone()
         };
         if let Some(grpc) = grpc_handler {
             srv.on_grpc(grpc);
         }
-        let grpc_limits = *self.grpc_limits.lock().map_err(|_| {
-            napi::Error::new(napi::Status::GenericFailure, "gRPC limits mutex poisoned")
-        })?;
+        let grpc_limits = *self
+            .grpc_limits
+            .lock()
+            .map_err(|_| poisoned("gRPC limits"))?;
         srv.set_grpc_limits(grpc_limits);
         srv.set_stream_registry(self.stream_registry.clone());
         srv.set_websockets(self.websockets.clone());
@@ -746,9 +757,7 @@ impl HyperServer {
         // Wire the shield filter if the JS side configured it before boot.
         // No call → no filter installed (server runs with `NoopFilter`).
         let shield = {
-            let guard = self.shield.lock().map_err(|_| {
-                napi::Error::new(napi::Status::GenericFailure, "Shield mutex poisoned")
-            })?;
+            let guard = self.shield.lock().map_err(|_| poisoned("Shield"))?;
             *guard
         };
         if let Some(config) = shield {
@@ -757,40 +766,38 @@ impl HyperServer {
 
         // Wire trusted-proxy CIDR list — drives `request.ip` resolution.
         let trusted = {
-            let guard = self.trusted_proxies.lock().map_err(|_| {
-                napi::Error::new(
-                    napi::Status::GenericFailure,
-                    "Trusted-proxies mutex poisoned",
-                )
-            })?;
+            let guard = self
+                .trusted_proxies
+                .lock()
+                .map_err(|_| poisoned("Trusted-proxies"))?;
             guard.clone()
         };
         srv.set_trusted_proxies(trusted);
 
         // Body limits and connection limits — applied at the socket.
         let body_limits = {
-            let guard = self.body_limits.lock().map_err(|_| {
-                napi::Error::new(napi::Status::GenericFailure, "Body-limits mutex poisoned")
-            })?;
+            let guard = self
+                .body_limits
+                .lock()
+                .map_err(|_| poisoned("Body-limits"))?;
             guard.clone()
         };
         srv.set_body_limits(body_limits);
         let connection_limits = {
-            let guard = self.connection_limits.lock().map_err(|_| {
-                napi::Error::new(
-                    napi::Status::GenericFailure,
-                    "Connection-limits mutex poisoned",
-                )
-            })?;
+            let guard = self
+                .connection_limits
+                .lock()
+                .map_err(|_| poisoned("Connection-limits"))?;
             *guard
         };
         srv.set_connection_limits(connection_limits);
 
         // Wire rate limiter — pre-NAPI throttle keyed by `request.ip`.
         let limiter = {
-            let guard = self.rate_limiter.lock().map_err(|_| {
-                napi::Error::new(napi::Status::GenericFailure, "Rate-limiter mutex poisoned")
-            })?;
+            let guard = self
+                .rate_limiter
+                .lock()
+                .map_err(|_| poisoned("Rate-limiter"))?;
             guard.clone()
         };
         srv.set_rate_limiter(limiter);
@@ -817,14 +824,14 @@ impl HyperServer {
         match ready_rx.await {
             Ok(None) => {} // Success
             Ok(Some(e)) => {
-                return Err(napi::Error::new(
-                    napi::Status::GenericFailure,
+                return Err(coded(
+                    "E_SERVER_BIND_FAILED",
                     format!("Server bind failed: {}", e),
                 ))
             }
             Err(_) => {
-                return Err(napi::Error::new(
-                    napi::Status::GenericFailure,
+                return Err(coded(
+                    "E_SERVER_BIND_FAILED",
                     "Server startup channel closed",
                 ))
             }
@@ -840,10 +847,7 @@ impl HyperServer {
         let srv = self.server.lock().await;
         match srv.as_ref() {
             Some(s) => Ok(s.actual_port().await as u32),
-            None => Err(napi::Error::new(
-                napi::Status::GenericFailure,
-                "Server not started",
-            )),
+            None => Err(coded("E_SERVER_NOT_STARTED", "Server not started")),
         }
     }
 
@@ -983,7 +987,8 @@ impl HyperServer {
         let tsfn: FatalThreadsafeFunction<(), ()> = callback
             .build_threadsafe_function::<()>()
             .callee_handled::<false>()
-            .build_callback(|_ctx: ThreadsafeCallContext<()>| Ok(()))?;
+            .build_callback(|_ctx: ThreadsafeCallContext<()>| Ok(()))
+            .map_err(callback_failed)?;
         let registry = self.stream_registry.clone();
         let rt = ream_napi_core::shared_runtime();
         rt.spawn(async move {
@@ -1075,19 +1080,18 @@ impl HyperServer {
                         reason: Some(reason),
                     },
                 })
-            })?;
+            })
+            .map_err(callback_failed)?;
         let tsfn = Arc::new(tsfn);
         let sink_tsfn = tsfn.clone();
         self.websockets
             .set_event_sink(Some(Arc::new(move |event: WebSocketEvent| {
                 sink_tsfn.call(event, ThreadsafeFunctionCallMode::NonBlocking);
             })));
-        *self.websocket_events.lock().map_err(|_| {
-            napi::Error::new(
-                napi::Status::GenericFailure,
-                "WebSocket events mutex poisoned",
-            )
-        })? = Some(tsfn);
+        *self
+            .websocket_events
+            .lock()
+            .map_err(|_| poisoned("WebSocket events"))? = Some(tsfn);
         Ok(())
     }
 
@@ -1140,16 +1144,16 @@ impl HyperServer {
             || ((1001..=1014).contains(&code) && ![1004, 1005, 1006].contains(&code))
             || (3000..=4999).contains(&code);
         if !sendable {
-            return Err(invalid_config(
+            return Err(coded(
                 "E_WEBSOCKET_CLOSE_CODE",
                 format!("{code} is not a close code an endpoint may send"),
             ));
         }
         let reason = reason.unwrap_or_default();
         if reason.len() > 123 {
-            return Err(invalid_config(
+            return Err(coded(
                 "E_WEBSOCKET_CLOSE_REASON",
-                "A close reason is at most 123 bytes of UTF-8".into(),
+                "A close reason is at most 123 bytes of UTF-8",
             ));
         }
         // `code` was range-checked above.
@@ -1180,7 +1184,7 @@ pub fn constant_time_eq(a: String, b: String) -> napi::Result<bool> {
 pub fn hmac_sign(data: String, secret: String) -> napi::Result<String> {
     catch_unwind_napi(|| {
         warden_engine::crypto::hmac_sign(&data, secret.as_bytes())
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+            .map_err(|e| coded("E_CRYPTO_FAILED", e))
     })
 }
 
@@ -1188,8 +1192,14 @@ pub fn hmac_sign(data: String, secret: String) -> napi::Result<String> {
 #[napi]
 pub fn hmac_verify(data: String, signature: String, secret: String) -> napi::Result<bool> {
     catch_unwind_napi(|| {
-        warden_engine::crypto::hmac_verify(&data, &signature, secret.as_bytes())
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+        // A signature that is not base64url is one that does not verify:
+        // `false`, as the Node fallback answers, never an error a caller
+        // could mistake for a server fault. The engine's only other refusal,
+        // a key HMAC cannot take, cannot happen: HMAC accepts any key length.
+        Ok(
+            warden_engine::crypto::hmac_verify(&data, &signature, secret.as_bytes())
+                .unwrap_or(false),
+        )
     })
 }
 
@@ -1197,8 +1207,7 @@ pub fn hmac_verify(data: String, signature: String, secret: String) -> napi::Res
 #[napi]
 pub fn random_bytes_base64(len: u32) -> napi::Result<String> {
     catch_unwind_napi(|| {
-        warden_engine::crypto::random_bytes(len as usize)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+        warden_engine::crypto::random_bytes(len as usize).map_err(|e| coded("E_CRYPTO_FAILED", e))
     })
 }
 
@@ -1206,8 +1215,7 @@ pub fn random_bytes_base64(len: u32) -> napi::Result<String> {
 #[napi]
 pub fn random_hex(len: u32) -> napi::Result<String> {
     catch_unwind_napi(|| {
-        warden_engine::crypto::random_hex(len as usize)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e))
+        warden_engine::crypto::random_hex(len as usize).map_err(|e| coded("E_CRYPTO_FAILED", e))
     })
 }
 
@@ -1222,14 +1230,18 @@ pub struct GraphqlParseOptions {
     pub max_depth: Option<u32>,
     /// Most fields — and most fragment expansions — allowed (default 1000).
     pub max_complexity: Option<u32>,
+    /// Most validation errors collected before the parse stops (default 100).
+    pub max_errors: Option<u32>,
 }
 
 /// Parse a GraphQL query using the Rust graphql-parser crate.
-/// Returns JSON: { operation_type, operation_name, fields, variables, errors }.
+/// Returns JSON: { operation_type, operation_name, fields, variables,
+/// type_names, type_conditions, errors }.
 /// Invalid queries are rejected here — they never reach the TypeScript resolver layer.
 ///
 /// The limits are applied while fragments are expanded, so a small document
-/// of nested spreads cannot build a tree of millions of fields first.
+/// of nested spreads cannot build a tree of millions of fields first, and the
+/// errors stop at `maxErrors`.
 #[napi]
 pub fn graphql_parse(query: String, options: Option<GraphqlParseOptions>) -> napi::Result<String> {
     catch_unwind_napi(|| {
@@ -1244,6 +1256,9 @@ pub fn graphql_parse(query: String, options: Option<GraphqlParseOptions>) -> nap
                     max_fields: options
                         .max_complexity
                         .map_or(defaults.max_fields, |fields| fields as usize),
+                    max_errors: options
+                        .max_errors
+                        .map_or(defaults.max_errors, |errors| errors as usize),
                 },
             ),
             None => (None, defaults),
@@ -1251,7 +1266,7 @@ pub fn graphql_parse(query: String, options: Option<GraphqlParseOptions>) -> nap
         let result =
             ream_graphql::parse_graphql_operation(&query, operation_name.as_deref(), limits);
         serde_json::to_string(&result)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+            .map_err(|e| coded("E_GRAPHQL_SERIALIZE_FAILED", e.to_string()))
     })
 }
 
@@ -1261,21 +1276,23 @@ pub fn graphql_validate(query: String) -> napi::Result<String> {
     catch_unwind_napi(|| {
         let errors = ream_graphql::validate_query(&query);
         serde_json::to_string(&errors)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+            .map_err(|e| coded("E_GRAPHQL_SERIALIZE_FAILED", e.to_string()))
     })
 }
 
-/// Extract the declared arguments of every object field from a GraphQL SDL schema.
-/// Returns JSON: `{ "Type.field": { "argName": { type, named_type, required,
-/// default_value } } }` — what the TypeScript engine coerces argument values
-/// with and refuses undeclared or missing arguments by. Throws when the SDL
-/// does not parse.
+/// Extract the types of a GraphQL SDL schema.
+/// Returns JSON: `{ "Type": { kind, fields: { "field": { type, named_type,
+/// args: { "argName": { type, named_type, required, default_value } } } },
+/// interfaces, members } }` — what the TypeScript engine checks every
+/// selection against, coerces argument values with and reads a resolver's
+/// result by. Throws when the SDL does not parse or names a type it does not
+/// declare.
 #[napi]
-pub fn graphql_schema_arg_types(sdl: String) -> napi::Result<String> {
+pub fn graphql_schema_types(sdl: String) -> napi::Result<String> {
     catch_unwind_napi(|| {
-        let types = ream_graphql::parse_schema_arg_types(&sdl)
-            .map_err(|e| napi::Error::new(napi::Status::InvalidArg, e))?;
+        let types = ream_graphql::parse_schema_types(&sdl)
+            .map_err(|e| coded("E_GRAPHQL_INVALID_SCHEMA", e))?;
         serde_json::to_string(&types)
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("{}", e)))
+            .map_err(|e| coded("E_GRAPHQL_SERIALIZE_FAILED", e.to_string()))
     })
 }

@@ -56,17 +56,37 @@ describe('Request.method — _method spoofing (opt-in)', () => {
     expect(r.intended()).toBe('POST')
   })
 
-  it('honours _method on POST once enabled', () => {
-    const r = req({
-      method: 'POST',
-      body: JSON.stringify({ _method: 'delete' }),
-      headers: { 'content-type': 'application/json' },
-    })
-    r.setParsedBody({ _method: 'delete' })
+  it('honours a query-string _method on POST once enabled', () => {
+    const r = req({ method: 'POST', query: '_method=delete' })
     r.setMethodSpoofing(true)
     expect(r.method()).toBe('DELETE')
     // intended() always reports the real verb.
     expect(r.intended()).toBe('POST')
+  })
+
+  it('never takes _method from the body: the request keeps the method it was routed with', () => {
+    const r = req({
+      method: 'POST',
+      body: '_method=GET&amount=1',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    })
+    r.setMethodSpoofing(true)
+    r.setInitialBody({ _method: 'GET', amount: '1' })
+    expect(r.method()).toBe('POST')
+    expect(r.intended()).toBe('POST')
+  })
+
+  it('a query-string _method wins over a body one, and a repeated or empty one is ignored', () => {
+    const both = req({ method: 'POST', query: '_method=DELETE' })
+    both.setMethodSpoofing(true)
+    both.setParsedBody({ _method: 'GET' })
+    expect(both.method()).toBe('DELETE')
+
+    for (const query of ['_method=GET&_method=DELETE', '_method=', '_method[]=GET']) {
+      const r = req({ method: 'POST', query })
+      r.setMethodSpoofing(true)
+      expect(r.method()).toBe('POST')
+    }
   })
 
   it('never spoofs a non-POST request even when enabled', () => {

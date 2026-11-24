@@ -35,7 +35,7 @@ pub use request::ReamRequest;
 pub use response::ReamResponse;
 pub use security::{FilterResult, NoopFilter, SecurityFilter, ShieldConfig, ShieldFilter};
 pub use server::{ReamServer, RequestHandler, ResponseBody};
-pub use stream_registry::{StreamChunk, StreamId, StreamRegistry};
+pub use stream_registry::{StreamChunk, StreamId, StreamReceiver, StreamRegistry};
 pub use websocket::{
     EventSink, InboundPermit, MessageData, OriginPolicy, SendError, WebSocketEvent,
     WebSocketLimits, WebSocketRegistry,

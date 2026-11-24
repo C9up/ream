@@ -336,7 +336,12 @@ export {
 
 export type { ShutdownHandle, ShutdownOptions } from './GracefulShutdown.js'
 export { installGracefulShutdown } from './GracefulShutdown.js'
-export type { HealthChecker, HealthCheckResult, HealthStatus } from './HealthCheck.js'
+export type {
+  HealthChecker,
+  HealthCheckOptions,
+  HealthCheckResult,
+  HealthStatus,
+} from './HealthCheck.js'
 export { HealthCheck } from './HealthCheck.js'
 export type { HotReloadOptions } from './HotReload.js'
 export { startHotReload } from './HotReload.js'

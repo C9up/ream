@@ -16,7 +16,41 @@ use tokio::sync::Semaphore;
 /// Answers a request: the reply, or why there is none (the handler gave up
 /// waiting for its own answer, for instance). Never a panic: an error is a
 /// value the caller receives as such.
-pub type RequestHandler = Arc<dyn Fn(Event) -> Result<String, String> + Send + Sync>;
+pub type RequestHandler = Arc<dyn Fn(Event) -> Result<String, RequestError> + Send + Sync>;
+
+/// Why a request got no reply. Each kind has a stable code, so the caller
+/// branches on [`RequestError::code`] rather than on the wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestError {
+    /// No handler answers this name.
+    NoHandler(String),
+    /// No reply within the timeout: the request's own, or the handler's.
+    Timeout(String),
+    /// The handler panicked, or refused with an error of its own.
+    Failed(String),
+}
+
+impl RequestError {
+    /// The error code the JavaScript side raises for this kind.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NoHandler(_) => "E_EVENTS_NO_REQUEST_HANDLER",
+            Self::Timeout(_) => "E_EVENTS_TIMEOUT",
+            Self::Failed(_) => "E_EVENTS_HANDLER_FAILED",
+        }
+    }
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoHandler(name) => write!(f, "No request handler for '{}'", name),
+            Self::Timeout(message) | Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for RequestError {}
 
 /// Default max retries for events stored via the event store.
 const DEFAULT_MAX_RETRIES: u8 = 3;
@@ -122,13 +156,22 @@ impl Bus {
     /// Send a request and await a response (with timeout).
     ///
     /// Returns the response data string, or an error on timeout/no handler.
-    pub async fn request(&self, name: &str, data: &str, timeout_ms: u64) -> Result<String, String> {
+    pub async fn request(
+        &self,
+        name: &str,
+        data: &str,
+        timeout_ms: u64,
+    ) -> Result<String, RequestError> {
         self.request_event(Event::new(name, data), timeout_ms).await
     }
 
     /// Send an existing event as a request — the caller sets its envelope
     /// (a correlation id carried out of band, for one).
-    pub async fn request_event(&self, event: Event, timeout_ms: u64) -> Result<String, String> {
+    pub async fn request_event(
+        &self,
+        event: Event,
+        timeout_ms: u64,
+    ) -> Result<String, RequestError> {
         let name = event.name.clone();
         let handler = {
             let handlers = self
@@ -138,7 +181,7 @@ impl Bus {
             handlers
                 .get(&name)
                 .cloned()
-                .ok_or_else(|| format!("No request handler for '{}'", name))?
+                .ok_or_else(|| RequestError::NoHandler(name.clone()))?
         }; // Guard dropped here — never held across an await.
 
         // Use tokio timeout
@@ -150,11 +193,11 @@ impl Bus {
 
         match result {
             Ok(Ok(reply)) => reply,
-            Ok(Err(e)) => Err(format!("Handler panicked: {:?}", e)),
-            Err(_) => Err(format!(
+            Ok(Err(e)) => Err(RequestError::Failed(format!("Handler panicked: {:?}", e))),
+            Err(_) => Err(RequestError::Timeout(format!(
                 "Request '{}' timed out after {}ms",
                 name, timeout_ms
-            )),
+            ))),
         }
     }
 
@@ -334,9 +377,10 @@ mod tests {
     #[tokio::test]
     async fn test_bus_request_no_handler() {
         let bus = Bus::new();
-        let result = bus.request("nonexistent", "{}", 1000).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No request handler"));
+        let error = bus.request("nonexistent", "{}", 1000).await.unwrap_err();
+        assert_eq!(error, RequestError::NoHandler("nonexistent".to_string()));
+        assert_eq!(error.code(), "E_EVENTS_NO_REQUEST_HANDLER");
+        assert_eq!(error.to_string(), "No request handler for 'nonexistent'");
     }
 
     #[tokio::test]
@@ -350,9 +394,9 @@ mod tests {
             }),
         );
 
-        let result = bus.request("slow", "{}", 50).await; // 50ms timeout
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("timed out"));
+        let error = bus.request("slow", "{}", 50).await.unwrap_err(); // 50ms timeout
+        assert_eq!(error.code(), "E_EVENTS_TIMEOUT");
+        assert_eq!(error.to_string(), "Request 'slow' timed out after 50ms");
     }
 
     #[tokio::test]
@@ -360,12 +404,28 @@ mod tests {
         let bus = Bus::new();
         bus.on_request(
             "gave.up",
-            Arc::new(|_| Err("request handler timed out after 10ms".to_string())),
+            Arc::new(|_| {
+                Err(RequestError::Timeout(
+                    "request handler timed out after 10ms".to_string(),
+                ))
+            }),
         );
 
         let error = bus.request("gave.up", "{}", 5000).await.unwrap_err();
-        assert_eq!(error, "request handler timed out after 10ms");
-        assert!(!error.contains("panicked"));
+        assert_eq!(
+            error,
+            RequestError::Timeout("request handler timed out after 10ms".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_panicking_handler_is_a_failed_request() {
+        let bus = Bus::new();
+        bus.on_request("boom", Arc::new(|_| panic!("handler bug")));
+
+        let error = bus.request("boom", "{}", 5000).await.unwrap_err();
+        assert_eq!(error.code(), "E_EVENTS_HANDLER_FAILED");
+        assert!(error.to_string().starts_with("Handler panicked"));
     }
 
     #[tokio::test]

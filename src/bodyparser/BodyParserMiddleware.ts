@@ -19,6 +19,7 @@ import { safeJsonParse } from '../utils/safeJsonParse.js'
 import { hydrateMultipartPayload } from './MultipartFile.js'
 import { parseSize } from './parseSize.js'
 import { parseQueryString, type QsParseOptions } from './qsParse.js'
+import { SniffBudget } from './sniff.js'
 
 export interface BodyParserConfig {
   /**
@@ -239,7 +240,14 @@ export default class BodyParserMiddleware {
         // Fingerprint each file's real type from its magic bytes BEFORE handlers
         // run, so `request.file(field, { extnames })` validates against the
         // detected type (not the attacker-controlled filename/header).
-        await Promise.all(files.map((file) => file.detectType()))
+        // One budget for the whole body, and the event loop is handed back
+        // between files: a body of many crafted files can neither take more
+        // than a bounded amount of work nor hold every other request meanwhile.
+        const budget = new SniffBudget()
+        for (const [index, file] of files.entries()) {
+          if (index > 0) await new Promise<void>((resolve) => setImmediate(resolve))
+          await file.detectType(budget)
+        }
         ctx.request.setParsedBody(fields)
         ctx.request.setFiles(files)
       }

@@ -405,13 +405,14 @@ describe('ream > Response/Request cookie signing (AdonisJS parity)', () => {
   it('encryptedCookie() encrypts on write and decrypts on read', () => {
     const res = new Response()
     res.setCookieSigner(signer)
-    res.encryptedCookie('secret', 'top')
+    // A plaintext long enough that random base64url cannot contain it by chance.
+    res.encryptedCookie('secret', 'plaintext-marker')
     const sc = res.getHeaders()['set-cookie'] ?? ''
-    expect(sc).not.toContain('top')
+    expect(sc).not.toContain('plaintext-marker')
     const enc = defined(sc.split(';')[0]).split('=').slice(1).join('=')
     const req = new Request(rawWithCookie('secret', enc), {})
     req.setCookieSigner(signer)
-    expect(req.encryptedCookie('secret')).toBe('top')
+    expect(req.encryptedCookie('secret')).toBe('plaintext-marker')
   })
 
   it('encryptedCookie() refuses a value issued under another cookie name', () => {

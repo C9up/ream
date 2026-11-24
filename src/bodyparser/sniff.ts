@@ -21,6 +21,13 @@
  * - Inside a gzip stream only the first {@link SAMPLE} decompressed bytes are
  *   looked at, enough to tell a tarball apart, where the library inflates up
  *   to 16 MiB.
+ * - Only the first {@link SNIFF_PREFIX} bytes of a file are looked at, as the
+ *   upload parser upstream hands the library the first chunks of a part only.
+ * - The ZIP walk scans the bytes in place: where the library copies a window
+ *   of up to 256 KiB per entry, nothing is allocated or copied per entry here.
+ * - The ZIP work of all the files of one request is budgeted together
+ *   ({@link SniffBudget}): past it a file gets `undefined`, like a file whose
+ *   bytes carry no signature.
  *
  * The extensions this can answer are {@link sniffableExtensions}.
  */
@@ -38,6 +45,16 @@ type Found = SniffedFileType | undefined
 
 /** How much of the file the fixed-offset checks see, as upstream. */
 const SAMPLE = 4100
+/**
+ * How much of a file the detector is given at all. Every listed format is
+ * told apart well within it (a ZIP-based document names its parts in the
+ * first entries); what lies past it is never read.
+ */
+const SNIFF_PREFIX = 64 * 1024
+/** ZIP entries all the files of one request may walk together. */
+const REQUEST_ZIP_ENTRIES = 4096
+/** ZIP bytes all the files of one request may scan together. */
+const REQUEST_ZIP_BYTES = 4 * 1024 * 1024
 /** BOM and ID3 re-entries before giving up. */
 const MAXIMUM_REENTRY = 256
 /** Bytes copied out for inspection, at most, per detection. */
@@ -62,6 +79,36 @@ class EndOfInput extends Error {}
 class HardLimit extends Error {}
 /** A ZIP structure the walk cannot follow; recoverable, like upstream's list. */
 class ZipProblem extends Error {}
+/** The request's shared {@link SniffBudget} is spent: no answer for this file. */
+class BudgetSpent extends Error {}
+
+/**
+ * The detection work one request may do, shared by all its files. A body may
+ * carry a thousand small crafted ZIPs: bounded per file only, their walks add
+ * up to seconds of event-loop time. Create one per request and hand it to
+ * every {@link sniffFileType} call of that request.
+ */
+export class SniffBudget {
+  #zipEntries: number
+  #zipBytes: number
+
+  constructor(limits: { zipEntries?: number; zipBytes?: number } = {}) {
+    this.#zipEntries = limits.zipEntries ?? REQUEST_ZIP_ENTRIES
+    this.#zipBytes = limits.zipBytes ?? REQUEST_ZIP_BYTES
+  }
+
+  /** Account for one ZIP entry walked. */
+  spendZipEntry(): void {
+    this.#zipEntries--
+    if (this.#zipEntries < 0) throw new BudgetSpent()
+  }
+
+  /** Account for ZIP bytes scanned. */
+  spendZipBytes(count: number): void {
+    this.#zipBytes -= count
+    if (this.#zipBytes < 0) throw new BudgetSpent()
+  }
+}
 
 function found(ext: string, mime: string): SniffedFileType {
   return { ext, mime }
@@ -228,10 +275,12 @@ class Detector {
   readonly #cursor: Cursor
   #reentry = 0
   readonly #insideGzip: boolean
+  readonly #budget: SniffBudget
 
-  constructor(bytes: Uint8Array, insideGzip: boolean) {
+  constructor(bytes: Uint8Array, insideGzip: boolean, budget: SniffBudget) {
     this.#cursor = new Cursor(bytes)
     this.#insideGzip = insideGzip
+    this.#budget = budget
   }
 
   /** Every detector in turn, as `file-type`'s `parseTokenizer`. */
@@ -713,7 +762,7 @@ class Detector {
     } catch {
       return gz
     }
-    const nested = await new Detector(inner, true).parse()
+    const nested = await new Detector(inner, true, this.#budget).parse()
     return nested?.ext === 'tar' ? found('tar.gz', 'application/gzip') : gz
   }
 
@@ -901,6 +950,7 @@ class Detector {
   /** A ZIP archive and the formats built on one (OOXML, ODF, EPUB, iWork, JAR…). */
   async #zip(): Promise<Found> {
     const cursor = this.#cursor
+    const budget = this.#budget
     const openXml = {
       hasContentTypes: false,
       parsedContentTypes: false,
@@ -1002,13 +1052,14 @@ class Detector {
 
     /** Entry data of unknown size: up to the data descriptor that closes it. */
     const readUntilDescriptor = (buffer: boolean, maximum: number): Uint8Array | undefined => {
-      const sync = new Uint8Array(ZIP_SYNC_BUFFER)
       const parts: Uint8Array[] = []
       let consumed = 0
       for (;;) {
-        const length = cursor.peekInto(sync, ZIP_SYNC_BUFFER, true)
-        const window = sync.subarray(0, length)
+        // Scanned in place: a view, not a copy into a fresh 256 KiB buffer.
+        const window = cursor.rest().subarray(0, ZIP_SYNC_BUFFER)
+        const length = window.length
         const at = findDataDescriptor(window, consumed)
+        budget.spendZipBytes(at >= 0 ? at + 16 : length)
         const retained = at >= 0 ? 0 : length === ZIP_SYNC_BUFFER ? Math.min(15, length - 1) : 0
         const chunk = at >= 0 ? at : length - retained
         if (chunk === 0) break
@@ -1052,6 +1103,7 @@ class Detector {
         if (!entry) break
         entries++
         if (entries > MAXIMUM_ZIP_ENTRIES) throw new ZipProblem('ZIP entry count exceeds the limit')
+        budget.spendZipEntry()
         const next = onEntry(entry)
         stop = next.stop === true
         cursor.ignore(entry.extraFieldLength)
@@ -1068,6 +1120,9 @@ class Detector {
         }
       } while (!stop)
     } catch (error) {
+      // The request's budget is spent: no answer, rather than a guess from a
+      // walk cut short (`zip` for what may be a document).
+      if (error instanceof BudgetSpent) throw error
       if (openXml.parsingContentTypes) {
         openXml.parsingContentTypes = false
         openXml.unparseableContentTypes = true
@@ -1370,9 +1425,12 @@ async function decompressPrefix(
  * The real type of `bytes`, or `undefined` when they match no signature —
  * plain text (txt, csv, svg, json…) has none.
  */
-export async function sniffFileType(bytes: Uint8Array): Promise<SniffedFileType | undefined> {
+export async function sniffFileType(
+  bytes: Uint8Array,
+  budget: SniffBudget = new SniffBudget(),
+): Promise<SniffedFileType | undefined> {
   if (bytes.length <= 1) return undefined
-  return new Detector(bytes, false).parse()
+  return new Detector(bytes.subarray(0, SNIFF_PREFIX), false, budget).parse()
 }
 
 /** Every extension {@link sniffFileType} can answer. */

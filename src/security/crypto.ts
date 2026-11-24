@@ -7,6 +7,7 @@
  */
 
 import { createHmac, randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto'
+import { callNative } from '../errors/native.js'
 
 interface NapiCrypto {
   hmacSign(data: string, secret: string): string
@@ -41,12 +42,14 @@ export function hasNativeCrypto(): boolean {
 // ─── Exports ────────────────────────────────────────────────
 
 export function hmacSign(data: string, secret: string): string {
-  if (napi) return napi.hmacSign(data, secret)
+  const engine = napi
+  if (engine) return callNative(() => engine.hmacSign(data, secret))
   return createHmac('sha256', secret).update(data).digest('base64url')
 }
 
 export function hmacVerify(data: string, signature: string, secret: string): boolean {
-  if (napi) return napi.hmacVerify(data, signature, secret)
+  const engine = napi
+  if (engine) return callNative(() => engine.hmacVerify(data, signature, secret))
   const expected = createHmac('sha256', secret).update(data).digest('base64url')
   const a = Buffer.from(signature)
   const b = Buffer.from(expected)
@@ -55,12 +58,14 @@ export function hmacVerify(data: string, signature: string, secret: string): boo
 }
 
 export function randomBytesBase64(len: number): string {
-  if (napi) return napi.randomBytesBase64(len)
+  const engine = napi
+  if (engine) return callNative(() => engine.randomBytesBase64(len))
   return nodeRandomBytes(len).toString('base64url')
 }
 
 export function randomHex(len: number): string {
-  if (napi) return napi.randomHex(len)
+  const engine = napi
+  if (engine) return callNative(() => engine.randomHex(len))
   return nodeRandomBytes(len).toString('hex')
 }
 

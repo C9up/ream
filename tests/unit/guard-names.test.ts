@@ -101,7 +101,7 @@ describe('route .guard() gate', () => {
         async () => {
           ran = true
         },
-        { guards: ['jwt'] },
+        { guards: [['jwt']] },
       )
       const ctx = makeCtx()
       ctx.auth = authFor(scenario)
@@ -118,7 +118,7 @@ describe('route .guard() gate', () => {
   it('authenticates with the named guards, as authenticateUsing(guards)', async () => {
     attempts.length = 0
     const chain = new MiddlewareRegistry().buildChain([], [], async () => {}, {
-      guards: ['jwt', 'api'],
+      guards: [['jwt', 'api']],
     })
     const ctx = makeCtx()
     ctx.auth = authFor({ via: 'web', canAuthenticate: ['api'] })
@@ -128,7 +128,7 @@ describe('route .guard() gate', () => {
   })
 
   it('refuses with E_UNAUTHORIZED_ACCESS when no authenticator is there to ask', async () => {
-    const chain = new MiddlewareRegistry().buildChain([], [], async () => {}, { guards: ['jwt'] })
+    const chain = new MiddlewareRegistry().buildChain([], [], async () => {}, { guards: [['jwt']] })
     const ctx = makeCtx()
     ctx.auth = authFor({ via: 'web' })
     const refusal = chain(ctx, async () => {})

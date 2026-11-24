@@ -68,7 +68,7 @@ describe('router > fluent chaining', () => {
       .validate('CreateOrderDTO')
       .middleware('throttle')
     const result = router.match('POST', '/orders')
-    expect(result?.route.guards).toContain('jwt')
+    expect(result?.route.guards).toEqual([['jwt']])
     expect(result?.route.validators).toContain('CreateOrderDTO')
     expect(result?.route.middleware).toContain('throttle')
   })
@@ -139,7 +139,7 @@ describe('router > groups', () => {
     })
     const result = router.match('GET', '/protected')
     expect(result?.route.middleware).toContain('auth')
-    expect(result?.route.guards).toContain('jwt')
+    expect(result?.route.guards).toEqual([['jwt']])
   })
 
   it('legacy: group middleware prepended to route middleware', () => {

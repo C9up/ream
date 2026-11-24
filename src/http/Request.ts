@@ -101,6 +101,8 @@ export class Request extends Macroable {
   #cookieSigner?: CookieSigner
   #signedUrl?: SignedUrl
   #allowMethodSpoofing = false
+  /** {@link method} once spoofing is on: computed from the raw query string, once. */
+  #spoofedMethod: string | undefined
   #routeInfo?: { name?: string; pattern: string; reference?: string }
   #response?: { fresh(): boolean }
   #parsedBody: Dict<unknown> | undefined
@@ -150,20 +152,24 @@ export class Request extends Macroable {
   }
 
   /**
-   * The HTTP method, honouring `_method` form spoofing when enabled (AdonisJS
-   * `method`). With spoofing enabled and a real POST, the `_method` field
-   * (`PUT`/`PATCH`/`DELETE`) overrides — the classic HTML-form workaround.
-   * Spoofing is OFF by default (opt in via {@link setMethodSpoofing}). When it
-   * is on, the kernel matches the route with the spoofed method too, read
-   * from the query string (`?_method=DELETE`) since the body is not parsed
-   * yet at that point — as upstream.
+   * The HTTP method, honouring `_method` spoofing when enabled (AdonisJS
+   * `method`). With spoofing enabled and a real POST, a `_method` in the
+   * QUERY STRING (`?_method=DELETE`) overrides — the classic HTML-form
+   * workaround. Spoofing is OFF by default (opt in via
+   * {@link setMethodSpoofing}). This is exactly the method the kernel matched
+   * the route with.
+   *
+   * NAMED DEVIATION — upstream reads `_method` from the merged input, body
+   * included, while its router matched on the query string only (the body is
+   * not parsed yet when the route is found). One request then has two
+   * methods: a POST routed to the POST handler tells every later reader
+   * (CSRF check, body parser, audit log) it is a GET. A body `_method` never
+   * selected a route there either, so ignoring it loses nothing.
    */
   method(): string {
-    if (this.#allowMethodSpoofing && this.intended().toUpperCase() === 'POST') {
-      const spoofed = this.input('_method', this.intended())
-      if (typeof spoofed === 'string' && spoofed) return spoofed.toUpperCase()
-    }
-    return this.intended()
+    if (!this.#allowMethodSpoofing) return this.intended()
+    this.#spoofedMethod ??= spoofedMethod(this.intended(), this.#raw.query)
+    return this.#spoofedMethod
   }
 
   /** The real HTTP method, ignoring any `_method` spoofing (AdonisJS `intended`). */
@@ -1185,10 +1191,23 @@ export class Request extends Macroable {
 }
 
 /**
- * cookie-es `decode`: percent-decode a cookie name or value that holds a `%`,
- * keeping it raw when the escape is malformed.
+ * The method a spoofing-enabled request is routed with, and what
+ * `request.method()` answers: a POST carrying a non-empty `_method` in its
+ * query string takes it, upper-cased. Read from the query string only: the
+ * route is matched before any body parser runs, so `_method` belongs in the
+ * form's `action` URL.
  */
-function decodeCookieComponent(value: string): string {
+export function spoofedMethod(method: string, query: string): string {
+  if (method.toUpperCase() !== 'POST') return method
+  const spoofed = parseQueryString(query)._method
+  return typeof spoofed === 'string' && spoofed !== '' ? spoofed.toUpperCase() : method
+}
+
+/**
+ * cookie-es `decode`: percent-decode a cookie value that holds a `%`, keeping
+ * it raw when the escape is malformed.
+ */
+function decodeCookieValue(value: string): string {
   if (!value.includes('%')) return value
   try {
     return decodeURIComponent(value)
@@ -1197,12 +1216,17 @@ function decodeCookieComponent(value: string): string {
   }
 }
 
-/** Every cookie name and value percent-decoded; the first of two equal names wins. */
+/**
+ * Every cookie VALUE percent-decoded; each NAME kept exactly as received, as
+ * cookie-es does. Decoding names would merge `%73ession` into `session` (and
+ * `__%48ost-sid` into `__Host-sid`, a name the browser never treated as
+ * prefixed) after the first-wins de-duplication, letting a cookie planted by a
+ * sibling subdomain replace the application's own.
+ */
 function decodeCookieMap(cookies: Dict): Dict {
   const decoded: Dict = {}
   for (const [name, value] of Object.entries(cookies)) {
-    const key = decodeCookieComponent(name)
-    if (!Object.hasOwn(decoded, key)) decoded[key] = decodeCookieComponent(value)
+    if (!Object.hasOwn(decoded, name)) decoded[name] = decodeCookieValue(value)
   }
   return decoded
 }

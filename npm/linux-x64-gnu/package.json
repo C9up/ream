@@ -1,0 +1,34 @@
+{
+  "name": "@c9up/ream-linux-x64-gnu",
+  "version": "0.2.32",
+  "description": "The linux-x64-gnu native engine of @c9up/ream, installed by it as an optional dependency.",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "main": "index.linux-x64-gnu.node",
+  "files": [
+    "index.linux-x64-gnu.node",
+    "scheduler.linux-x64-gnu.node",
+    "events.linux-x64-gnu.node",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/C9up/ream.git",
+    "directory": "npm/linux-x64-gnu"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

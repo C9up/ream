@@ -4,7 +4,7 @@
  * @implements FR22, FR27
  *
  * Pipeline order (fixed):
- * 1. Global middleware
+ * 1. Global middleware, then the router stack (`router.use()`)
  * 2. Route/handler named middleware
  * 3. Route inline middleware
  * 4. Guard (auth + roles + permissions)
@@ -21,9 +21,10 @@ import {
   E_AUTHORIZATION_FAILURE,
   E_UNAUTHORIZED_ACCESS,
   E_VALIDATION_ERROR,
+  E_WARDEN_MFA_REQUIRED,
 } from '../http/Exception.js'
 import type { HttpContext } from '../http/HttpContext.js'
-import { authenticatedByGuards, holdsPermissions } from '../http/permissions.js'
+import { authenticatedByGuardLevels, holdsPermissions, holdsRoles } from '../http/permissions.js'
 
 export type MiddlewareFunction = (
   ctx: HttpContext,
@@ -110,10 +111,32 @@ export async function runValidator(
   throw new E_VALIDATOR_UNUSABLE()
 }
 
-/** Named middleware registry. */
+/**
+ * Another place named middleware are declared: the router's `named()`
+ * collection, which is where an application declares them.
+ */
+export interface NamedMiddlewareSource {
+  getNamedMiddleware(name: string): MiddlewareFunction | undefined
+  getNamedMiddlewareNames(): string[]
+}
+
+/**
+ * Named middleware registry.
+ *
+ * A name resolves to what `register()` put here first, then to the
+ * `source` given to the constructor — the application's registry is built
+ * over its router, so `route.middleware('auth')`, an RPC method's and a
+ * GraphQL resolver's `middleware: ['auth']` all find what
+ * `router.named({ auth })` declared.
+ */
 export class MiddlewareRegistry {
   #global: MiddlewareFunction[] = []
   #named: Map<string, MiddlewareFunction> = new Map()
+  readonly #source: NamedMiddlewareSource | undefined
+
+  constructor(source?: NamedMiddlewareSource) {
+    this.#source = source
+  }
 
   /** Register a global middleware (runs on every request). */
   use(middleware: MiddlewareFunction): void {
@@ -125,9 +148,14 @@ export class MiddlewareRegistry {
     this.#named.set(name, middleware)
   }
 
-  /** Get a named middleware. */
+  /** Get a named middleware: a registered one, else the source's. */
   get(name: string): MiddlewareFunction | undefined {
-    return this.#named.get(name)
+    return this.#named.get(name) ?? this.#source?.getNamedMiddleware(name)
+  }
+
+  /** Every name {@link get} resolves, the registered ones first. */
+  names(): string[] {
+    return [...new Set([...this.#named.keys(), ...(this.#source?.getNamedMiddlewareNames() ?? [])])]
   }
 
   /** Get all global middleware. */
@@ -141,26 +169,51 @@ export class MiddlewareRegistry {
     inlineMiddleware: MiddlewareFunction[],
     handler: MiddlewareFunction,
     options?: {
-      guards?: string[]
-      roles?: string[]
+      /** Guard levels: one guard every list accepts (see `authenticatedByGuardLevels`). */
+      guards?: string[][]
+      /** Role requirements: one role of EACH list (see `holdsRoles`). */
+      roles?: string[][]
       permissions?: string[]
+      /**
+       * The action carries `@RequireMfa()`: the request must be authenticated
+       * and its credential must have completed the MFA step-up
+       * (`ctx.auth.user.mfa === true`).
+       */
+      mfa?: boolean
       validators?: RuntimeValidator[]
       /** Turns an error into a response where it is thrown, see {@link composeMiddleware}. */
       onError?: MiddlewareErrorHandler
+      /**
+       * Further named middleware, looked up after this registry's own: the
+       * kernel passes its router, whose `named()` collection is where an
+       * application declares them.
+       */
+      named?: NamedMiddlewareSource
+      /**
+       * The router stack (`router.use()`). It runs ahead of the route's own
+       * middleware, named ones included, as upstream's route puts the router
+       * middleware first in its stack: the session and silent auth it mounts
+       * are what a named `auth` middleware reads.
+       */
+      routerMiddleware?: MiddlewareFunction[]
     },
   ): MiddlewareFunction {
+    const extra = options?.named
     const stack: MiddlewareFunction[] = [
       // 1. Global middleware
       ...this.#global,
+      // 1b. Router middleware
+      ...(options?.routerMiddleware ?? []),
       // 2. Named middleware — an unknown name is a hard error, NOT a silent
       // skip: a typo'd `.middleware('auht')` must never run the route
       // unprotected with zero diagnostics.
       ...namedMiddleware.map((name) => {
-        const mw = this.#named.get(name)
+        const mw = this.get(name) ?? extra?.getNamedMiddleware(name)
         if (mw === undefined) {
+          const known = new Set([...this.names(), ...(extra?.getNamedMiddlewareNames() ?? [])])
           throw new E_MIDDLEWARE_NOT_FOUND([
             `Named middleware '${name}' is not registered. ` +
-              `Registered: ${[...this.#named.keys()].join(', ') || '(none)'}`,
+              `Registered: ${[...known].join(', ') || '(none)'}`,
           ])
         }
         return mw
@@ -170,8 +223,16 @@ export class MiddlewareRegistry {
       // 4. Guard enforcement (throws exceptions instead of setting response)
       ...((options?.guards?.length ?? 0) > 0 ||
       (options?.roles?.length ?? 0) > 0 ||
-      (options?.permissions?.length ?? 0) > 0
-        ? [createGuardMiddleware(options?.guards ?? [], options?.roles, options?.permissions)]
+      (options?.permissions?.length ?? 0) > 0 ||
+      options?.mfa === true
+        ? [
+            createGuardMiddleware(
+              options?.guards ?? [],
+              options?.roles,
+              options?.permissions,
+              options?.mfa === true,
+            ),
+          ]
         : []),
       // 4b. Validation — runs AFTER auth (so unauthenticated requests 401 before
       // the body is inspected) and BEFORE the handler.
@@ -240,37 +301,36 @@ function composeMiddleware(
 
 /**
  * Guard enforcement middleware.
- * Throws `E_UNAUTHORIZED_ACCESS` (401) and `E_AUTHORIZATION_FAILURE` (403),
- * the codes @c9up/warden raises for the same refusals.
+ * Throws `E_UNAUTHORIZED_ACCESS` (401), `E_AUTHORIZATION_FAILURE` (403) and
+ * `E_WARDEN_MFA_REQUIRED` (403), the codes @c9up/warden raises for the same
+ * refusals, in the order its middleware checks them: authentication, roles
+ * and permissions, then the MFA step-up.
  */
 function createGuardMiddleware(
-  guards: string[],
-  roles?: string[],
+  guards: string[][],
+  roles?: string[][],
   permissions?: string[],
+  mfa = false,
 ): MiddlewareFunction {
   return async (ctx, next) => {
-    // A guard list names who may vouch for the request: authenticated by
-    // another guard is not enough (see authenticatedByGuards). A 401 from the
-    // guards themselves propagates, with its redirect or challenge.
-    if (guards.length > 0 && !(await authenticatedByGuards(ctx.auth, guards))) {
+    // Each guard level names who may vouch for the request, and the guard that
+    // did must be in every level (see authenticatedByGuardLevels). A 401 from
+    // the guards themselves propagates, with its redirect or challenge.
+    if (guards.length > 0 && !(await authenticatedByGuardLevels(ctx.auth, guards))) {
       throw new E_UNAUTHORIZED_ACCESS()
     }
-    const needsAuth = (roles && roles.length > 0) || (permissions && permissions.length > 0)
+    // Roles, permissions and the MFA step-up say who may run the action,
+    // which presupposes knowing who is asking: alone, without a guard, they
+    // still require an authenticated request.
+    const needsAuth = (roles && roles.length > 0) || (permissions && permissions.length > 0) || mfa
     if (needsAuth && !ctx.auth.isAuthenticated) {
       throw new E_UNAUTHORIZED_ACCESS()
     }
 
-    // Auth providers may expose roles/permissions at the top level OR nested
-    // under `user` (e.g. @c9up/warden sets `ctx.auth.user.roles`). Read both so
-    // route-level `.role()`/`.permission()` work regardless of the provider's
-    // shape — reading only the top level silently denied every authenticated
-    // user when warden was wired.
-    if (roles && roles.length > 0) {
-      const userRoles = ctx.auth.roles ?? ctx.auth.user?.roles ?? []
-      const hasAnyRole = roles.some((r) => userRoles.includes(r))
-      if (!hasAnyRole) {
-        throw new E_AUTHORIZATION_FAILURE()
-      }
+    // Every role requirement must be met: a group, a nested group or a
+    // decorator adds a requirement and never widens the route's own.
+    if (roles && roles.length > 0 && !holdsRoles(ctx.auth, roles)) {
+      throw new E_AUTHORIZATION_FAILURE()
     }
 
     // A token-authenticated request also needs the token to allow each one.
@@ -278,6 +338,13 @@ function createGuardMiddleware(
       if (!(await holdsPermissions(ctx.auth, permissions))) {
         throw new E_AUTHORIZATION_FAILURE()
       }
+    }
+
+    // `user.mfa` is the claim the guard sets from the credential the request
+    // came with. Strictly `true`: a truthy value some user payload happens to
+    // carry is not a completed step-up.
+    if (mfa && ctx.auth.user?.mfa !== true) {
+      throw new E_WARDEN_MFA_REQUIRED()
     }
 
     await next()

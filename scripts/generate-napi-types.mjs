@@ -42,7 +42,7 @@ const CALLBACK_REFINEMENTS = {
   },
   'EventBus.onRequest': {
     from: 'callback: (arg: unknown) => unknown',
-    to: 'callback: (eventJson: string, reply: (response: string) => void) => void',
+    to: 'callback: (eventJson: string, reply: (response: string) => void, fail: (message: string) => void) => void',
   },
   'HyperServer.onRequest': {
     // Only the argument is named. The `to` used to say

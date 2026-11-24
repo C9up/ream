@@ -49,10 +49,20 @@ describe('plain cookies > percent-encoding round trip', () => {
     })
   }
 
-  it('round-trips a packed plain cookie whose name needs encoding', () => {
+  it('reads a name as sent: an encoded name is not the decoded one', () => {
+    const request = incoming('my%20pref=1', true)
+    expect(request.plainCookie('my pref', undefined, { encoded: false })).toBeNull()
+    expect(request.plainCookie('my%20pref', undefined, { encoded: false })).toBe('1')
+  })
+
+  it('refuses to write a name outside the cookie token grammar instead of encoding it', () => {
+    for (const name of ['my pref', 'a;b', 'a=b', 'caf\u00e9', 'line\nbreak', '']) {
+      expect(() => new Response().plainCookie(name, { dark: true })).toThrow(
+        expect.objectContaining({ code: 'E_RESPONSE_INVALID_COOKIE' }),
+      )
+    }
     const response = new Response()
-    response.plainCookie('my pref', { dark: true })
-    const request = incoming(writtenPair(response), true)
-    expect(request.plainCookie('my pref')).toEqual({ dark: true })
+    response.plainCookie('__Host-pref!', 'x', { encode: false })
+    expect(writtenPair(response)).toBe('__Host-pref!=x')
   })
 })

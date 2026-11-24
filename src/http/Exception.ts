@@ -148,6 +148,36 @@ export class E_AUTHORIZATION_FAILURE extends Exception {
   }
 }
 
+/**
+ * A controller action declared `@RequireMfa()` was reached with a credential
+ * that did not complete the multi-factor step-up (`ctx.auth.user.mfa` is not
+ * `true`).
+ *
+ * NAMED DEVIATION from the `E_<PKG>_<REASON>` rule: the code is the one
+ * `@c9up/warden` answers with, under warden's name. The decorator is
+ * warden's, and its middleware and ream's route gate both enforce it: the
+ * refusal has to read the same whichever of the two raised it — same status,
+ * same code, same message, same body — so an application branches on one
+ * code. Ream does not depend on warden, so the class is its own: test the
+ * code, not the class, across the two.
+ */
+export class E_WARDEN_MFA_REQUIRED extends Exception {
+  static override status = 403
+  static override code = 'E_WARDEN_MFA_REQUIRED'
+  static override message = 'Multi-factor authentication is required for this action.'
+
+  /** Write the refusal: `403 { error: { code, message } }`, whatever the client accepts. */
+  async handle(error: E_WARDEN_MFA_REQUIRED, ctx: HttpContext): Promise<void> {
+    ctx.response.status(error.status)
+    ctx.response.json({
+      error: {
+        code: error.code ?? E_WARDEN_MFA_REQUIRED.code,
+        message: error.message,
+      },
+    })
+  }
+}
+
 /** The methods of a form submission, which a denial redirects back from. */
 const FORM_SUBMISSION_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
 

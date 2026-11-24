@@ -1,3 +1,4 @@
+import { callNativeAsync } from '../errors/native.js'
 import { checkEventsConfig } from './config.js'
 import { BaseEvent, Emitter } from './Emitter.js'
 import { EventBus } from './native.js'
@@ -72,6 +73,6 @@ export default class EventsProvider {
     BaseEvent.resetEmitter(this.#emitter)
     this.#emitter.clearAllListeners()
     const bus = await this.app.container.resolve<EventBus>(EventBus)
-    await bus.clear()
+    await callNativeAsync(() => bus.clear())
   }
 }

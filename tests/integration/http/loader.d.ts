@@ -6,4 +6,4 @@
  * declarations point at the generated NAPI bindings rather than restating
  * them: a second copy of a signature is a second thing to keep in step.
  */
-export { HyperServer } from '../../../src/native/generated.js'
+export { graphqlSchemaTypes, HyperServer, hmacVerify } from '../../../src/native/generated.js'

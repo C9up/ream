@@ -8,6 +8,7 @@ import {
   E_CANNOT_LOOKUP_ROUTE,
   E_DUPLICATE_ROUTE,
   E_DUPLICATE_ROUTE_NAME,
+  E_EMPTY_GATE_REQUIREMENT,
   E_INVALID_CONTROLLER_REFERENCE,
   E_INVALID_RESOURCE_NAME,
   E_INVALID_ROUTE_DOMAIN,
@@ -121,8 +122,19 @@ export interface RouteDefinition {
   controller?: { target: AnyConstructor; method: string }
   middleware: string[]
   inlineMiddleware: MiddlewareFunction[]
-  guards: string[]
-  roles: string[]
+  /**
+   * Guard levels. The request must be authenticated by a guard EVERY list
+   * names: a `.guard()` call, a group's `.guard()` and an `@Guard()` decorator
+   * each add a list, so a level restricts the guards and never adds one.
+   */
+  guards: string[][]
+  /**
+   * Role requirements. The user needs one role of EACH list: a `.role()` call,
+   * a group's `.role()` and each role of an `@Role()` decorator add a list, so
+   * every level restricts access and none widens it.
+   */
+  roles: string[][]
+  /** Permissions: the user needs every one. */
   permissions: string[]
   validators: string[]
   name?: string
@@ -344,7 +356,11 @@ export class RouteBuilder extends Macroable {
     })
   }
 
-  /** Add named middleware. */
+  /**
+   * Add named middleware, by the names `router.named()` declared. They run
+   * with no arguments: pass arguments with the factory instead,
+   * `.use(middleware.auth({ guards: ['web'] }))`.
+   */
   middleware(...names: string[]): this {
     return this.#each((route) => {
       route.middleware.push(...names)
@@ -358,22 +374,46 @@ export class RouteBuilder extends Macroable {
     })
   }
 
-  /** Add authentication guards. */
+  /**
+   * Require authentication by one of `guards`. Each call adds a level:
+   * `.guard('jwt', 'web')` accepts either guard, `.guard('jwt').guard('web')`
+   * accepts none (a request is authenticated by one guard), and a group's
+   * `.guard()` applies on top of the route's own.
+   *
+   * At least one guard must be named: `.guard()` throws
+   * `E_EMPTY_GATE_REQUIREMENT` when the route is declared. NAMED DEVIATION:
+   * upstream's `middleware.auth()` with no guard authenticates with the
+   * default guard, and its `auth({ guards: [] })` refuses every request. A
+   * rest parameter cannot tell the two apart — `.guard()` and
+   * `.guard(...listThatIsEmpty)` are the same call — and reading an empty
+   * list as "the default guard" would quietly move a route off the guards its
+   * author listed. Refusing at registration is the stricter reading of both,
+   * and it is found at boot. It used to add nothing, and the route stayed
+   * public.
+   */
   guard(...guards: string[]): this {
+    requireNamed(guards, '.guard()', this.#routes)
     return this.#each((route) => {
-      route.guards.push(...guards)
+      route.guards.push([...guards])
     })
   }
 
-  /** Require specific roles. */
+  /**
+   * Require one of `roles`. Each call adds a requirement: `.role('a', 'b')`
+   * lets a user with `a` or `b` through, `.role('a').role('b')` needs both,
+   * and a group's `.role()` applies on top of the route's own. At least one
+   * role must be named, as for {@link RouteBuilder.guard}.
+   */
   role(...roles: string[]): this {
+    requireNamed(roles, '.role()', this.#routes)
     return this.#each((route) => {
-      route.roles.push(...roles)
+      route.roles.push([...roles])
     })
   }
 
-  /** Require specific permissions. */
+  /** Require every one of `permissions`. At least one must be named. */
   permission(...permissions: string[]): this {
+    requireNamed(permissions, '.permission()', this.#routes)
     return this.#each((route) => {
       route.permissions.push(...permissions)
     })
@@ -512,6 +552,28 @@ export class RouteBuilder extends Macroable {
   }
 }
 
+/**
+ * Refuse a gate that names nothing: `.guard()`, `.role(...roles)` with a list
+ * that came out of configuration empty, `group({ guards: [] })`. Each reads
+ * as a requirement and would add none, leaving the routes open to every
+ * request with no error and no warning.
+ */
+function requireNamed(
+  names: readonly string[],
+  call: string,
+  routes: readonly RouteDefinition[],
+  owner: 'route' | 'group' = 'route',
+): void {
+  if (names.length > 0) return
+  const listed = routes.slice(0, 3).map((route) => `${route.method} ${route.path}`)
+  if (routes.length > listed.length) listed.push('…')
+  const where =
+    owner === 'route'
+      ? (listed[0] ?? 'route')
+      : `route group (${listed.length > 0 ? listed.join(', ') : 'no route'})`
+  throw new E_EMPTY_GATE_REQUIREMENT([where, call])
+}
+
 // ─── GroupBuilder ───────────────────────────────────────────
 
 /** Fluent group builder — returned by router.group(callback). */
@@ -541,7 +603,10 @@ export class GroupBuilder extends Macroable {
     return this
   }
 
-  /** Add middleware to all routes in the group. */
+  /**
+   * Add named middleware, by name, to all routes in the group — ahead of the
+   * routes' own. Arguments go through the factory: `.use(middleware.auth(args))`.
+   */
   middleware(...names: string[]): this {
     for (const route of this.#routes) {
       route.middleware = [...names, ...route.middleware]
@@ -557,10 +622,44 @@ export class GroupBuilder extends Macroable {
     return this
   }
 
-  /** Add guards to all routes in the group. */
+  /**
+   * Require authentication by one of `guards` on all routes in the group, as
+   * `group({ guards }, cb)` does. It is a level of its own, checked on top of
+   * each route's: a route's `.guard('web')` inside a group's `.guard('jwt')`
+   * accepts no request, never either guard. At least one guard must be
+   * named, as on a route.
+   */
   guard(...guards: string[]): this {
+    requireNamed(guards, '.guard()', this.#routes, 'group')
     for (const route of this.#routes) {
-      route.guards = [...guards, ...route.guards]
+      route.guards = [[...guards], ...route.guards]
+    }
+    return this
+  }
+
+  /**
+   * Require one of `roles` on all routes in the group, as `group({ roles }, cb)`
+   * does. It is a requirement of its own, checked on top of each route's: a
+   * route's `.role('editor')` inside a group's `.role('admin')` needs both an
+   * editor and an admin role, never either. At least one role must be named.
+   */
+  role(...roles: string[]): this {
+    requireNamed(roles, '.role()', this.#routes, 'group')
+    for (const route of this.#routes) {
+      route.roles = [[...roles], ...route.roles]
+    }
+    return this
+  }
+
+  /**
+   * Require every one of `permissions` on all routes in the group, as
+   * `group({ permissions }, cb)` does: they join each route's own, and the user
+   * needs all of them. At least one must be named.
+   */
+  permission(...permissions: string[]): this {
+    requireNamed(permissions, '.permission()', this.#routes, 'group')
+    for (const route of this.#routes) {
+      route.permissions = [...permissions, ...route.permissions]
     }
     return this
   }
@@ -893,6 +992,14 @@ export class OnRouteBuilder {
 
 // ─── Router ─────────────────────────────────────────────────
 
+/** Whether the loop that filled `record` set every one of `keys`. */
+function hasEvery<K extends string, V>(
+  record: Partial<Record<K, V>>,
+  keys: readonly K[],
+): record is Record<K, V> {
+  return keys.every((key) => record[key] !== undefined)
+}
+
 /** Main Router. */
 export class Router extends Macroable {
   #routes: RouteDefinition[] = []
@@ -946,20 +1053,40 @@ export class Router extends Macroable {
    *   export const middleware = router.named({
    *     auth: () => import('#middleware/auth_middleware'),
    *   })
-   *   router.get('/admin', [AdminController, 'index']).use([middleware.auth({ guards: ['web'] })])
+   *   router.get('/admin', [AdminController, 'index']).use(middleware.auth({ guards: ['web'] }))
    *
-   * By-name usage (`route.middleware('auth')`) still runs the middleware with
-   * no arguments — the factory form is only needed to pass `args` to `handle`.
+   * A route or group can also name it: `route.middleware('auth')` runs it with
+   * no arguments, the factory form is the one that passes `args` to `handle`.
+   * The kernel resolves those names when it is built, and a name nothing
+   * declares stops the application there (`E_MIDDLEWARE_NOT_FOUND`).
+   *
+   * NAMED DEVIATION — upstream's `named()` registers nothing and routes only
+   * take the factories' results, so a misspelt name cannot compile. ream keeps
+   * the by-name form its guides and route listings use, and makes up for the
+   * lost compile-time check with the boot-time one.
    */
-  named(
-    collection: Record<string, MiddlewareEntry>,
-  ): Record<string, (args?: unknown) => MiddlewareFunction> {
-    const factories: Record<string, (args?: unknown) => MiddlewareFunction> = {}
-    for (const [name, mw] of Object.entries(collection)) {
+  named<Name extends string>(
+    collection: Record<Name, MiddlewareEntry>,
+  ): Record<Name, (args?: unknown) => MiddlewareFunction> {
+    // Keyed by the collection's own names, as AdonisJS types it: under
+    // `noUncheckedIndexedAccess` a `Record<string, …>` made every
+    // `middleware.auth(…)` a possibly-undefined call, and a misspelt name
+    // compiled and only failed when the route file ran.
+    const factories: Partial<Record<Name, (args?: unknown) => MiddlewareFunction>> = {}
+    const names: Name[] = []
+    for (const name in collection) {
+      if (!Object.hasOwn(collection, name)) continue
+      const mw = collection[name]
       // By-name resolution (`route.middleware('auth')`) uses the no-arg form.
       this.#namedMiddleware.set(name, resolveMiddlewareEntry(mw))
       // The returned factory bakes in per-route args for inline `.use()`.
       factories[name] = resolveParametrizedMiddlewareEntry(mw)
+      names.push(name)
+    }
+    if (!hasEvery(factories, names)) {
+      // The loop above set one factory per name, so this cannot happen — and
+      // this is where that is stated rather than asserted past.
+      throw new E_REAM_INTERNAL(['A named middleware factory is missing'])
     }
     return factories
   }
@@ -992,6 +1119,11 @@ export class Router extends Macroable {
   /** Get a named middleware by name. */
   getNamedMiddleware(name: string): MiddlewareFunction | undefined {
     return this.#namedMiddleware.get(name)
+  }
+
+  /** The names `named()` declared. */
+  getNamedMiddlewareNames(): string[] {
+    return [...this.#namedMiddleware.keys()]
   }
 
   // ─── Route registration ───────────────────────────────────
@@ -1177,13 +1309,27 @@ export class Router extends Macroable {
     const childRouter = new Router()
     legacyCallback?.(childRouter)
 
+    // A list that is given names something: `guards: []` would read as a
+    // gate and protect nothing. Leave the key out for no requirement.
+    if (config.guards !== undefined) {
+      requireNamed(config.guards, 'guards: []', childRouter.#routes, 'group')
+    }
+    if (config.roles !== undefined) {
+      requireNamed(config.roles, 'roles: []', childRouter.#routes, 'group')
+    }
+    if (config.permissions !== undefined) {
+      requireNamed(config.permissions, 'permissions: []', childRouter.#routes, 'group')
+    }
+
     for (const route of childRouter.#routes) {
       this.#routes.push({
         ...route,
         path: (config.prefix ?? '') + route.path,
         middleware: [...(config.middleware ?? []), ...route.middleware],
-        guards: [...(config.guards ?? []), ...route.guards],
-        roles: [...(config.roles ?? []), ...route.roles],
+        // The group's guards are one level on top of the route's own.
+        guards: [...(config.guards ? [[...config.guards]] : []), ...route.guards],
+        // The group's roles are one requirement on top of the route's own.
+        roles: [...(config.roles ? [[...config.roles]] : []), ...route.roles],
         permissions: [...(config.permissions ?? []), ...route.permissions],
       })
     }

@@ -160,9 +160,9 @@ describe('security regressions > cookie SameSite=None requires Secure', () => {
     )
   })
 
-  it('Response.cookie throws when SameSite=None is paired with secure omitted', async () => {
+  it('Response.cookie throws when SameSite=None is paired with secure: false', async () => {
     const res = await signingResponse(Response)
-    expect(() => res.cookie('sid', 'abc', { sameSite: 'none' })).toThrow(
+    expect(() => res.cookie('sid', 'abc', { sameSite: 'none', secure: false })).toThrow(
       expect.objectContaining({
         code: 'E_RESPONSE_INVALID_COOKIE',
         message: expect.stringMatching(/SameSite=None requires Secure/),
@@ -196,10 +196,13 @@ describe('security regressions > cookie maxAge=0 emits Max-Age=0 (RFC 6265 delet
     expect(res.getHeaders()['set-cookie']).toContain('Max-Age=-1')
   })
 
-  it('Response.cookie maxAge omitted → no Max-Age attribute', async () => {
+  it('Response.cookie maxAge omitted → the 2h default; maxAge: undefined → no Max-Age (browser session)', async () => {
     const res = await signingResponse(Response)
     res.cookie('sid', 'abc', { path: '/' })
-    expect(res.getHeaders()['set-cookie']).not.toContain('Max-Age')
+    expect(res.getHeaders()['set-cookie']).toContain('Max-Age=7200')
+    const session = await signingResponse(Response)
+    session.cookie('sid', 'abc', { maxAge: undefined })
+    expect(session.getHeaders()['set-cookie']).not.toContain('Max-Age')
   })
 
   it('Response.cookie maxAge=3600 → Set-Cookie carries Max-Age=3600 (positive path)', async () => {

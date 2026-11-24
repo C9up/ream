@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { HealthCheck } from '../../src/HealthCheck.js'
 import { Response } from '../../src/http/Response.js'
 import { defined } from '../__helpers__/defined.js'
@@ -57,16 +57,50 @@ describe('health > HealthCheck', () => {
     expect(status.status).toBe('error')
   })
 
-  it('catches checker exceptions', async () => {
-    const health = new HealthCheck()
+  it('catches checker exceptions, reporting a fixed message and handing the error to onError', async () => {
+    const seen: Array<[string, unknown]> = []
+    const health = new HealthCheck({ onError: (name, error) => seen.push([name, error]) })
+    const thrown = new Error('connect ECONNREFUSED 10.0.3.17:5432')
     health.register('broken', () => {
-      throw new Error('boom')
+      throw thrown
     })
 
     const status = await health.check()
     expect(status.status).toBe('error')
     expect(defined(status.checks[0]).status).toBe('error')
-    expect(defined(status.checks[0]).message).toBe('boom')
+    expect(defined(status.checks[0]).message).toBe('Health check failed')
+    expect(seen).toEqual([['broken', thrown]])
+  })
+
+  it('logs the error of a failing check to stderr by default', async () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      const health = new HealthCheck()
+      health.register('db', () => {
+        throw new Error('password authentication failed for user "app"')
+      })
+      await health.check()
+      expect(write).toHaveBeenCalledWith(
+        `[health] check 'db' failed: Error: password authentication failed for user "app"\n`,
+      )
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it('handler answers the fixed message, never what the check threw', async () => {
+    const health = new HealthCheck({ onError: () => {} })
+    health.register('database', async () => {
+      throw new Error('connect ECONNREFUSED 10.0.3.17:5432')
+    })
+    const { response, run } = probe(health)
+    await run()
+
+    expect(response.getStatus()).toBe(503)
+    expect(response.getBody()).not.toContain('ECONNREFUSED')
+    expect(JSON.parse(response.getBody())).toMatchObject({
+      checks: [{ name: 'database', status: 'error', message: 'Health check failed' }],
+    })
   })
 
   it('supports async checkers', async () => {

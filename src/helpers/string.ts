@@ -15,8 +15,10 @@ function splitWords(s: string): string[] {
     s
       // Insert space before uppercase letters that follow lowercase letters or digits
       .replace(/([a-z\d])([A-Z])/g, '$1 $2')
-      // Insert space before uppercase letters followed by lowercase (handles "XMLParser" -> "XML Parser")
-      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      // Insert space before uppercase letters followed by lowercase (handles "XMLParser" -> "XML Parser").
+      // A lookahead, not `([A-Z]+)([A-Z][a-z])`: that one re-scanned the rest of
+      // a run of capitals from every position, quadratic in the run's length.
+      .replace(/([A-Z])(?=[A-Z][a-z])/g, '$1 ')
       // Replace non-alphanumeric separators with space
       .replace(/[\s\-_]+/g, ' ')
       .trim()
@@ -253,8 +255,27 @@ export function excerpt(
   maxLength: number,
   options?: { completeWords?: boolean; suffix?: string },
 ): string {
-  const stripped = text.replace(/<[^>]*>/g, '')
-  return truncate(stripped, maxLength, options)
+  return truncate(stripTags(text), maxLength, options)
+}
+
+/**
+ * Remove every `<…>`, as `/<[^>]*>/g` would, in one pass: that expression
+ * scanned to the end of the text from every `<` that has no `>` after it,
+ * quadratic on a run of them.
+ */
+function stripTags(text: string): string {
+  let out = ''
+  let from = 0
+  for (;;) {
+    const open = text.indexOf('<', from)
+    if (open === -1) break
+    const close = text.indexOf('>', open + 1)
+    // No `>` after this `<` means none after any later `<` either.
+    if (close === -1) break
+    out += text.slice(from, open)
+    from = close + 1
+  }
+  return out + text.slice(from)
 }
 
 // ---------------------------------------------------------------------------
@@ -549,22 +570,60 @@ export function toUnixSlash(p: string): string {
  * interpolate('Hello {{ user.name }}!', { user: { name: 'Alice' } }) // 'Hello Alice!'
  */
 export function interpolate(template: string, data: Record<string, unknown>): string {
-  return template.replace(
-    /\\(\{\{[\s\S]*?\}\})|(\{\{\s*([\w.]+)\s*\}\})/g,
-    (match, escaped: string | undefined, _full: string | undefined, path: string | undefined) => {
-      if (escaped !== undefined) return escaped
-      if (path === undefined) return match
-      const keys = path.split('.')
-      let current: unknown = data
-      for (const key of keys) {
-        if (current === null || current === undefined || typeof current !== 'object') {
-          return ''
-        }
-        current = (current as Record<string, unknown>)[key]
+  // One pass, matching what `/\\(\{\{[\s\S]*?\}\})|(\{\{\s*([\w.]+)\s*\}\})/g` matched.
+  // The expression re-scanned to the end of the template from every `\{{`
+  // with no `}}` after it, quadratic on a run of them.
+  let out = ''
+  let last = 0
+  let i = 0
+  // From this index on, the template holds no `}}`: nothing can close.
+  let unclosedFrom = Number.POSITIVE_INFINITY
+  while (i < template.length) {
+    if (template.charCodeAt(i) === BACKSLASH && template.startsWith('{{', i + 1)) {
+      const close = i + 3 >= unclosedFrom ? -1 : template.indexOf('}}', i + 3)
+      if (close !== -1) {
+        out += template.slice(last, i) + template.slice(i + 1, close + 2)
+        i = close + 2
+        last = i
+        continue
       }
-      return current !== null && current !== undefined ? String(current) : ''
-    },
-  )
+      unclosedFrom = Math.min(unclosedFrom, i + 3)
+      i += 1
+      continue
+    }
+    const placeholder = template.startsWith('{{', i) ? readPlaceholder(template, i + 2) : undefined
+    if (placeholder === undefined) {
+      i += 1
+      continue
+    }
+    out += template.slice(last, i) + lookup(data, placeholder.path)
+    i = placeholder.end
+    last = i
+  }
+  return out + template.slice(last)
+}
+
+const BACKSLASH = 0x5c
+
+/** `\s*([\w.]+)\s*}}` from `at`: the path and where the placeholder ends. */
+function readPlaceholder(template: string, at: number): { path: string; end: number } | undefined {
+  let k = at
+  while (k < template.length && /\s/.test(template.charAt(k))) k += 1
+  const pathStart = k
+  while (k < template.length && /[\w.]/.test(template.charAt(k))) k += 1
+  if (k === pathStart) return undefined
+  const path = template.slice(pathStart, k)
+  while (k < template.length && /\s/.test(template.charAt(k))) k += 1
+  return template.startsWith('}}', k) ? { path, end: k + 2 } : undefined
+}
+
+function lookup(data: Record<string, unknown>, path: string): string {
+  let current: unknown = data
+  for (const key of path.split('.')) {
+    if (current === null || current === undefined || typeof current !== 'object') return ''
+    current = Reflect.get(current, key)
+  }
+  return current !== null && current !== undefined ? String(current) : ''
 }
 
 // ---------------------------------------------------------------------------

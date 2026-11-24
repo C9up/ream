@@ -1,0 +1,31 @@
+{
+  "name": "@c9up/ream-darwin-x64",
+  "version": "0.2.32",
+  "description": "The darwin-x64 native engine of @c9up/ream, installed by it as an optional dependency.",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "index.darwin-x64.node",
+  "files": [
+    "index.darwin-x64.node",
+    "scheduler.darwin-x64.node",
+    "events.darwin-x64.node",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/C9up/ream.git",
+    "directory": "npm/darwin-x64"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

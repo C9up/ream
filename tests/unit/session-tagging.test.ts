@@ -119,6 +119,18 @@ describe('session > tagging through the Session API', () => {
     expect(await driver.tagged('u1')).toEqual([])
   })
 
+  it('carries a tag set before regenerate() to the id it commits', async () => {
+    const driver = new MemoryDriver()
+    const session = sessionOn(driver)
+    await session.tag('u1')
+    session.regenerate()
+    session.put('auth_user_id', 'u1')
+
+    await session.commit()
+
+    expect((await driver.tagged('u1')).map((s) => s.id)).toEqual([session.sessionId])
+  })
+
   it('reports whether the store can tag at all', () => {
     const tagging = new Session('x')
     tagging.setStore(new MemoryDriver(), { fresh: true, ttl: 3600 })

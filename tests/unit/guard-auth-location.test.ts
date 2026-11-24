@@ -20,7 +20,7 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
       async () => {
         ran = true
       },
-      { roles: ['admin'] },
+      { roles: [['admin']] },
     )
 
     const ctx = makeCtx()
@@ -57,7 +57,7 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
       async () => {
         ran = true
       },
-      { roles: ['admin'] },
+      { roles: [['admin']] },
     )
 
     const ctx = makeCtx()
@@ -68,7 +68,7 @@ describe('route guard reads roles/permissions nested under ctx.auth.user', () =>
 
   it('still denies (403) when the role is absent in both locations', async () => {
     const reg = new MiddlewareRegistry()
-    const chain = reg.buildChain([], [], noop, { roles: ['admin'] })
+    const chain = reg.buildChain([], [], noop, { roles: [['admin']] })
 
     const ctx = makeCtx()
     ctx.auth = { isAuthenticated: true, user: { id: 'u1', roles: ['member'] } }

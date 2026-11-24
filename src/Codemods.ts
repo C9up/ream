@@ -22,6 +22,7 @@ import {
   E_REAM_STUB_SYNTAX,
   E_REAM_STUB_UNSAFE_PATH,
 } from './errors/codes.js'
+import { existingInside } from './pathContainment.js'
 import { render as renderTemplate, type StubState } from './stubs/template.js'
 
 export type { StubState }
@@ -208,20 +209,31 @@ function detectLineEnding(content: string): '\r\n' | '\n' {
 }
 
 /**
- * Refuse to follow a symlink that escapes the project root. Mirrors the guard `writeFile` enforces
- * (lines 137-155) so `registerCommand` and `registerMiddleware` cannot be tricked into writing
- * outside `root` via a symlinked `reamrc.ts` or `start/kernel.ts`.
+ * Refuse to follow a symlink that escapes the project root, and say whether
+ * the file exists. Mirrors the guard `writeFile` enforces so `registerCommand`
+ * and `registerMiddleware` cannot be tricked into writing outside `root` via a
+ * symlinked `reamrc.ts` or `start/kernel.ts`. Checked on the link itself: a
+ * link to a path that does not exist yet is refused too, since writing through
+ * it would create that path wherever it points.
  */
-function assertCanonicallyInside(root: string, filePath: string, displayName: string): void {
-  if (!fs.existsSync(filePath)) return
-  const canonRoot = fs.realpathSync(root)
-  const canonFile = fs.realpathSync(filePath)
-  if (!canonFile.startsWith(canonRoot + path.sep) && canonFile !== canonRoot) {
-    throw new E_CODEMODS_UNSAFE_PATH([
-      `[configure] Symlink escape detected: ${displayName} resolves outside project root`,
-    ])
-  }
+function assertCanonicallyInside(root: string, filePath: string, displayName: string): boolean {
+  return existingInside(
+    root,
+    filePath,
+    (reason) =>
+      new E_CODEMODS_UNSAFE_PATH([
+        `[configure] Symlink escape detected: ${displayName} — ${reason}`,
+      ]),
+  )
 }
+
+/**
+ * The mode a created env file gets: it holds generated secrets (a JWT key, an
+ * app key), which other local accounts must not read. An existing file keeps
+ * its own mode. NAMED DEVIATION (better than upstream): `@adonisjs/env`'s
+ * editor writes with the umask default (and never creates the file).
+ */
+const SECRET_FILE_MODE = 0o600
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -319,33 +331,23 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       ])
     }
 
-    const shouldForce = shouldOverwrite
-    if (fs.existsSync(resolved) && !shouldForce) return
+    const exists = assertCanonicallyInside(root, resolved, filePath)
+    if (exists && !shouldOverwrite) return
 
     const dir = path.dirname(resolved)
     fs.mkdirSync(dir, { recursive: true })
 
     const canonRoot = fs.realpathSync(root)
-
-    if (fs.existsSync(dir)) {
-      const canonDir = fs.realpathSync(dir)
-      if (!canonDir.startsWith(canonRoot + path.sep) && canonDir !== canonRoot) {
-        throw new E_CODEMODS_UNSAFE_PATH([
-          `[configure] Symlink escape detected: ${filePath} — directory resolves outside project root`,
-        ])
-      }
+    const canonDir = fs.realpathSync(dir)
+    if (!canonDir.startsWith(canonRoot + path.sep) && canonDir !== canonRoot) {
+      throw new E_CODEMODS_UNSAFE_PATH([
+        `[configure] Symlink escape detected: ${filePath} — directory resolves outside project root`,
+      ])
     }
 
-    if (fs.existsSync(resolved)) {
-      const canonFile = fs.realpathSync(resolved)
-      if (!canonFile.startsWith(canonRoot + path.sep)) {
-        throw new E_CODEMODS_UNSAFE_PATH([
-          `[configure] Symlink escape detected: ${filePath} — file resolves outside project root`,
-        ])
-      }
-    }
-
-    fs.writeFileSync(resolved, content)
+    // `wx` for a new file: a link planted between the check and the write
+    // makes the open fail instead of being followed.
+    fs.writeFileSync(resolved, content, exists ? undefined : { flag: 'wx' })
   }
 
   return {
@@ -486,8 +488,7 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
       for (const file of files) {
         const filePath = path.join(root, file.name)
         // A symlinked env file must not redirect the write outside the root.
-        assertCanonicallyInside(root, filePath, file.name)
-        const exists = fs.existsSync(filePath)
+        const exists = assertCanonicallyInside(root, filePath, file.name)
         if (!exists && !file.create) continue
         const original = exists ? fs.readFileSync(filePath, 'utf8') : ''
         const lines = original === '' ? [] : original.replace(/\r?\n$/, '').split(/\r?\n/)
@@ -507,7 +508,14 @@ export function createCodemods(options?: { force?: boolean; cwd?: string }): Cod
 
         // The file's own line ending is kept: a CRLF `.env` stays CRLF.
         const eol = original.includes('\r\n') ? '\r\n' : '\n'
-        if (changed) fs.writeFileSync(filePath, `${lines.join(eol)}${eol}`)
+        if (!changed) continue
+        // Created owner-only, and with `wx`: a link planted meanwhile fails the
+        // open rather than receiving the secrets.
+        fs.writeFileSync(
+          filePath,
+          `${lines.join(eol)}${eol}`,
+          exists ? undefined : { flag: 'wx', mode: SECRET_FILE_MODE },
+        )
       }
     },
 

@@ -29,8 +29,6 @@ describeIfNetwork('Ignitor > downloads are streamed, never buffered', () => {
 
   beforeAll(async () => {
     const serverFactory = createHyperServerFactory()
-    if (serverFactory === undefined)
-      throw new Error('no prebuilt HyperServer binary for this platform')
     ignitor = await new Ignitor({ port: 0, gracefulShutdown: false, serverFactory })
       .routes((router) => {
         router.get('/download', ({ response }) => response.download(file))

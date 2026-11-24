@@ -97,6 +97,20 @@ const FLASH_KEY = '__flash'
 /** Where `flashAll` / `flashOnly` / `flashExcept` put the request input. */
 const FLASH_INPUT_KEY = 'input'
 
+/**
+ * Input a validation failure never flashes back: credentials and the CSRF
+ * token would otherwise sit in clear text in the session store until the next
+ * request. Upstream's list plus `passwordConfirmation`, the camelCase spelling
+ * the authorization-failure redirect already strips.
+ */
+const UNFLASHED_INPUT_KEYS = [
+  '_csrf',
+  '_method',
+  'password',
+  'password_confirmation',
+  'passwordConfirmation',
+]
+
 /** Where the intended URL is stored, out of the way of app keys. */
 const INTENDED_URL_KEY = '__intended_url'
 
@@ -220,6 +234,13 @@ export class Session {
   #initiated = false
   /** The entry vanished while this request ran — see {@link wasLost}. */
   #lost = false
+  /**
+   * The user {@link tag} associated this request, replayed on the row
+   * {@link commit} creates. A store that keeps tags on the row itself (the
+   * database store's `user_id`) cannot tag a row that does not exist yet, and
+   * at login it never does: the id was just generated or regenerated.
+   */
+  #tagged?: string | number
 
   constructor(sessionId: string, data: Record<string, unknown> = {}) {
     this.#sessionId = sessionId
@@ -433,7 +454,8 @@ export class Session {
    * Flash a validation failure the way a form expects it (AdonisJS
    * `flashValidationErrors`): the per-field messages under `inputErrorsBag`,
    * a summary under `errorsBag`, and — unless told otherwise — the input, so
-   * the redisplayed form keeps what the user typed.
+   * the redisplayed form keeps what the user typed. Never the password fields
+   * nor the CSRF token: those stay out of the session store.
    */
   flashValidationErrors(
     error: { code?: string; messages?: Array<{ field?: string; message?: string }> },
@@ -450,7 +472,7 @@ export class Session {
     this.flashErrors({
       [error.code ?? 'E_VALIDATION_ERROR']: Object.values(bag).flat(),
     })
-    if (withInput) this.flashAll()
+    if (withInput) this.flashExcept(UNFLASHED_INPUT_KEYS)
   }
 
   /**
@@ -664,7 +686,7 @@ export class Session {
     const driver = this.#driver
     if (driver === undefined) return
     if (this.#regenerated) {
-      await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+      await this.#create(driver)
       try {
         await driver.destroy(this.#originalSessionId)
       } catch {
@@ -675,13 +697,26 @@ export class Session {
     }
     if (this.#dirty) {
       if (this.#fresh) {
-        await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+        await this.#create(driver)
         return
       }
       this.#lost = !(await driver.update(this.#sessionId, this.toJSON(), this.#ttl))
       return
     }
     if (!this.#fresh) await driver.touch(this.#sessionId, this.#ttl)
+  }
+
+  /**
+   * Write the row of an id this request created, then carry the tag set
+   * before it existed — whatever the order of `regenerate()`, `put()` and
+   * `tag()` in the request. Without it the database store wrote the row of a
+   * fresh login with no user, and "log out everywhere" found nothing.
+   */
+  async #create(driver: SessionDriver): Promise<void> {
+    await driver.write(this.#sessionId, this.toJSON(), this.#ttl)
+    if (this.#tagged !== undefined) {
+      await this.#taggingDriver('tag').tag(this.#sessionId, this.#tagged)
+    }
   }
 
   /**
@@ -710,11 +745,18 @@ export class Session {
    */
   async tag(userId: string | number): Promise<void> {
     await this.#taggingDriver('tag').tag(this.#sessionId, userId)
+    // Also remembered: when this request created the id (a new session, or
+    // `regenerate()` at login), the row does not exist yet, and `commit()`
+    // tags the row it writes.
+    this.#tagged = userId
   }
 
   /** Drop the association made by {@link tag} (AdonisJS `untag`). Call it at logout. */
   async untag(userId: string | number): Promise<void> {
     await this.#taggingDriver('untag').untag(this.#sessionId, userId)
+    if (this.#tagged !== undefined && String(this.#tagged) === String(userId)) {
+      this.#tagged = undefined
+    }
   }
 
   /**

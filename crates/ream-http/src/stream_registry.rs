@@ -19,19 +19,24 @@
 //!   4. JS calls `HyperServer.closeStream(id)` (or drops its writer) — the
 //!      sender is removed, the receiver sees EOF, hyper closes the body.
 //!   5. If the **client** disconnects first, hyper drops the body, which
-//!      drops the receiver. `sender.closed()` resolves, and any registered
-//!      disconnect callback fires so the JS layer can clean up its own
-//!      bookkeeping (SSE client map, subscription index, etc.).
+//!      drops the receiver. Any registered disconnect callback fires so the
+//!      JS layer can clean up its own bookkeeping (SSE client map,
+//!      subscription index, etc.). The watch on that drop holds no sender:
+//!      a sender clone kept for it would keep the channel open after
+//!      `closeStream`, and the client would never read the end of the body.
 //!
 //! The registry holds one entry per active stream. A 5-min idle GC pass
 //! reaps strays in case JS forgets to close (e.g., handler panic between
 //! `register` and the response return — rare but observable in tests).
 
 use bytes::Bytes;
+use futures_core::Stream;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 
 /// Bounded sender capacity — SSE bursts are bounded by the rate at which
 /// the TS layer pushes events; 256 frames buffered is plenty without
@@ -56,8 +61,34 @@ pub struct StreamChunk {
 /// so JS can push chunks for the lifetime of the connection.
 pub struct StreamEntry {
     sender: Mutex<Option<mpsc::Sender<StreamChunk>>>,
-    receiver: Mutex<Option<mpsc::Receiver<StreamChunk>>>,
+    receiver: Mutex<Option<StreamReceiver>>,
+    /// Closed (`changed()` fails) once the receiver is dropped: the body
+    /// finished, or the client left.
+    released: watch::Receiver<()>,
     created_at: Instant,
+}
+
+/// The body side of a registered stream. Yields the chunks JS writes, and
+/// ends once the stream is closed and drained. Dropping it is what tells
+/// [`StreamRegistry::wait_for_disconnect`] that the response is over.
+pub struct StreamReceiver {
+    chunks: mpsc::Receiver<StreamChunk>,
+    _alive: watch::Sender<()>,
+}
+
+impl StreamReceiver {
+    /// The next chunk, `None` once the stream is closed and drained.
+    pub async fn recv(&mut self) -> Option<StreamChunk> {
+        self.chunks.recv().await
+    }
+}
+
+impl Stream for StreamReceiver {
+    type Item = StreamChunk;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<StreamChunk>> {
+        self.chunks.poll_recv(cx)
+    }
 }
 
 /// Shared registry. Cloning is cheap (Arc).
@@ -78,10 +109,15 @@ impl StreamRegistry {
         if map.contains_key(&stream_id) {
             return false;
         }
-        let (sender, receiver) = mpsc::channel(STREAM_BUFFER_FRAMES);
+        let (sender, chunks) = mpsc::channel(STREAM_BUFFER_FRAMES);
+        let (alive, released) = watch::channel(());
         let entry = Arc::new(StreamEntry {
             sender: Mutex::new(Some(sender)),
-            receiver: Mutex::new(Some(receiver)),
+            receiver: Mutex::new(Some(StreamReceiver {
+                chunks,
+                _alive: alive,
+            })),
+            released,
             created_at: Instant::now(),
         });
         map.insert(stream_id, entry);
@@ -91,7 +127,7 @@ impl StreamRegistry {
     /// Pull the receiver out of the registry. Called once by the response
     /// builder when the streaming body is created. Subsequent calls
     /// return `None` (each receiver can only be consumed once).
-    pub async fn take_receiver(&self, stream_id: &str) -> Option<mpsc::Receiver<StreamChunk>> {
+    pub async fn take_receiver(&self, stream_id: &str) -> Option<StreamReceiver> {
         let map = self.inner.lock().await;
         let entry = map.get(stream_id)?.clone();
         drop(map);
@@ -205,18 +241,13 @@ impl StreamRegistry {
             map.get(stream_id).cloned()
         };
         let Some(entry) = entry else { return };
-        // `sender.closed()` resolves the moment the matched receiver is
-        // dropped. Hyper drops the body on connection close, which
-        // drops the receiver — so this future doubles as a client-
-        // disconnect signal.
-        // Cloned out of the guard: this future lives as long as the
-        // connection, and holding the entry lock for that would freeze the
-        // stream. A sender already taken (the stream was closed) means there is
-        // nothing left to watch.
-        let sender = { entry.sender.lock().await.clone() };
-        if let Some(sender) = sender {
-            sender.closed().await;
-        }
+        // The receiver holds the only sender of `released`: when hyper drops
+        // the body (it finished, or the client left), `changed()` fails. No
+        // clone of the CHUNK sender is held here — one would keep the body
+        // open after `close`, and the client would never see its end.
+        let mut released = entry.released.clone();
+        drop(entry);
+        let _ = released.changed().await;
     }
 
     /// Reap registered-but-never-served strays older than [`STRAY_TTL`] — the
@@ -447,6 +478,47 @@ mod tests {
         });
         drop(rx);
         assert!(waiter.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_watched_stream_still_ends_when_closed() {
+        // The disconnect watcher must not keep the body open: once the stream
+        // is closed and drained, the body ends, and only then the watcher.
+        let reg = StreamRegistry::new();
+        reg.register("sse".to_string()).await;
+        let mut rx = reg.take_receiver("sse").await.unwrap();
+        let reg_clone = reg.clone();
+        let waiter = tokio::spawn(async move { reg_clone.wait_for_disconnect("sse").await });
+        tokio::task::yield_now().await;
+
+        assert!(
+            reg.send_chunk("sse", Bytes::from_static(b"data: 1\n\n"))
+                .await
+        );
+        assert!(reg.close("sse").await);
+        assert_eq!(rx.recv().await.unwrap().bytes.as_ref(), b"data: 1\n\n");
+        let end = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await;
+        assert!(matches!(end, Ok(None)), "the body ends after close");
+        assert!(!waiter.is_finished());
+        drop(rx);
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("the watcher fires once the body is dropped")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_watcher_of_a_stream_never_claimed_fires_when_it_is_dropped() {
+        let reg = StreamRegistry::new();
+        reg.register("stray".to_string()).await;
+        let reg_clone = reg.clone();
+        let waiter = tokio::spawn(async move { reg_clone.wait_for_disconnect("stray").await });
+        tokio::task::yield_now().await;
+        assert_eq!(reg.drain().await, 1);
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("the watcher fires")
+            .unwrap();
     }
 
     #[tokio::test]

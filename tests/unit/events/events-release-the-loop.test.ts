@@ -73,6 +73,9 @@ describe('events > the bus does not hold the process open', () => {
 
     expect(await bus.subscriptionCount()).toBe(0)
     expect(emitter.listenerCount()).toBe(0)
-    await expect(emitter.request('query:x', {}, 200)).rejects.toThrow(/No request handler/)
+    await expect(emitter.request('query:x', {}, 200)).rejects.toMatchObject({
+      code: 'E_EVENTS_NO_REQUEST_HANDLER',
+      message: 'no request handler registered for "query:x"',
+    })
   })
 })

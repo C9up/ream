@@ -78,6 +78,26 @@ describe('ream > validation errors', () => {
     expect(flash.input).toEqual({ email: 'not-an-email' })
   })
 
+  it('never flashes the password fields nor the CSRF token back', () => {
+    const s = new Session('sid')
+    s.setInputReader(() => ({
+      email: 'ada@example.com',
+      password: 'correct horse',
+      password_confirmation: 'correct hors',
+      passwordConfirmation: 'correct hors',
+      _csrf: 'tok123',
+      _method: 'PUT',
+    }))
+    s.flashValidationErrors({
+      messages: [{ field: 'password_confirmation', message: 'does not match' }],
+    })
+
+    expect(s.toJSON().__flash).toEqual(
+      expect.objectContaining({ input: { email: 'ada@example.com' } }),
+    )
+    expect(JSON.stringify(s.toJSON())).not.toMatch(/correct|tok123/)
+  })
+
   it('can leave the input out', () => {
     const s = new Session('sid')
     s.setInputReader(() => ({ email: 'x' }))

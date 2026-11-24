@@ -48,8 +48,6 @@ describeIfNetwork('over-limit body > routing first, 413 from the body parser', (
 
   beforeAll(async () => {
     const serverFactory = createHyperServerFactory()
-    if (serverFactory === undefined)
-      throw new Error('no prebuilt HyperServer binary for this platform')
     ignitor = await new Ignitor({
       port: 0,
       gracefulShutdown: false,

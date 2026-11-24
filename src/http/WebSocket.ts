@@ -26,6 +26,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { E_WEBSOCKET_PROTOCOL, E_WEBSOCKET_REGISTER } from '../errors/codes.js'
+import { callNative } from '../errors/native.js'
 import { Exception } from './Exception.js'
 import type { HttpContext } from './HttpContext.js'
 
@@ -152,8 +153,10 @@ export class ServerWebSocket {
    */
   close(code = 1000, reason = ''): void {
     if (this.#state !== 'open') return
+    // A refused code or reason throws its coded error and leaves the socket
+    // open, so the caller can close it again with a valid one.
+    callNative(() => this.#backend.webSocketClose(this.id, code, reason))
     this.#state = 'closing'
-    this.#backend.webSocketClose(this.id, code, reason)
   }
 
   on(event: 'message', listener: MessageListener): this
